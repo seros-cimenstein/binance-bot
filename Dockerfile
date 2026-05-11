@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY pyproject.toml requirements.txt ./
+RUN pip install --no-cache-dir .
+
+COPY . .
+
+RUN mkdir -p data logs
+
+CMD ["python", "-m", "src.main"]

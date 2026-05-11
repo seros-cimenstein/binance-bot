@@ -1,4 +1,4 @@
-"""In-memory order lifecycle management for Binance execution."""
+"""Order lifecycle management for Binance execution."""
 
 from __future__ import annotations
 
@@ -9,9 +9,12 @@ import threading
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .models import Fill, Order, OrderSide, OrderStatus, OrderType, Position
+
+if TYPE_CHECKING:
+    from src.db import OrderDB
 
 
 ACTIVE_ORDER_STATUSES = frozenset({OrderStatus.PENDING, OrderStatus.OPEN})
@@ -119,9 +122,10 @@ class OrderManager:
     positions from monotonically increasing filled quantities.
     """
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, *, db: "OrderDB | None" = None) -> None:
         """Initialize the manager around a Binance-like async client."""
         self.client = client
+        self._db = db
         self._orders: dict[str, Order] = {}
         self._order_ids_by_symbol: dict[str, set[str]] = {}
         self._active_order_ids: set[str] = set()
@@ -129,6 +133,18 @@ class OrderManager:
         self._position_applied_amounts: dict[str, float] = {}
         self._lock = threading.RLock()
         self._state_machine = OrderStateMachine()
+
+    def restore_from_db(self) -> None:
+        """Rebuild in-memory state from persisted orders on startup."""
+        if self._db is None:
+            return
+        orders = self._db.load_orders()
+        with self._lock:
+            for order in orders:
+                self._orders[order.id] = order
+                self._order_ids_by_symbol.setdefault(order.symbol, set()).add(order.id)
+                self._sync_active_index_unlocked(order)
+                self._position_applied_amounts[order.id] = order.filled_amount
 
     async def place_order(
         self,
@@ -348,6 +364,8 @@ class OrderManager:
         self._orders[order.id] = order
         self._order_ids_by_symbol.setdefault(order.symbol, set()).add(order.id)
         self._sync_active_index_unlocked(order)
+        if self._db is not None:
+            self._db.upsert_order(order)
 
     def _rekey_order_unlocked(self, order: Order, target_order_id: str) -> Order:
         """Replace a local temporary ID with the exchange order ID."""
@@ -363,6 +381,8 @@ class OrderManager:
         symbol_ids = self._order_ids_by_symbol.get(order.symbol)
         if symbol_ids is not None:
             symbol_ids.discard(previous_id)
+        if self._db is not None:
+            self._db.delete_order(previous_id)
 
         applied_amount = self._position_applied_amounts.pop(previous_id, 0.0)
         if applied_amount:
@@ -506,6 +526,8 @@ class OrderManager:
         )
         order.filled_amount = new_filled_amount
         self._sync_active_index_unlocked(order)
+        if self._db is not None:
+            self._db.upsert_order(order)
         return order
 
     def _transition_unlocked(self, order: Order, target_status: OrderStatus) -> None:

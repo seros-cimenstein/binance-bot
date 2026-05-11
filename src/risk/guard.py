@@ -237,12 +237,15 @@ class RiskGuard:
     def __init__(
         self,
         config: RiskConfig | Mapping[str, Any] | None = None,
+        *,
+        db: Any | None = None,
         **config_values: Any,
     ) -> None:
         """Initialize the risk guard.
 
         Args:
             config: A validated risk configuration or mapping of config values.
+            db: Optional :class:`~src.db.OrderDB` for persisting daily loss.
             **config_values: Config values used when ``config`` is omitted.
 
         Raises:
@@ -258,12 +261,26 @@ class RiskGuard:
         else:
             self.config = RiskConfig(**dict(config))
 
+        self._db = db
         self._lock = threading.RLock()
         self._current_daily_loss = 0.0
         self._loss_window_date = self._utc_date()
         self._duplicate_orders: dict[DuplicateOrderKey, float] = {}
         self._duplicate_order_events: deque[tuple[float, DuplicateOrderKey]] = deque()
         self._logger = logger.bind(component="risk_guard")
+
+    def restore_daily_loss_from_db(self) -> None:
+        """Reload today's accumulated loss from persistent storage on startup."""
+        if self._db is None:
+            return
+        today = self._utc_date().isoformat()
+        loss = self._db.load_daily_loss(today)
+        with self._lock:
+            self._current_daily_loss = loss
+            self._loss_window_date = self._utc_date()
+        self._logger.bind(date=today, restored_loss=loss).info(
+            "Daily loss restored from database"
+        )
 
     @property
     def current_daily_loss(self) -> float:
@@ -455,13 +472,18 @@ class RiskGuard:
             self._reset_daily_loss_if_needed_locked()
             loss_increment = abs(pnl) if pnl < 0 else 0.0
             self._current_daily_loss += loss_increment
+            current_loss = self._current_daily_loss
+            loss_date = self._loss_window_date.isoformat()
             context = {
                 "pnl": pnl,
                 "loss_increment": loss_increment,
-                "current_daily_loss": self._current_daily_loss,
+                "current_daily_loss": current_loss,
                 "daily_loss_limit_usd": self.config.daily_loss_limit_usd,
-                "loss_window_date": self._loss_window_date.isoformat(),
+                "loss_window_date": loss_date,
             }
+
+        if self._db is not None and loss_increment > 0:
+            self._db.upsert_daily_loss(loss_date, current_loss)
 
         if self.current_daily_loss >= self.config.daily_loss_limit_usd:
             self._logger.bind(**context).warning(

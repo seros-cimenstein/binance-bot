@@ -16,11 +16,13 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from src.data.feeds import BinanceDataFeed, CandleData, normalize_symbol
+from src.db import OrderDB
 from src.exchange.client import BinanceClient
 from src.orders.manager import OrderManager
 from src.orders.models import Order
-from src.risk.guard import RiskConfig, RiskGuard
+from src.risk.guard import RiskBreachError, RiskConfig, RiskGuard
 from src.strategies.demo_sma import DemoSMAStrategy, SMASettings
+from src.telegram_alerts import TelegramAlerter
 
 
 DEFAULT_TRADING_SYMBOL = "BTC/USDT"
@@ -34,6 +36,7 @@ DEFAULT_FEED_QUEUE_MAXSIZE = 1_000
 DEFAULT_DRY_RUN = False
 DEFAULT_MAX_POSITION_SIZE_USD = 500.0
 DEFAULT_DAILY_LOSS_LIMIT_USD = 100.0
+DEFAULT_DB_PATH = "data/bot.db"
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +56,10 @@ class BotSettings:
     dry_run: bool = DEFAULT_DRY_RUN
     max_position_size_usd: float = DEFAULT_MAX_POSITION_SIZE_USD
     daily_loss_limit_usd: float = DEFAULT_DAILY_LOSS_LIMIT_USD
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    db_path: str = DEFAULT_DB_PATH
+    confirm_live_trading: str = "no"
 
     @classmethod
     def from_env(cls) -> "BotSettings":
@@ -91,6 +98,10 @@ class BotSettings:
                 "DAILY_LOSS_LIMIT_USD",
                 default=DEFAULT_DAILY_LOSS_LIMIT_USD,
             ),
+            telegram_bot_token=_env("TELEGRAM_BOT_TOKEN", default=""),
+            telegram_chat_id=_env("TELEGRAM_CHAT_ID", default=""),
+            db_path=_env("DB_PATH", default=DEFAULT_DB_PATH),
+            confirm_live_trading=_env("CONFIRM_LIVE_TRADING", default="no").strip().lower(),
         )
 
 
@@ -103,11 +114,13 @@ class StrategyOrderClient:
         order_manager: OrderManager,
         *,
         risk_guard: RiskGuard | None = None,
+        alerter: TelegramAlerter | None = None,
         dry_run: bool = False,
     ) -> None:
         self._rest_client = rest_client
         self._order_manager = order_manager
         self._risk_guard = risk_guard
+        self._alerter = alerter
         self._dry_run = dry_run
         self._last_price: float | None = None
         self.exchange = rest_client.exchange
@@ -164,13 +177,18 @@ class StrategyOrderClient:
             if validation_price is not None:
                 position = self._order_manager.get_position(symbol)
                 current_position = position.amount if position is not None else 0.0
-                await self._risk_guard.validate_order(
-                    symbol=symbol,
-                    side=side,
-                    amount=amount,
-                    price=validation_price,
-                    current_position=current_position,
-                )
+                try:
+                    await self._risk_guard.validate_order(
+                        symbol=symbol,
+                        side=side,
+                        amount=amount,
+                        price=validation_price,
+                        current_position=current_position,
+                    )
+                except RiskBreachError as exc:
+                    if self._alerter is not None:
+                        await self._alerter.alert_risk_breach(str(exc))
+                    raise
             else:
                 logger.warning("RiskGuard skipped: no market price available yet")
 
@@ -199,6 +217,7 @@ async def main(settings: BotSettings | None = None) -> None:
         ),
     )
 
+    alerter = TelegramAlerter(settings.telegram_bot_token, settings.telegram_chat_id)
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
 
@@ -207,7 +226,7 @@ async def main(settings: BotSettings | None = None) -> None:
 
     for attempt in range(1, _MAX_STARTUP_ATTEMPTS + 1):
         try:
-            await run_bot(settings, stop_event)
+            await run_bot(settings, stop_event, alerter=alerter)
             return
         except (asyncio.CancelledError, KeyboardInterrupt):
             raise
@@ -223,25 +242,49 @@ async def main(settings: BotSettings | None = None) -> None:
             logger.opt(exception=exc).warning(
                 f"Bot crashed (attempt {attempt}/{_MAX_STARTUP_ATTEMPTS}); restarting in {delay:.0f}s"
             )
+            await alerter.alert_crash(
+                attempt=attempt,
+                max_attempts=_MAX_STARTUP_ATTEMPTS,
+                delay=delay,
+                error=str(exc),
+            )
             await asyncio.sleep(delay)
 
 
-async def run_bot(settings: BotSettings, stop_event: asyncio.Event) -> None:
+async def run_bot(
+    settings: BotSettings,
+    stop_event: asyncio.Event,
+    *,
+    alerter: TelegramAlerter | None = None,
+) -> None:
     """Initialize feeds, strategy, and order manager, then run the data loop."""
+    if not settings.use_testnet:
+        if settings.confirm_live_trading != "yes":
+            logger.critical(
+                "Live trading requires CONFIRM_LIVE_TRADING=yes in environment"
+            )
+            sys.exit(1)
+        logger.warning("LIVE TRADING MODE ACTIVE — real money is at risk")
+
+    db = OrderDB(settings.db_path)
     rest_client = BinanceClient(
         api_key=settings.api_key,
         api_secret=settings.api_secret,
         testnet=settings.use_testnet,
     )
-    order_manager = OrderManager(rest_client)
+    order_manager = OrderManager(rest_client, db=db)
+    order_manager.restore_from_db()
     risk_guard = RiskGuard(
         max_position_size_usd=settings.max_position_size_usd,
         daily_loss_limit_usd=settings.daily_loss_limit_usd,
+        db=db,
     )
+    risk_guard.restore_daily_loss_from_db()
     strategy_client = StrategyOrderClient(
         rest_client,
         order_manager,
         risk_guard=risk_guard,
+        alerter=alerter,
         dry_run=settings.dry_run,
     )
     strategy = DemoSMAStrategy(
@@ -262,6 +305,7 @@ async def run_bot(settings: BotSettings, stop_event: asyncio.Event) -> None:
     feed_task: asyncio.Task[None] | None = None
     shutdown_task: asyncio.Task[None] | None = None
 
+    mode = "DRY_RUN" if settings.dry_run else ("LIVE" if not settings.use_testnet else "testnet")
     logger.bind(
         symbol=settings.trading_symbol,
         timeframe=settings.timeframe,
@@ -271,6 +315,9 @@ async def run_bot(settings: BotSettings, stop_event: asyncio.Event) -> None:
     ).info("Starting Binance trading bot")
     if settings.dry_run:
         logger.warning("DRY RUN mode enabled: signals will be logged but no orders submitted")
+
+    if alerter is not None:
+        await alerter.alert_started(mode)
 
     try:
         await strategy.start()
@@ -310,6 +357,7 @@ async def run_bot(settings: BotSettings, stop_event: asyncio.Event) -> None:
 
         await strategy.stop()
         await rest_client.close()
+        db.close()
         logger.info("Binance trading bot stopped")
 
 
