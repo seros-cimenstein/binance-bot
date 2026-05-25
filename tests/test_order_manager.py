@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -11,7 +12,7 @@ from src.orders.manager import (
     OrderNotFoundError,
     OrderValidationError,
 )
-from src.orders.models import OrderSide, OrderStatus, OrderType
+from src.orders.models import Fill, Order, OrderSide, OrderStatus, OrderType
 
 
 class FakeOrderClient:
@@ -51,8 +52,62 @@ class FakeOrderClient:
         return self.fetch_payloads.pop(0)
 
 
+class FakeOrderDB:
+    def __init__(self, orders: list[Order]) -> None:
+        self.orders = orders
+
+    def load_orders(self) -> list[Order]:
+        return list(self.orders)
+
+    def upsert_order(self, order: Order) -> None:
+        self.orders = [existing for existing in self.orders if existing.id != order.id]
+        self.orders.append(order)
+
+    def delete_order(self, order_id: str) -> None:
+        self.orders = [order for order in self.orders if order.id != order_id]
+
+
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)
+
+
+def _order(
+    *,
+    order_id: str,
+    side: OrderSide,
+    status: OrderStatus,
+    amount: float,
+    filled_amount: float,
+    price: float,
+) -> Order:
+    timestamp = datetime.now(timezone.utc)
+    return Order(
+        id=order_id,
+        symbol="BTC/USDT",
+        type=OrderType.MARKET,
+        side=side,
+        amount=amount,
+        status=status,
+        filled_amount=filled_amount,
+        remaining_amount=max(amount - filled_amount, 0.0),
+        avg_fill_price=price,
+        fills=[
+            Fill(
+                id=f"fill-{order_id}",
+                order_id=order_id,
+                symbol="BTC/USDT",
+                side=side,
+                price=price,
+                amount=filled_amount,
+                fee=0.0,
+                fee_currency="",
+                timestamp=timestamp,
+            )
+        ]
+        if filled_amount > 0
+        else [],
+        timestamp=timestamp,
+    )
 
 
 def test_place_order_tracks_active_and_historical_state() -> None:
@@ -227,6 +282,108 @@ def test_apply_order_updates_derive_positions_from_fill_deltas() -> None:
     assert position.amount == pytest.approx(1)
     assert position.entry_price == pytest.approx(112)
     assert manager.list_active_orders() == []
+
+
+def test_restore_from_db_rebuilds_orders_positions_and_active_index() -> None:
+    manager = OrderManager(
+        FakeOrderClient(),
+        db=FakeOrderDB(
+            [
+                _order(
+                    order_id="restore-buy",
+                    side=OrderSide.BUY,
+                    status=OrderStatus.CLOSED,
+                    amount=1.0,
+                    filled_amount=1.0,
+                    price=100.0,
+                ),
+                _order(
+                    order_id="restore-sell",
+                    side=OrderSide.SELL,
+                    status=OrderStatus.CLOSED,
+                    amount=0.4,
+                    filled_amount=0.4,
+                    price=110.0,
+                ),
+                _order(
+                    order_id="restore-open",
+                    side=OrderSide.BUY,
+                    status=OrderStatus.OPEN,
+                    amount=0.5,
+                    filled_amount=0.1,
+                    price=120.0,
+                ),
+            ]
+        ),
+    )
+
+    manager.restore_from_db()
+
+    assert [order.id for order in manager.list_orders()] == [
+        "restore-buy",
+        "restore-sell",
+        "restore-open",
+    ]
+    assert [order.id for order in manager.list_active_orders()] == ["restore-open"]
+    position = manager.get_position("BTC/USDT")
+    assert position.amount == pytest.approx(0.7)
+    assert position.entry_price == pytest.approx(102.85714285714286)
+
+    manager.apply_order_update(
+        {
+            "id": "restore-buy",
+            "symbol": "BTC/USDT",
+            "type": "market",
+            "side": "buy",
+            "amount": "1",
+            "status": "filled",
+            "filled": "1",
+            "average": "100",
+        }
+    )
+    assert manager.get_position("BTC/USDT").amount == pytest.approx(0.7)
+
+
+def test_reconcile_active_orders_refreshes_restored_orders() -> None:
+    client = FakeOrderClient()
+    client.fetch_payloads.append(
+        {
+            "id": "restore-open",
+            "symbol": "BTC/USDT",
+            "type": "market",
+            "side": "buy",
+            "amount": "0.5",
+            "status": "filled",
+            "filled": "0.5",
+            "remaining": "0",
+            "average": "120",
+        }
+    )
+    manager = OrderManager(
+        client,
+        db=FakeOrderDB(
+            [
+                _order(
+                    order_id="restore-open",
+                    side=OrderSide.BUY,
+                    status=OrderStatus.OPEN,
+                    amount=0.5,
+                    filled_amount=0.1,
+                    price=120.0,
+                )
+            ]
+        ),
+    )
+    manager.restore_from_db()
+
+    reconciled = _run(manager.reconcile_active_orders())
+
+    assert [order.id for order in reconciled] == ["restore-open"]
+    assert client.request_calls == [("fetch_order", ("restore-open", "BTC/USDT"))]
+    assert manager.list_active_orders() == []
+    position = manager.get_position("BTC/USDT")
+    assert position.amount == pytest.approx(0.5)
+    assert position.entry_price == pytest.approx(120)
 
 
 def test_terminal_orders_reject_invalid_lifecycle_regressions() -> None:

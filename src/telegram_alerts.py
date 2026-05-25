@@ -56,3 +56,22 @@ class TelegramAlerter:
 
     async def alert_risk_breach(self, reason: str) -> None:
         await self.send(f"⚠️ <b>Risk breach blocked an order</b>\n<code>{reason[:300]}</code>")
+
+    async def alert_trade(
+        self,
+        side: str,
+        symbol: str,
+        amount: float,
+        price: float | None,
+        dry_run: bool = False,
+    ) -> None:
+        emoji = "\U0001f7e2" if side.lower() == "buy" else "\U0001f534"
+        label = "BUY" if side.lower() == "buy" else "SELL"
+        suffix = " <i>(dry run)</i>" if dry_run else ""
+        price_str = f"${price:,.4f}" if price is not None else "market"
+        await self.send(
+            f"{emoji} <b>{label}</b>{suffix}\n"
+            f"Symbol: <code>{symbol}</code>\n"
+            f"Amount: <code>{amount:g}</code>\n"
+            f"Price: <code>{price_str}</code>"
+        )

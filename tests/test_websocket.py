@@ -9,6 +9,7 @@ from typing import Any
 from src.exchange.websocket import (
     BinanceWebSocketManager,
     EventType,
+    KlineUpdate,
     TickerUpdate,
     WebSocketEvent,
 )
@@ -30,6 +31,17 @@ def test_subscribe_market_data_accepts_single_symbol_string() -> None:
             "btcusdt@depth20@100ms",
             "btcusdt@ticker",
         ]
+
+    asyncio.run(run())
+
+
+def test_subscribe_klines_accepts_single_symbol_string() -> None:
+    async def run() -> None:
+        manager = BinanceWebSocketManager()
+
+        await manager.subscribe_klines("BTC/USDT", interval="5m")
+
+        assert sorted(manager._public_subscriptions) == ["btcusdt@kline_5m"]
 
     asyncio.run(run())
 
@@ -85,6 +97,65 @@ def test_public_messages_are_parsed_into_ticker_and_order_book_events() -> None:
         assert book_event.payload.last_update_id == 123
         assert book_event.payload.bids[0].price == 61999.00
         assert book_event.payload.asks[0].quantity == 0.4
+        manager._event_queue.task_done()
+
+    asyncio.run(run())
+
+
+def test_public_kline_messages_are_parsed_into_candle_events() -> None:
+    async def run() -> None:
+        manager = BinanceWebSocketManager()
+        await manager.subscribe_klines(["BTC/USDT"], interval="1m")
+
+        await manager._handle_public_message(
+            json.dumps(
+                {
+                    "stream": "btcusdt@kline_1m",
+                    "data": {
+                        "e": "kline",
+                        "E": 1672515782136,
+                        "s": "BTCUSDT",
+                        "k": {
+                            "t": 1672515720000,
+                            "T": 1672515779999,
+                            "s": "BTCUSDT",
+                            "i": "1m",
+                            "o": "62000.00",
+                            "h": "62100.00",
+                            "l": "61950.00",
+                            "c": "62050.50",
+                            "v": "12.5",
+                            "x": True,
+                        },
+                    },
+                }
+            )
+        )
+        event = await asyncio.wait_for(manager._event_queue.get(), 1.0)
+
+        assert event.event_type == EventType.KLINE_UPDATE
+        assert isinstance(event.payload, KlineUpdate)
+        assert event.payload.symbol == "BTC/USDT"
+        assert event.payload.interval == "1m"
+        assert event.payload.open_time == 1672515720000
+        assert event.payload.close == 62050.50
+        assert event.payload.is_closed is True
+        manager._event_queue.task_done()
+
+    asyncio.run(run())
+
+
+def test_public_malformed_message_emits_stream_error() -> None:
+    async def run() -> None:
+        manager = BinanceWebSocketManager()
+
+        await manager._handle_public_message("{not-json")
+
+        event = await asyncio.wait_for(manager._event_queue.get(), 1.0)
+
+        assert event.event_type == EventType.STREAM_ERROR
+        assert event.payload.stream == "public"
+        assert event.payload.message == "invalid JSON message"
         manager._event_queue.task_done()
 
     asyncio.run(run())

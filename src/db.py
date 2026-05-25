@@ -48,18 +48,29 @@ CREATE TABLE IF NOT EXISTS daily_loss (
 """
 
 
+class OrderDBError(RuntimeError):
+    """Raised when the SQLite order database cannot be opened or read."""
+
+
 class OrderDB:
     """Thread-safe SQLite store for orders, fills, and daily loss."""
 
     def __init__(self, db_path: str = "data/bot.db") -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.row_factory = sqlite3.Row
+        try:
+            self._conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._conn.execute("PRAGMA foreign_keys = ON")
+            self._conn.row_factory = sqlite3.Row
+        except sqlite3.DatabaseError as exc:
+            raise OrderDBError(f"failed to open order database: {db_path}") from exc
         self._lock = threading.Lock()
-        with self._lock:
-            self._conn.executescript(_SCHEMA)
-            self._conn.commit()
+        try:
+            with self._lock:
+                self._conn.executescript(_SCHEMA)
+                self._conn.commit()
+        except sqlite3.DatabaseError as exc:
+            self._conn.close()
+            raise OrderDBError(f"failed to initialize order database: {db_path}") from exc
 
     def upsert_order(self, order: "Order") -> None:
         with self._lock:
@@ -113,13 +124,16 @@ class OrderDB:
     def load_orders(self) -> list["Order"]:
         from src.orders.models import Fill, Order, OrderSide, OrderStatus, OrderType
 
-        with self._lock:
-            order_rows = self._conn.execute(
-                "SELECT * FROM orders ORDER BY timestamp"
-            ).fetchall()
-            fill_rows = self._conn.execute(
-                "SELECT * FROM fills ORDER BY timestamp"
-            ).fetchall()
+        try:
+            with self._lock:
+                order_rows = self._conn.execute(
+                    "SELECT * FROM orders ORDER BY timestamp"
+                ).fetchall()
+                fill_rows = self._conn.execute(
+                    "SELECT * FROM fills ORDER BY timestamp"
+                ).fetchall()
+        except sqlite3.DatabaseError as exc:
+            raise OrderDBError("failed to load orders from database") from exc
 
         fills_by_order: dict[str, list[Fill]] = {}
         for row in fill_rows:
@@ -164,10 +178,13 @@ class OrderDB:
             self._conn.commit()
 
     def load_daily_loss(self, date: str) -> float:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT loss_usd FROM daily_loss WHERE date = ?", (date,)
-            ).fetchone()
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT loss_usd FROM daily_loss WHERE date = ?", (date,)
+                ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise OrderDBError("failed to load daily loss from database") from exc
         return float(row["loss_usd"]) if row is not None else 0.0
 
     def close(self) -> None:

@@ -1,4 +1,6 @@
-from .logger import export_logger as logger
+"""Legacy threshold strategy kept for simple examples and old tests."""
+
+from loguru import logger
 
 class SimpleStrategy:
     def __init__(self, symbol: str, order_size: float):

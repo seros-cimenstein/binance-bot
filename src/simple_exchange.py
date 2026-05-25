@@ -1,17 +1,25 @@
+"""Legacy minimal Binance client kept for simple examples and old imports.
+
+The production runtime uses :mod:`src.exchange.client` instead.
+"""
+
 import ccxt.async_support as ccxt
-from .config import settings
-from .logger import export_logger as logger
+from .config import Settings
+from loguru import logger
 
 class BinanceClient:
-    def __init__(self):
+    def __init__(self, settings: Settings | None = None):
+        settings = settings or Settings.from_env()
         self.exchange = ccxt.binance({
-            'apiKey': settings.BINANCE_API_KEY,
-            'secret': settings.BINANCE_SECRET_KEY,
+            'apiKey': settings.api_key,
+            'secret': settings.api_secret,
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'spot'
             }
         })
+        if settings.use_testnet:
+            self.exchange.set_sandbox_mode(True)
 
     async def fetch_balance(self):
         try:

@@ -1,20 +1,21 @@
 import sys
 from loguru import logger
-from .config import settings
 
-def setup_logger():
+def setup_logger(log_level="INFO", log_file="logs/bot.log"):
+    """Configure loguru to write to stderr and a rotation file."""
     logger.remove()
     logger.add(
         sys.stderr,
-        level=settings.LOG_LEVEL,
+        level=log_level,
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
     )
-    logger.add(
-        "logs/bot.log",
-        rotation="10 MB",
-        retention="1 week",
-        level=settings.LOG_LEVEL
-    )
+    if log_file:
+        logger.add(
+            log_file,
+            rotation="10 MB",
+            retention="1 week",
+            level=log_level
+        )
 
-setup_logger()
-export_logger = logger
+# Pre-configure with defaults for simple imports if needed
+# But main.py should call setup_logger() explicitly.

@@ -140,11 +140,27 @@ class OrderManager:
             return
         orders = self._db.load_orders()
         with self._lock:
+            self._orders.clear()
+            self._order_ids_by_symbol.clear()
+            self._active_order_ids.clear()
+            self._positions.clear()
+            self._position_applied_amounts.clear()
             for order in orders:
                 self._orders[order.id] = order
                 self._order_ids_by_symbol.setdefault(order.symbol, set()).add(order.id)
                 self._sync_active_index_unlocked(order)
+                self._apply_position_delta_unlocked(order, order.filled_amount)
                 self._position_applied_amounts[order.id] = order.filled_amount
+
+    async def reconcile_active_orders(self) -> list[Order]:
+        """Refresh locally active orders from the exchange after startup restore."""
+        active_orders = self.list_active_orders()
+        reconciled_orders = []
+        for order in active_orders:
+            reconciled_orders.append(
+                await self.refresh_order(order.id, symbol=order.symbol)
+            )
+        return reconciled_orders
 
     async def place_order(
         self,

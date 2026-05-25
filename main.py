@@ -5,9 +5,18 @@ The runtime implementation lives in :mod:`src.main`; this module keeps
 that import ``main`` directly.
 """
 
-from src.main import BotSettings, StrategyOrderClient, main, run, run_bot
+from src.main import BotRuntime, Settings, StrategyOrderClient, main, run, run_bot
 
-__all__ = ["BotSettings", "StrategyOrderClient", "main", "run", "run_bot"]
+BotSettings = Settings
+
+__all__ = [
+    "BotRuntime",
+    "BotSettings",
+    "StrategyOrderClient",
+    "main",
+    "run",
+    "run_bot",
+]
 
 
 if __name__ == "__main__":

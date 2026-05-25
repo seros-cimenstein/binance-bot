@@ -105,6 +105,7 @@ class EventType(str, Enum):
 
     TICKER_UPDATE = "TICKER_UPDATE"
     ORDER_BOOK_UPDATE = "ORDER_BOOK_UPDATE"
+    KLINE_UPDATE = "KLINE_UPDATE"
     ACCOUNT_POSITION = "ACCOUNT_POSITION"
     BALANCE_UPDATE = "BALANCE_UPDATE"
     ORDER_UPDATE = "ORDER_UPDATE"
@@ -184,6 +185,23 @@ class OrderBookUpdate(BaseModel):
     final_update_id: int | None = None
     bids: list[PriceLevel] = Field(default_factory=list)
     asks: list[PriceLevel] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class KlineUpdate(BaseModel):
+    """Validated candle update emitted from Binance ``@kline`` streams."""
+
+    symbol: str
+    interval: str
+    event_time: int | None = None
+    open_time: int
+    close_time: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    is_closed: bool
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -276,6 +294,7 @@ class RawMessage(BaseModel):
 WebSocketPayload = (
     TickerUpdate
     | OrderBookUpdate
+    | KlineUpdate
     | AccountPositionUpdate
     | BalanceUpdate
     | ExecutionReportUpdate
@@ -606,6 +625,27 @@ class BinanceWebSocketManager:
         ]
         await self._add_public_subscriptions(subscriptions)
 
+    async def subscribe_klines(
+        self,
+        symbols: Iterable[str] | str,
+        *,
+        interval: str = "1m",
+    ) -> None:
+        """Subscribe to kline/candlestick updates for each symbol."""
+        normalized_interval = interval.strip()
+        if not normalized_interval:
+            raise ValueError("interval must not be blank")
+
+        subscriptions = [
+            _PublicSubscription(
+                stream=f"{self._stream_symbol(symbol)}@kline_{normalized_interval}",
+                symbol=self._clean_symbol(symbol),
+                event_type=EventType.KLINE_UPDATE,
+            )
+            for symbol in self._iter_symbols(symbols)
+        ]
+        await self._add_public_subscriptions(subscriptions)
+
     async def subscribe_market_data(
         self,
         symbols: Iterable[str] | str,
@@ -645,6 +685,22 @@ class BinanceWebSocketManager:
         interval_suffix = "@100ms" if update_interval_ms == 100 else ""
         streams = [
             f"{self._stream_symbol(symbol)}@depth{depth}{interval_suffix}"
+            for symbol in self._iter_symbols(symbols)
+        ]
+        await self._remove_public_subscriptions(streams)
+
+    async def unsubscribe_klines(
+        self,
+        symbols: Iterable[str] | str,
+        *,
+        interval: str = "1m",
+    ) -> None:
+        """Unsubscribe from kline updates for each symbol."""
+        normalized_interval = interval.strip()
+        if not normalized_interval:
+            raise ValueError("interval must not be blank")
+        streams = [
+            f"{self._stream_symbol(symbol)}@kline_{normalized_interval}"
             for symbol in self._iter_symbols(symbols)
         ]
         await self._remove_public_subscriptions(streams)
@@ -968,6 +1024,14 @@ class BinanceWebSocketManager:
                     WebSocketEvent(
                         event_type=EventType.ORDER_BOOK_UPDATE,
                         payload=self._parse_order_book(stream, data),
+                    )
+                )
+                return
+            if self._is_kline_payload(stream, data):
+                await self._emit(
+                    WebSocketEvent(
+                        event_type=EventType.KLINE_UPDATE,
+                        payload=self._parse_kline(stream, data),
                     )
                 )
                 return
@@ -1398,6 +1462,37 @@ class BinanceWebSocketManager:
             },
         )
 
+    def _parse_kline(
+        self,
+        stream: str,
+        payload: Mapping[str, Any],
+    ) -> KlineUpdate:
+        kline = payload.get("k", payload)
+        if not isinstance(kline, Mapping):
+            raise ValueError("kline payload did not include candle data")
+
+        symbol = self._payload_symbol(stream, payload)
+        if symbol == "UNKNOWN":
+            symbol = self._payload_symbol(stream, kline)
+
+        return self._validate_model(
+            KlineUpdate,
+            {
+                "symbol": symbol,
+                "interval": str(kline.get("i", "")),
+                "event_time": self._optional_int(payload.get("E")),
+                "open_time": self._int(kline.get("t")),
+                "close_time": self._int(kline.get("T")),
+                "open": self._float(kline.get("o")),
+                "high": self._float(kline.get("h")),
+                "low": self._float(kline.get("l")),
+                "close": self._float(kline.get("c")),
+                "volume": self._float(kline.get("v")),
+                "is_closed": self._bool(kline.get("x")),
+                "raw": dict(payload),
+            },
+        )
+
     def _parse_account_position(
         self,
         payload: Mapping[str, Any],
@@ -1534,6 +1629,13 @@ class BinanceWebSocketManager:
             or payload.get("e") == "depthUpdate"
             or "lastUpdateId" in payload
             or ("b" in payload and "a" in payload and "u" in payload)
+        )
+
+    def _is_kline_payload(self, stream: str, payload: Mapping[str, Any]) -> bool:
+        return (
+            payload.get("e") == "kline"
+            or "@kline_" in stream
+            or isinstance(payload.get("k"), Mapping)
         )
 
     def _is_control_response(self, message: Any) -> bool:
@@ -1814,6 +1916,15 @@ class BinanceWebSocketManager:
         return bool(value)
 
     @staticmethod
+    def _bool(value: Any) -> bool:
+        if value is None:
+            raise ValueError("boolean value is required")
+        parsed = BinanceWebSocketManager._optional_bool(value)
+        if parsed is None:
+            raise ValueError("boolean value is required")
+        return parsed
+
+    @staticmethod
     def _optional_str(value: Any) -> str | None:
         if value is None:
             return None
@@ -1836,6 +1947,7 @@ __all__ = [
     "BinanceWebSocketManager",
     "EventType",
     "ExecutionReportUpdate",
+    "KlineUpdate",
     "OrderBookUpdate",
     "PriceLevel",
     "RawMessage",
