@@ -336,7 +336,7 @@ class ClaudeSpotSettings:
     enabled: bool = False
     dynamic_scope: str = ""
     claude_command: str = "gemini"
-    claude_model: str = "gemini-2.5-flash"
+    claude_model: str = "gemini-3-flash-preview"
     claude_timeout_seconds: float = 300.0
     claude_max_budget_usd: str = ""
     prompt_version: str = CLAUDE_SPOT_PROMPT_VERSION
