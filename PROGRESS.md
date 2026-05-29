@@ -1423,3 +1423,39 @@ Next action: monitor cycles with the new short-window evidence. If HBAR or the
 current holding starts printing negative `5m`/`15m` while another candidate has
 better short tape and tolerable friction, Claude now has that information in the
 decision context and the edge calculation.
+
+## Telegram Command Bypass Version Review - 2026-05-29 17:32 +03
+
+- Reviewed the local user-edited changes in `src.claude_spot`,
+  `src.risk.guard`, `src.telegram_alerts`, and the two new top-level helper
+  scripts.
+- Fixed coding hygiene issues only: removed trailing whitespace/unused local
+  imports and added `if __name__ == "__main__"` guards so the new helper
+  scripts do not perform Binance/Telegram network calls during pytest
+  collection.
+- Verification before deployment: `git diff --check` passed,
+  `.venv/bin/python -m py_compile src/claude_spot.py src/risk/guard.py
+  src/telegram_alerts.py test_hbar_momentum.py test_telegram_commands.py`
+  passed, focused
+  `.venv/bin/python -m pytest -q tests/test_claude_spot.py
+  tests/test_risk_guard.py tests/test_runtime.py` passed (`118 passed`), and
+  full `.venv/bin/python -m pytest -q` passed (`349 passed`).
+- Pre-deploy systemd check found `binance-claude-spot.timer` active/enabled and
+  `binance-claude-spot.service` in a failed state from an external
+  connectivity/DNS failure while fetching Binance exchangeInfo and sending
+  Telegram, not from a local compile/test failure.
+- Deployment: stopped the Claude Spot timer, refreshed the user-owned runtime
+  with `scripts/setup_user_deploy.sh`, verified the deployed copy contains the
+  new `override_bps_limits` and `/go_off` command code paths, reset the prior
+  failed service state, and re-enabled `binance-claude-spot.timer`.
+- The immediate deployed live cycle completed successfully with
+  `status=held`, `submission_attempted=false`, `submitted_legs=0`, and
+  `override_bps_limits=false`. Claude held HBAR because HBAR short tape was
+  weak but every candidate destination was also weak and none justified paying
+  the modeled immediate friction.
+- Timer state after deployment: `binance-claude-spot.timer` is active/enabled
+  and waiting for the next trigger at `2026-05-29 17:42:47 +03`; the service is
+  inactive with `Result=success`.
+
+Next action: monitor the next scheduled cycle under this deployed command-bypass
+version.
