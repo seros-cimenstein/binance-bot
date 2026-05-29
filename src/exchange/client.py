@@ -207,10 +207,16 @@ class BinanceClient:
         "api_key",
         "api_secret",
         "apikey",
+        "body",
+        "headers",
+        "request_body",
+        "requestbody",
         "secret",
         "password",
         "signature",
+        "timestamp",
         "token",
+        "x-mbx-apikey",
     }
     _TRANSIENT_EXCHANGE_ERROR_MARKERS = (
         "internal server error",
@@ -263,6 +269,10 @@ class BinanceClient:
                 "enableRateLimit": True,
                 "options": {
                     "adjustForTimeDifference": True,
+                    # We only need Spot market metadata here. ccxt otherwise
+                    # calls Binance's signed wallet "all coins info" endpoint
+                    # during load_markets(), adding an avoidable failure point.
+                    "fetchCurrencies": False,
                     "recvWindow": 10_000,
                 },
             }
@@ -523,6 +533,26 @@ class BinanceClient:
             context={"symbol": symbol_normalized, "ticker": self._sanitize(ticker)},
         )
 
+    async def get_commission_rates(self, symbol: str) -> dict[str, Any]:
+        """Return authenticated spot commission settings for one market.
+
+        This endpoint is read-only and is used by the paper-pool engine to
+        model execution cost without submitting an order.
+        """
+        symbol_normalized = symbol.strip()
+        if not symbol_normalized:
+            raise BinanceClientError("symbol must not be blank")
+        exchange_symbol = re.sub(r"[^A-Za-z0-9]", "", symbol_normalized).upper()
+        method = getattr(self.exchange, "private_get_account_commission", None)
+        if method is None or not callable(method):
+            raise BinanceClientError("exchange does not expose commission rates")
+        return await self._request(
+            operation="get_commission_rates",
+            request_params={"symbol": symbol_normalized},
+            request_weight=20,
+            call=lambda: method({"symbol": exchange_symbol}),
+        )
+
     async def _request(
         self,
         *,
@@ -574,7 +604,7 @@ class BinanceClient:
                         0,
                     ),
                     "error_type": exc.__class__.__name__,
-                    "error_message": str(exc),
+                    "error_message": self._sanitize_error_message(str(exc)),
                     "error_code": mapped_error.error_code,
                     "http_status": mapped_error.http_status,
                     "used_weight_1m": self._used_weight_header("1m"),
@@ -585,16 +615,12 @@ class BinanceClient:
                     logger.bind(
                         **log_context,
                         sleep_seconds=round(sleep_seconds, 3),
-                    ).opt(exception=exc).warning(
-                        "Binance API request failed; retrying"
-                    )
+                    ).warning("Binance API request failed; retrying")
                     await asyncio.sleep(sleep_seconds)
                     continue
 
-                logger.bind(**log_context).opt(exception=exc).error(
-                    "Binance API request failed"
-                )
-                raise mapped_error from exc
+                logger.bind(**log_context).error("Binance API request failed")
+                raise mapped_error from None
 
         raise BinanceClientError(
             "request retry loop exited unexpectedly",
@@ -615,7 +641,7 @@ class BinanceClient:
         }
         error_code = self._extract_error_code(exc)
         http_status = self._extract_http_status(exc)
-        message = str(exc) or exc.__class__.__name__
+        message = self._sanitize_error_message(str(exc) or exc.__class__.__name__)
 
         if self._is_ccxt_exception(exc, "InsufficientFunds"):
             return InsufficientFundsError(
@@ -766,6 +792,30 @@ class BinanceClient:
         capped_delay = min(exponential_delay, self.config.max_backoff_seconds)
         jitter = random.uniform(0, capped_delay * 0.25)
         return capped_delay + jitter
+
+    def _sanitize_error_message(self, message: str) -> str:
+        """Redact signed request details from exception strings before logging."""
+        text = str(message)
+        for secret in (
+            self.config.api_key.get_secret_value(),
+            self.config.api_secret.get_secret_value(),
+        ):
+            if secret:
+                text = text.replace(secret, "***")
+        replacements = (
+            r"(?i)(headers['\"]?\s*[:=]\s*['\"]?)([^'\",}\]]+)",
+            r"(?i)(body['\"]?\s*[:=]\s*['\"]?)([^'\",}\]]+)",
+            r"(?i)(X-MBX-APIKEY['\"]?\s*[:=]\s*['\"]?)([^'\",\s}\]]+)",
+            (
+                r"(?i)((?:apiKey|api_key|apiSecret|api_secret|secret|signature|"
+                r"token|password|timestamp|recvWindow)['\"]?\s*[:=]\s*['\"]?)"
+                r"([^'\",\s&}\]]+)"
+            ),
+            r"(?i)((?:signature|timestamp|recvWindow)=)([^&\s'\",}\]]+)",
+        )
+        for pattern in replacements:
+            text = re.sub(pattern, r"\1***", text)
+        return text
 
     def _extract_error_code(self, exc: Exception) -> str | int | None:
         """Extract an exchange error code from a ccxt exception."""

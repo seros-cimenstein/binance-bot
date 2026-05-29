@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
+from types import SimpleNamespace
 from typing import Any
 
+from aiohttp import WSMsgType
+
+import src.exchange.websocket as websocket_module
 from src.exchange.websocket import (
     BinanceWebSocketManager,
     EventType,
@@ -224,6 +230,50 @@ def test_user_data_stream_accepts_websocket_api_event_envelope() -> None:
         assert event.payload.balances[0].asset == "ETH"
         assert event.payload.balances[0].free == 10000.0
         manager._event_queue.task_done()
+
+    asyncio.run(run())
+
+
+def test_user_data_stream_uses_signed_websocket_api_subscription(
+    monkeypatch: Any,
+) -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.payload: dict[str, Any] | None = None
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            self.payload = payload
+
+        async def receive(self, *, timeout: float) -> Any:
+            assert timeout == 10.0
+            return SimpleNamespace(
+                type=WSMsgType.TEXT,
+                data=json.dumps(
+                    {"status": 200, "result": {"subscriptionId": 0}}
+                ),
+            )
+
+    async def run() -> None:
+        monkeypatch.setattr(websocket_module.time, "time", lambda: 1747385641.636)
+        manager = BinanceWebSocketManager(api_key="key", api_secret="secret")
+        websocket = FakeWebSocket()
+
+        await manager._subscribe_user_stream(websocket)
+
+        assert websocket.payload is not None
+        assert websocket.payload["method"] == "userDataStream.subscribe.signature"
+        params = websocket.payload["params"]
+        assert params["apiKey"] == "key"
+        assert params["timestamp"] == 1747385641636
+        expected_signature = hmac.new(
+            b"secret",
+            b"apiKey=key&timestamp=1747385641636",
+            hashlib.sha256,
+        ).hexdigest()
+        assert params["signature"] == expected_signature
+        assert manager._user_ws_api_url() == (
+            "wss://ws-api.binance.com:443/ws-api/v3"
+        )
 
     asyncio.run(run())
 

@@ -1,0 +1,96 @@
+{
+  "started_at": "2026-05-25T00:00:00+00:00",
+  "cycle_seconds": 900,
+  "initial_balances": {
+    "BNB": 0.001
+  },
+  "commission": {
+    "maker": "0.001",
+    "taker": "0.001",
+    "discount_enabled": true,
+    "discount_asset": "BNB",
+    "discount_multiplier": "0.75"
+  },
+  "settings": {
+    "benchmarks": ["USDT", "BTC", "PAXG", "XAUT"],
+    "benchmark_weights": [0.25, 0.25, 0.25, 0.25],
+    "min_quote_volume_usdt": 1000,
+    "max_spread_bps": 50,
+    "slippage_buffer_bps": 25,
+    "ticker_stale_seconds": 0,
+    "max_scoring_assets": 0,
+    "momentum_observations": 4,
+    "decision_cooldown_seconds": 0,
+    "max_allocation_percent": 100,
+    "max_reallocation_percent": 50,
+    "min_improvement_bps": 0
+  },
+  "markets": [
+    {
+      "symbol": "BNB/USDT",
+      "base": "BNB",
+      "quote": "USDT",
+      "price_series": [600, 600, 600, 600, 600, 600],
+      "quote_volume": 5000000,
+      "min_amount": 0.00001,
+      "min_notional": 5,
+      "amount_precision": 0.00001,
+      "spread_bps": 2
+    },
+    {
+      "symbol": "BTC/USDT",
+      "base": "BTC",
+      "quote": "USDT",
+      "price_series": [70000, 70000, 70000, 70000, 70000, 70000],
+      "quote_volume": 5000000,
+      "min_amount": 0.00001,
+      "min_notional": 5,
+      "amount_precision": 0.00000001,
+      "spread_bps": 2
+    },
+    {
+      "symbol": "PAXG/USDT",
+      "base": "PAXG",
+      "quote": "USDT",
+      "price_series": [4500, 4500, 4500, 4500, 4500, 4500],
+      "quote_volume": 5000000,
+      "min_amount": 0.00001,
+      "min_notional": 5,
+      "amount_precision": 0.00000001,
+      "spread_bps": 2
+    },
+    {
+      "symbol": "XAUT/USDT",
+      "base": "XAUT",
+      "quote": "USDT",
+      "price_series": [4490, 4490, 4490, 4490, 4490, 4490],
+      "quote_volume": 5000000,
+      "min_amount": 0.00001,
+      "min_notional": 5,
+      "amount_precision": 0.00000001,
+      "spread_bps": 2
+    },
+    {
+      "symbol": "WIDE/USDT",
+      "base": "WIDE",
+      "quote": "USDT",
+      "price_series": [1, 1.2, 1.4, 1.6, 1.8, 2.0],
+      "quote_volume": 5000000,
+      "min_amount": 0.00001,
+      "min_notional": 5,
+      "amount_precision": 0.00001,
+      "spread_bps": 500
+    },
+    {
+      "symbol": "THIN/USDT",
+      "base": "THIN",
+      "quote": "USDT",
+      "price_series": [1, 1.2, 1.4, 1.6, 1.8, 2.0],
+      "quote_volume": 1,
+      "min_amount": 0.00001,
+      "min_notional": 5,
+      "amount_precision": 0.00001,
+      "spread_bps": 2
+    }
+  ]
+}

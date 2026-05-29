@@ -1,0 +1,9 @@
+[Unit]
+Description=Backup Binance Trading Bot SQLite database (User Service)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.local/share/binance-bot
+Environment=BINANCE_BOT_BACKUP_RETENTION=14
+ExecStart=%h/.local/share/binance-bot/scripts/backup_db.sh

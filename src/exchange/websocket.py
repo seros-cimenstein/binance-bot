@@ -9,6 +9,8 @@ environments where ``ccxt`` is not installed.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import inspect
 import json
 import logging
@@ -351,8 +353,8 @@ class BinanceWebSocketManager:
     Args:
         api_key: Optional Binance API key. Defaults to ``BINANCE_API_KEY`` from
             ``.env`` or the environment.
-        api_secret: Optional Binance API secret. Stored for compatibility with
-            the REST client and future signed endpoints.
+        api_secret: Optional Binance API secret. Required for signed
+            WebSocket API user-data subscriptions.
         testnet: Whether to use Binance spot testnet endpoints. Defaults to
             ``BINANCE_TESTNET`` or a supplied REST client's config.
         rest_client: Optional :class:`BinanceClient` instance. The manager reads
@@ -363,9 +365,8 @@ class BinanceWebSocketManager:
 
     _PUBLIC_WS_URL = "wss://stream.binance.com:9443"
     _PUBLIC_TESTNET_WS_URL = "wss://stream.testnet.binance.vision"
-    _REST_URL = "https://api.binance.com"
-    _REST_TESTNET_URL = "https://testnet.binance.vision"
-    _LISTEN_KEY_PATH = "/api/v3/userDataStream"
+    _USER_WS_API_URL = "wss://ws-api.binance.com:443/ws-api/v3"
+    _USER_TESTNET_WS_API_URL = "wss://ws-api.testnet.binance.vision/ws-api/v3"
 
     def __init__(
         self,
@@ -482,6 +483,7 @@ class BinanceWebSocketManager:
 
         if user_stream:
             self._require_api_key()
+            self._require_api_secret()
 
         await self._ensure_session()
         self._running = True
@@ -515,12 +517,6 @@ class BinanceWebSocketManager:
                 asyncio.create_task(
                     self._user_stream_loop(),
                     name="binance-user-ws",
-                )
-            )
-            self._track_task(
-                asyncio.create_task(
-                    self._listen_key_refresh_loop(),
-                    name="binance-listen-key-refresh",
                 )
             )
 
@@ -565,8 +561,6 @@ class BinanceWebSocketManager:
         if self._callback_tasks:
             await asyncio.gather(*self._callback_tasks, return_exceptions=True)
         self._callback_tasks.clear()
-
-        await self._delete_listen_key()
 
         if self._owns_session and self._session is not None:
             await self._session.close()
@@ -917,24 +911,23 @@ class BinanceWebSocketManager:
 
         while self._running and self._user_stream_enabled:
             try:
-                listen_key = await self._ensure_listen_key()
-                url = f"{self._public_ws_base_url()}/ws/{listen_key}"
                 await self._ensure_session()
                 logger.bind(
                     exchange="binance",
                     testnet=self.config.testnet,
-                ).info("Connecting Binance user-data WebSocket")
+                ).info("Connecting Binance WebSocket API user-data stream")
 
                 async with self._session.ws_connect(
-                    url,
+                    self._user_ws_api_url(),
                     heartbeat=self.config.heartbeat_interval_seconds,
                     **self._ws_connect_timeout_kwargs(receive_timeout=None),
                 ) as websocket:
                     self._user_ws = websocket
                     self._last_user_message_at = time.monotonic()
+                    await self._subscribe_user_stream(websocket)
                     backoff.reset()
                     logger.bind(exchange="binance").info(
-                        "Binance user-data WebSocket connected"
+                        "Binance WebSocket API user-data stream subscribed"
                     )
 
                     await self._receive_user_messages(websocket)
@@ -985,6 +978,53 @@ class BinanceWebSocketManager:
                 raise websocket.exception() or BinanceWebSocketError(
                     "user-data WebSocket error"
                 )
+
+    async def _subscribe_user_stream(
+        self,
+        websocket: ClientWebSocketResponse,
+    ) -> None:
+        api_key = self._require_api_key()
+        api_secret = self._require_api_secret()
+        params: dict[str, str | int] = {
+            "apiKey": api_key,
+            "timestamp": int(time.time() * 1000),
+        }
+        signature_payload = "&".join(
+            f"{key}={params[key]}" for key in sorted(params)
+        )
+        params["signature"] = hmac.new(
+            api_secret.encode(),
+            signature_payload.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        request_id = f"user-stream-{params['timestamp']}"
+        await websocket.send_json(
+            {
+                "id": request_id,
+                "method": "userDataStream.subscribe.signature",
+                "params": params,
+            }
+        )
+        message = await websocket.receive(timeout=self.config.rest_timeout_seconds)
+        if message.type != WSMsgType.TEXT:
+            raise BinanceWebSocketError(
+                "Binance user-data subscription did not return a text response"
+            )
+        try:
+            response = json.loads(message.data)
+        except json.JSONDecodeError as exc:
+            raise BinanceWebSocketError(
+                "Binance user-data subscription response was not valid JSON"
+            ) from exc
+        if not isinstance(response, Mapping) or response.get("status") != 200:
+            raise BinanceWebSocketError(
+                f"Binance user-data subscription failed: {response}"
+            )
+        result = response.get("result")
+        if not isinstance(result, Mapping) or "subscriptionId" not in result:
+            raise BinanceWebSocketError(
+                "Binance user-data subscription response omitted subscriptionId"
+            )
 
     async def _handle_public_message(self, raw_message: str) -> None:
         try:
@@ -1273,114 +1313,6 @@ class BinanceWebSocketManager:
                 dropped_events=dropped,
                 subscriber_queue=subscriber_queue,
             ).warning("Binance WebSocket event queue is dropping events")
-
-    async def _listen_key_refresh_loop(self) -> None:
-        """Refresh the user-data listen key before Binance expires it."""
-        while self._running and self._user_stream_enabled:
-            await self._sleep_or_stop(self.config.listen_key_refresh_seconds)
-            if not self._running or not self._user_stream_enabled:
-                break
-
-            try:
-                await self._refresh_listen_key()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.bind(
-                    exchange="binance",
-                    error_type=exc.__class__.__name__,
-                    error_message=str(exc),
-                ).opt(exception=exc).warning(
-                    "Failed to refresh Binance listen key"
-                )
-                await self._emit_stream_error(
-                    "user",
-                    "failed to refresh Binance listen key",
-                    exc,
-                )
-
-    async def _ensure_listen_key(self) -> str:
-        async with self._listen_key_lock:
-            if self._listen_key:
-                return self._listen_key
-            self._listen_key = await self._create_listen_key()
-            return self._listen_key
-
-    async def _create_listen_key(self) -> str:
-        response = await self._listen_key_request("POST")
-        listen_key = response.get("listenKey")
-        if not isinstance(listen_key, str) or not listen_key:
-            raise BinanceWebSocketError("Binance did not return a listenKey")
-
-        logger.bind(exchange="binance").info("Binance listen key created")
-        return listen_key
-
-    async def _refresh_listen_key(self) -> None:
-        async with self._listen_key_lock:
-            listen_key = self._listen_key
-            if listen_key is None:
-                self._listen_key = await self._create_listen_key()
-                return
-
-            await self._listen_key_request("PUT", params={"listenKey": listen_key})
-            logger.bind(exchange="binance").debug("Binance listen key refreshed")
-
-    async def _delete_listen_key(self) -> None:
-        async with self._listen_key_lock:
-            listen_key = self._listen_key
-            self._listen_key = None
-        if listen_key is None or self._session is None or self._session.closed:
-            return
-
-        try:
-            await self._listen_key_request(
-                "DELETE",
-                params={"listenKey": listen_key},
-            )
-            logger.bind(exchange="binance").debug("Binance listen key deleted")
-        except Exception as exc:
-            logger.bind(
-                exchange="binance",
-                error_type=exc.__class__.__name__,
-                error_message=str(exc),
-            ).opt(exception=exc).debug("Failed to delete Binance listen key")
-
-    async def _listen_key_request(
-        self,
-        method: str,
-        *,
-        params: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        await self._ensure_session()
-        api_key = self._require_api_key()
-        url = f"{self._rest_base_url()}{self._LISTEN_KEY_PATH}"
-        timeout = aiohttp.ClientTimeout(total=self.config.rest_timeout_seconds)
-        async with self._session.request(
-            method,
-            url,
-            params=dict(params or {}),
-            headers={"X-MBX-APIKEY": api_key},
-            timeout=timeout,
-        ) as response:
-            response_text = await response.text()
-            if response.status >= 400:
-                raise BinanceWebSocketError(
-                    "Binance listen-key request failed "
-                    f"with HTTP {response.status}: {response_text}"
-                )
-            if not response_text:
-                return {}
-            try:
-                parsed = json.loads(response_text)
-            except json.JSONDecodeError as exc:
-                raise BinanceWebSocketError(
-                    "Binance listen-key response was not valid JSON"
-                ) from exc
-            if not isinstance(parsed, dict):
-                raise BinanceWebSocketError(
-                    "Binance listen-key response was not an object"
-                )
-            return parsed
 
     async def _health_loop(self) -> None:
         """Log stream health and force reconnects after message timeouts."""
@@ -1753,10 +1685,10 @@ class BinanceWebSocketManager:
             return self._PUBLIC_TESTNET_WS_URL
         return self._PUBLIC_WS_URL
 
-    def _rest_base_url(self) -> str:
+    def _user_ws_api_url(self) -> str:
         if self.config.testnet:
-            return self._REST_TESTNET_URL
-        return self._REST_URL
+            return self._USER_TESTNET_WS_API_URL
+        return self._USER_WS_API_URL
 
     def _ws_connect_timeout_kwargs(
         self,
@@ -1797,6 +1729,13 @@ class BinanceWebSocketManager:
                 "api_key is required for Binance user data stream"
             )
         return self.config.api_key.get_secret_value()
+
+    def _require_api_secret(self) -> str:
+        if self.config.api_secret is None:
+            raise BinanceWebSocketError(
+                "api_secret is required for Binance user data stream"
+            )
+        return self.config.api_secret.get_secret_value()
 
     def _is_ws_stale(
         self,

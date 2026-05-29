@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Binance Trading Bot SQLite database backup (User Service)
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+Persistent=true
+Unit=binance-bot-backup.service
+
+[Install]
+WantedBy=timers.target

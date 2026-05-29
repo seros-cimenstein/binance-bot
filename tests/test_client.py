@@ -123,6 +123,43 @@ class NoopLogger:
         return None
 
 
+class CaptureLogger:
+    """Loguru-compatible logger stub that records bound context."""
+
+    def __init__(
+        self,
+        records: list[dict[str, Any]],
+        context: dict[str, Any] | None = None,
+        opts: dict[str, Any] | None = None,
+    ) -> None:
+        self.records = records
+        self.context = dict(context or {})
+        self.opts = dict(opts or {})
+
+    def bind(self, **kwargs: Any) -> "CaptureLogger":
+        return CaptureLogger(
+            self.records,
+            {**self.context, **kwargs},
+            self.opts,
+        )
+
+    def opt(self, **kwargs: Any) -> "CaptureLogger":
+        return CaptureLogger(
+            self.records,
+            self.context,
+            {**self.opts, **kwargs},
+        )
+
+    def debug(self, message: str, **_: Any) -> None:
+        self.records.append({"level": "debug", "message": message, **self.context, "opts": self.opts})
+
+    def warning(self, message: str, **_: Any) -> None:
+        self.records.append({"level": "warning", "message": message, **self.context, "opts": self.opts})
+
+    def error(self, message: str, **_: Any) -> None:
+        self.records.append({"level": "error", "message": message, **self.context, "opts": self.opts})
+
+
 def _install_fake_ccxt(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     ccxt = types.ModuleType("ccxt")
     ccxt.__path__ = []
@@ -284,6 +321,14 @@ def test_authenticated_request_applies_binance_api_key_header(make_client: Any) 
     asyncio.run(run())
 
 
+def test_client_disables_signed_currency_metadata_fetch(make_client: Any) -> None:
+    client, exchange = make_client([])
+
+    assert exchange.config["options"]["fetchCurrencies"] is False
+    assert exchange.config["options"]["adjustForTimeDifference"] is True
+    assert exchange.config["options"]["recvWindow"] == 10_000
+
+
 def test_retryable_http_response_is_retried_before_success(
     make_client: Any,
     client_module: Any,
@@ -358,5 +403,42 @@ def test_retryable_http_response_raises_after_retry_exhaustion(
             "operation": "get_ticker",
             "request_params": {"symbol": "ETH/USDT"},
         }
+
+    asyncio.run(run())
+
+
+def test_exchange_failure_logs_are_sanitized(
+    make_client: Any,
+    client_module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        records: list[dict[str, Any]] = []
+        monkeypatch.setattr(client_module, "logger", CaptureLogger(records))
+        client, exchange = make_client(
+            [],
+            api_key="live-api-key",
+            api_secret="live-api-secret",
+            max_retries=0,
+        )
+        exc = client_module.ccxt.InsufficientFunds(
+            "binance POST /api/v3/order headers={'X-MBX-APIKEY': 'live-api-key'} "
+            "body='symbol=HBARUSDT&timestamp=123456&signature=deadbeef' "
+            "secret=live-api-secret"
+        )
+        exchange.fetch_balance = AsyncMock(side_effect=exc)
+
+        with pytest.raises(client_module.InsufficientFundsError) as exc_info:
+            await client.get_balance()
+
+        rendered_records = repr(records)
+        assert "live-api-key" not in rendered_records
+        assert "live-api-secret" not in rendered_records
+        assert "deadbeef" not in rendered_records
+        assert "signature=deadbeef" not in str(exc_info.value)
+        assert "live-api-key" not in str(exc_info.value)
+        assert exc_info.value.__cause__ is None
+        assert all(record["opts"].get("exception") is not exc for record in records)
+        assert records[-1]["error_message"] != str(exc)
 
     asyncio.run(run())

@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Binance Claude Autonomous Spot every 10 minutes
+
+[Timer]
+OnBootSec=2min
+OnActiveSec=10min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=false
+Unit=binance-claude-spot.service
+
+[Install]
+WantedBy=timers.target

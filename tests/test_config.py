@@ -37,12 +37,15 @@ ENV_KEYS = (
     "MARKET_DATA_MODE",
     "STRATEGY",
     "ORDER_UPDATE_MODE",
+    "WS_ALERT_COOLDOWN_SECONDS",
     "MAX_POSITION_SIZE_USD",
     "DAILY_LOSS_LIMIT_USD",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
     "DB_PATH",
     "CONFIRM_LIVE_TRADING",
+    "API_SYMBOL_WHITELIST",
+    "API_ASSET_WHITELIST",
 )
 
 
@@ -86,12 +89,15 @@ def test_from_env_parses_aliases_and_normalizes_values(
     clean_env.setenv("MARKET_DATA_MODE", " websocket ")
     clean_env.setenv("STRATEGY", "demo-sma")
     clean_env.setenv("ORDER_UPDATE_MODE", " websocket ")
+    clean_env.setenv("WS_ALERT_COOLDOWN_SECONDS", "45")
     clean_env.setenv("MAX_POSITION_SIZE_USD", "1000")
     clean_env.setenv("DAILY_LOSS_LIMIT_USD", "125")
     clean_env.setenv("TELEGRAM_BOT_TOKEN", " token ")
     clean_env.setenv("TELEGRAM_CHAT_ID", " chat ")
     clean_env.setenv("DB_PATH", " tmp/orders.db ")
     clean_env.setenv("CONFIRM_LIVE_TRADING", " YES ")
+    clean_env.setenv("API_SYMBOL_WHITELIST", "btcusdt, bnb-usdt")
+    clean_env.setenv("API_ASSET_WHITELIST", "bnb, usdt")
 
     settings = Settings.from_env()
 
@@ -120,12 +126,15 @@ def test_from_env_parses_aliases_and_normalizes_values(
     assert settings.market_data_mode == "websocket"
     assert settings.strategy_name == "demo-sma"
     assert settings.order_update_mode == "websocket"
+    assert settings.ws_alert_cooldown_seconds == 45
     assert settings.max_position_size_usd == 1000
     assert settings.daily_loss_limit_usd == 125
     assert settings.telegram_bot_token == "token"
     assert settings.telegram_chat_id == "chat"
     assert settings.db_path == "tmp/orders.db"
     assert settings.confirm_live_trading == "yes"
+    assert settings.api_symbol_whitelist == ("BTC/USDT", "BNB/USDT")
+    assert settings.api_asset_whitelist == ("BNB", "USDT")
 
 
 @pytest.mark.parametrize(
@@ -201,6 +210,10 @@ def test_from_env_parses_aliases_and_normalizes_values(
         (
             (("BINANCE_API_KEY", "key"), ("BINANCE_API_SECRET", "secret"), ("ORDER_UPDATE_MODE", "polling")),
             "ORDER_UPDATE_MODE must be either",
+        ),
+        (
+            (("BINANCE_API_KEY", "key"), ("BINANCE_API_SECRET", "secret"), ("WS_ALERT_COOLDOWN_SECONDS", "-1")),
+            "ws_alert_cooldown_seconds must be at least",
         ),
     ],
 )

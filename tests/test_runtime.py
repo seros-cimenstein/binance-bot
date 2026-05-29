@@ -12,6 +12,7 @@ import src.main as main_module
 from src.config import Settings
 from src.data.feeds import BinanceDataFeed, CandleData
 from src.data.websocket_feed import BinanceWebSocketCandleFeed
+from src.exchange.websocket import EventType, StreamError, UserStreamExpired, WebSocketEvent
 from src.main import BotRuntime, StrategyOrderClient, _default_data_feed, run_bot
 from src.orders.models import Position
 from src.orders.sizing import OrderSizingConfig
@@ -189,6 +190,24 @@ class WaitingExecutionManager:
         self.stopped = True
 
 
+class AlertingManager:
+    def __init__(self) -> None:
+        self.callbacks: dict[EventType, list[Any]] = {}
+
+    def subscribe(self, event_type: EventType, callback: Any) -> None:
+        self.callbacks.setdefault(event_type, []).append(callback)
+
+    async def emit(self, event: WebSocketEvent) -> None:
+        for callback in self.callbacks.get(event.event_type, []):
+            await callback(event)
+
+
+class AlertingFeed(WaitingFeed):
+    def __init__(self, manager: AlertingManager) -> None:
+        super().__init__()
+        self.manager = manager
+
+
 class StaticPortfolioService:
     def __init__(self, snapshot: PortfolioSnapshot) -> None:
         self._snapshot = snapshot
@@ -205,6 +224,8 @@ class FakeAlerter:
         self.risk_breaches: list[str] = []
         self.crashes: list[dict[str, Any]] = []
         self.trades: list[dict[str, Any]] = []
+        self.stream_failures: list[tuple[str, str]] = []
+        self.terminal_failures: list[str] = []
 
     async def alert_started(self, mode: str) -> None:
         self.started_modes.append(mode)
@@ -246,6 +267,12 @@ class FakeAlerter:
                 "error": error,
             }
         )
+
+    async def alert_stream_failure(self, stream: str, reason: str) -> None:
+        self.stream_failures.append((stream, reason))
+
+    async def alert_terminal_failure(self, error: str) -> None:
+        self.terminal_failures.append(error)
 
 
 def _runtime(
@@ -371,6 +398,23 @@ async def test_runtime_rejects_unconfirmed_live_trading_before_setup() -> None:
     assert components["order_manager"].restore_called is False
     assert components["rest_client"].closed is False
     assert components["db"].closed is False
+
+
+async def test_runtime_rejects_confirmed_fixed_size_live_trading() -> None:
+    runtime, components = _runtime(
+        settings=_settings(
+            use_testnet=False,
+            dry_run=False,
+            confirm_live_trading="yes",
+            order_size_mode="fixed",
+        )
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        await runtime.run()
+
+    assert exc_info.value.code == 1
+    assert components["order_manager"].restore_called is False
 
 
 async def test_runtime_cleans_up_components_when_setup_fails() -> None:
@@ -576,6 +620,45 @@ async def test_runtime_starts_execution_update_stream_when_enabled() -> None:
     assert execution_manager.start_user_stream_values == [True]
     assert execution_manager.unsubscribed is True
     assert execution_manager.stopped is True
+
+
+async def test_runtime_alerts_for_enabled_websocket_streams_with_cooldown() -> None:
+    times = iter([10.0, 20.0, 30.0, 50.0])
+    market_manager = AlertingManager()
+    execution_manager = AlertingManager()
+    alerter = FakeAlerter()
+    runtime, _ = _runtime(
+        settings=_settings(
+            market_data_mode="websocket",
+            order_update_mode="websocket",
+            ws_alert_cooldown_seconds=30.0,
+        ),
+        data_feed_factory=lambda *_: AlertingFeed(market_manager),
+        execution_manager_factory=lambda _: execution_manager,
+        alerter=alerter,
+    )
+    runtime._clock = lambda: next(times)
+    runtime._build_components()
+
+    public_error = WebSocketEvent(
+        event_type=EventType.STREAM_ERROR,
+        payload=StreamError(stream="public", message="disconnected"),
+    )
+    await market_manager.emit(public_error)
+    await market_manager.emit(public_error)
+    await execution_manager.emit(
+        WebSocketEvent(
+            event_type=EventType.USER_STREAM_EXPIRED,
+            payload=UserStreamExpired(),
+        )
+    )
+    await market_manager.emit(public_error)
+
+    assert alerter.stream_failures == [
+        ("market-data/public", "disconnected"),
+        ("execution/user", "Binance user-data stream expired"),
+        ("market-data/public", "disconnected"),
+    ]
 
 
 async def test_strategy_order_client_applies_dynamic_sizing_in_dry_run() -> None:
@@ -930,3 +1013,27 @@ async def test_main_restarts_after_runtime_crash(
             "error": "boom",
         }
     ]
+
+
+async def test_main_alerts_after_terminal_runtime_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    alerter = FakeAlerter()
+
+    async def fail_runtime(*_: Any, **__: Any) -> None:
+        raise RuntimeError("still broken")
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(main_module, "setup_logger", lambda *_: None)
+    monkeypatch.setattr(main_module, "TelegramAlerter", lambda *_: alerter)
+    monkeypatch.setattr(main_module, "_install_signal_handlers", lambda *_: None)
+    monkeypatch.setattr(main_module, "run_bot", fail_runtime)
+    monkeypatch.setattr(main_module.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="still broken"):
+        await main_module.main(_settings())
+
+    assert len(alerter.crashes) == 4
+    assert alerter.terminal_failures == ["still broken"]

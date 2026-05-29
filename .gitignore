@@ -1,8 +1,11 @@
 .env
+.env.*
+!.env.example
 *.log
 *.db
 /data/
 /logs/
+/backups/
 __pycache__/
 *.pyc
 *.pyo

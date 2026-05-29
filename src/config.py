@@ -30,9 +30,12 @@ DEFAULT_DRY_RUN = False
 DEFAULT_MARKET_DATA_MODE = "polling"
 DEFAULT_STRATEGY = "demo-sma"
 DEFAULT_ORDER_UPDATE_MODE = "disabled"
+DEFAULT_WS_ALERT_COOLDOWN_SECONDS = 300.0
 DEFAULT_MAX_POSITION_SIZE_USD = 500.0
 DEFAULT_DAILY_LOSS_LIMIT_USD = 100.0
 DEFAULT_DB_PATH = "data/bot.db"
+DEFAULT_API_SYMBOL_WHITELIST: tuple[str, ...] = ()
+DEFAULT_API_ASSET_WHITELIST: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,12 +67,15 @@ class Settings:
     market_data_mode: str = DEFAULT_MARKET_DATA_MODE
     strategy_name: str = DEFAULT_STRATEGY
     order_update_mode: str = DEFAULT_ORDER_UPDATE_MODE
+    ws_alert_cooldown_seconds: float = DEFAULT_WS_ALERT_COOLDOWN_SECONDS
     max_position_size_usd: float = DEFAULT_MAX_POSITION_SIZE_USD
     daily_loss_limit_usd: float = DEFAULT_DAILY_LOSS_LIMIT_USD
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     db_path: str = DEFAULT_DB_PATH
     confirm_live_trading: str = "no"
+    api_symbol_whitelist: tuple[str, ...] = DEFAULT_API_SYMBOL_WHITELIST
+    api_asset_whitelist: tuple[str, ...] = DEFAULT_API_ASSET_WHITELIST
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "api_key", _non_blank(self.api_key, "api_key"))
@@ -137,6 +143,22 @@ class Settings:
             self,
             "confirm_live_trading",
             self.confirm_live_trading.strip().lower(),
+        )
+        object.__setattr__(
+            self,
+            "api_symbol_whitelist",
+            tuple(
+                normalize_symbol(_non_blank(symbol, "api_symbol_whitelist"))
+                for symbol in self.api_symbol_whitelist
+            ),
+        )
+        object.__setattr__(
+            self,
+            "api_asset_whitelist",
+            tuple(
+                _asset_symbol(_non_blank(asset, "api_asset_whitelist"))
+                for asset in self.api_asset_whitelist
+            ),
         )
 
         _finite_float(self.order_size, "order_size", minimum=0.0)
@@ -248,6 +270,15 @@ class Settings:
             raise RuntimeError(
                 "ORDER_UPDATE_MODE must be either 'disabled' or 'websocket'"
             )
+        object.__setattr__(
+            self,
+            "ws_alert_cooldown_seconds",
+            _finite_float(
+                self.ws_alert_cooldown_seconds,
+                "ws_alert_cooldown_seconds",
+                minimum=0.0,
+            ),
+        )
         _non_negative_int(self.feed_queue_maxsize, "feed_queue_maxsize")
         _finite_float(
             self.max_position_size_usd,
@@ -333,6 +364,10 @@ class Settings:
                 "ORDER_UPDATE_MODE",
                 default=DEFAULT_ORDER_UPDATE_MODE,
             ),
+            ws_alert_cooldown_seconds=_float_env(
+                "WS_ALERT_COOLDOWN_SECONDS",
+                default=DEFAULT_WS_ALERT_COOLDOWN_SECONDS,
+            ),
             max_position_size_usd=_float_env(
                 "MAX_POSITION_SIZE_USD",
                 default=DEFAULT_MAX_POSITION_SIZE_USD,
@@ -348,6 +383,8 @@ class Settings:
                 "CONFIRM_LIVE_TRADING",
                 default="no",
             ).strip().lower(),
+            api_symbol_whitelist=_symbols_env("API_SYMBOL_WHITELIST"),
+            api_asset_whitelist=_assets_env("API_ASSET_WHITELIST"),
         )
 
     def for_symbol(self, symbol: str) -> "Settings":
@@ -432,6 +469,23 @@ def _symbols_env(name: str) -> tuple[str, ...]:
     if not symbols:
         raise RuntimeError(f"{name} must contain at least one symbol")
     return symbols
+
+
+def _assets_env(name: str) -> tuple[str, ...]:
+    raw_assets = os.getenv(name)
+    if raw_assets is None or not raw_assets.strip():
+        return ()
+    assets = tuple(part.strip() for part in raw_assets.split(",") if part.strip())
+    if not assets:
+        raise RuntimeError(f"{name} must contain at least one asset")
+    return assets
+
+
+def _asset_symbol(value: str) -> str:
+    asset = value.strip().upper()
+    if not asset or not asset.replace("-", "").replace("_", "").isalnum():
+        raise RuntimeError("asset whitelist values must be asset symbols")
+    return asset
 
 
 def _non_blank(value: str, field_name: str) -> str:

@@ -1,0 +1,17 @@
+[Unit]
+Description=Binance Trading Bot (User Service)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/binance-bot
+EnvironmentFile=%h/.local/share/binance-bot/.env
+ExecStart=%h/.local/share/binance-bot/venv/bin/python -m src.main
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

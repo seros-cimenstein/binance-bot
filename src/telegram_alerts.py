@@ -22,9 +22,9 @@ class TelegramAlerter:
                 "Telegram alerts disabled: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable"
             )
 
-    async def send(self, message: str) -> None:
+    async def send(self, message: str) -> bool:
         if not self._enabled:
-            return
+            return False
         try:
             url = _API_URL.format(token=self._token)
             payload = {"chat_id": self._chat_id, "text": message, "parse_mode": "HTML"}
@@ -33,8 +33,11 @@ class TelegramAlerter:
                     if not resp.ok:
                         body = await resp.text()
                         logger.warning(f"Telegram alert failed ({resp.status}): {body[:200]}")
+                        return False
+            return True
         except Exception as exc:
             logger.warning(f"Telegram alert error: {exc}")
+            return False
 
     async def alert_started(self, mode: str) -> None:
         emoji = "\U0001f534" if mode == "LIVE" else "\U0001f7e1"
@@ -45,6 +48,27 @@ class TelegramAlerter:
             f"\U0001f4a5 <b>Bot crashed</b> (attempt {attempt}/{max_attempts})\n"
             f"Restarting in {delay:.0f}s\n"
             f"<code>{error[:300]}</code>"
+        )
+
+    async def alert_terminal_failure(self, error: str) -> None:
+        await self.send(
+            "\U0001f6d1 <b>Bot stopped after repeated failures</b>\n"
+            f"<code>{error[:300]}</code>"
+        )
+
+    async def alert_stream_failure(self, stream: str, reason: str) -> None:
+        await self.send(
+            "\u26a0\ufe0f <b>WebSocket stream failure</b>\n"
+            f"Stream: <code>{stream[:100]}</code>\n"
+            f"<code>{reason[:300]}</code>"
+        )
+
+    async def alert_operations_test(self, mode: str, symbol: str) -> bool:
+        return await self.send(
+            "\u2705 <b>Operational verification</b>\n"
+            f"Mode: <code>{mode}</code>\n"
+            f"Symbol: <code>{symbol}</code>\n"
+            "Read-only connectivity check completed."
         )
 
     async def alert_daily_loss_limit(self, current: float, limit: float) -> None:

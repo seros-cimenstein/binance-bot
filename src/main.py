@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import signal
 import sys
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict
@@ -25,6 +26,9 @@ from src.exchange.websocket import (
     BinanceWebSocketManager,
     EventType,
     ExecutionReportUpdate,
+    StreamError,
+    UserStreamExpired,
+    WebSocketEvent,
 )
 from src.orders.manager import OrderManager
 from src.orders.models import Order
@@ -303,6 +307,8 @@ class BotRuntime:
         self.execution_task: asyncio.Task[None] | None = None
         self.shutdown_task: asyncio.Task[None] | None = None
         self.rollback_task: asyncio.Task[None] | None = None
+        self._stream_alert_last_sent: dict[str, float] = {}
+        self._clock: Callable[[], float] = time.monotonic
         self._closed = False
 
     async def run(self) -> None:
@@ -362,6 +368,12 @@ class BotRuntime:
     def _ensure_live_trading_confirmed(self) -> None:
         if self.settings.use_testnet:
             return
+        if not self.settings.dry_run and self.settings.order_size_mode == "fixed":
+            logger.critical(
+                "Fixed-size live execution is disabled; use DRY_RUN=true or "
+                "a reviewed balance-aware runtime"
+            )
+            sys.exit(1)
         if self.settings.confirm_live_trading != "yes":
             logger.critical(
                 "Live trading requires CONFIRM_LIVE_TRADING=yes in environment"
@@ -408,6 +420,70 @@ class BotRuntime:
         )
         if self.settings.order_update_mode == "websocket":
             self.execution_manager = self._execution_manager_factory(self.rest_client)
+        self._register_websocket_alerts()
+
+    def _register_websocket_alerts(self) -> None:
+        if self.alerter is None:
+            return
+        if self.settings.market_data_mode == "websocket":
+            self._subscribe_stream_alerts(
+                getattr(self.feeds, "manager", None),
+                "market-data",
+            )
+        if self.settings.order_update_mode == "websocket":
+            self._subscribe_stream_alerts(
+                self.execution_manager,
+                "execution",
+                include_user_expiration=True,
+            )
+
+    def _subscribe_stream_alerts(
+        self,
+        manager: Any,
+        category: str,
+        *,
+        include_user_expiration: bool = False,
+    ) -> None:
+        subscribe = getattr(manager, "subscribe", None)
+        if subscribe is None or not callable(subscribe):
+            return
+
+        async def on_stream_error(event: WebSocketEvent) -> None:
+            await self._alert_stream_event(category, event)
+
+        subscribe(EventType.STREAM_ERROR, on_stream_error)
+        if include_user_expiration:
+            subscribe(EventType.USER_STREAM_EXPIRED, on_stream_error)
+
+    async def _alert_stream_event(
+        self,
+        category: str,
+        event: WebSocketEvent,
+    ) -> None:
+        if self.alerter is None:
+            return
+        payload = event.payload
+        if isinstance(payload, StreamError):
+            stream = f"{category}/{payload.stream}"
+            reason = payload.message
+            if payload.error_type:
+                reason = f"{reason} ({payload.error_type})"
+        elif isinstance(payload, UserStreamExpired):
+            stream = f"{category}/user"
+            reason = "Binance user-data stream expired"
+        else:
+            return
+
+        now = self._clock()
+        last_sent = self._stream_alert_last_sent.get(stream)
+        cooldown = self.settings.ws_alert_cooldown_seconds
+        if last_sent is not None and now - last_sent < cooldown:
+            logger.bind(stream=stream, cooldown_seconds=cooldown).debug(
+                "Suppressing repeated WebSocket Telegram alert during cooldown"
+            )
+            return
+        self._stream_alert_last_sent[stream] = now
+        await self.alerter.alert_stream_failure(stream, reason)
 
     async def _recover_state(self) -> None:
         assert self.order_manager is not None
@@ -633,6 +709,8 @@ async def main(settings: Settings | None = None) -> None:
                 logger.opt(exception=exc).error(
                     f"Bot failed after {_MAX_STARTUP_ATTEMPTS} attempts; giving up"
                 )
+                if alerter:
+                    await alerter.alert_terminal_failure(str(exc))
                 raise
             delay = min(_BASE_RESTART_DELAY * 2 ** (attempt - 1), 60.0)
             logger.opt(exception=exc).warning(

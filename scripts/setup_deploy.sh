@@ -29,6 +29,7 @@ sudo rsync -a --delete \
     --exclude "*.db" \
     --exclude "/data/" \
     --exclude "/logs/" \
+    --exclude "/backups/" \
     ./ "$PROJECT_DIR/"
 
 sudo chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR"
@@ -37,9 +38,10 @@ sudo chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR"
 sudo -u "$SERVICE_USER" python3 -m venv "$PROJECT_DIR/venv"
 sudo -u "$SERVICE_USER" "$PROJECT_DIR/venv/bin/pip" install "$PROJECT_DIR"
 
-# Create logs and data dirs
-sudo -u "$SERVICE_USER" mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/data"
+# Create runtime dirs
+sudo -u "$SERVICE_USER" mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/data" "$PROJECT_DIR/backups"
 
 echo "Deployment setup complete."
 echo "Please configure $PROJECT_DIR/.env"
 echo "Then install the service: sudo cp deploy/binance-bot.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable binance-bot"
+echo "Install backups: sudo cp deploy/binance-bot-backup.* /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now binance-bot-backup.timer"

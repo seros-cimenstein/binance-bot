@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Binance Paper Pool SQLite ledger backup (User Service)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+Unit=binance-pool-paper-backup.service
+
+[Install]
+WantedBy=timers.target
