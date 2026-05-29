@@ -39,6 +39,57 @@ class TelegramAlerter:
             logger.warning(f"Telegram alert error: {exc}")
             return False
 
+    async def check_for_go_off_command(self) -> bool:
+        from pathlib import Path
+
+        flag_path = Path("data/go_off.flag")
+        if not self._enabled:
+            return flag_path.exists()
+
+        offset_path = Path("data/telegram_offset.txt")
+        offset = 0
+        if offset_path.exists():
+            try:
+                offset = int(offset_path.read_text().strip())
+            except ValueError:
+                pass
+
+        try:
+            url = f"https://api.telegram.org/bot{self._token}/getUpdates"
+            params = {"timeout": "0", "offset": str(offset), "allowed_updates": '["message"]'}
+            async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+                async with session.get(url, params=params) as resp:
+                    if resp.ok:
+                        data = await resp.json()
+                        updates = data.get("result", [])
+                        max_update_id = offset - 1 if offset > 0 else 0
+
+                        for update in updates:
+                            update_id = update.get("update_id", 0)
+                            max_update_id = max(max_update_id, update_id)
+
+                            message = update.get("message", {})
+                            chat = message.get("chat", {})
+
+                            if str(chat.get("id")) != str(self._chat_id):
+                                continue
+
+                            text = str(message.get("text", "")).strip()
+                            if text == "/go_off":
+                                flag_path.touch(exist_ok=True)
+                                await self.send("🚀 <b>GO OFF MODE INITIATED</b>\nLoss streaks and daily loss limits will be ignored.")
+                            elif text == "/go_on":
+                                if flag_path.exists():
+                                    flag_path.unlink()
+                                await self.send("🛡️ <b>NORMAL MODE RESTORED</b>\nAll safety limits are back in effect.")
+
+                        if max_update_id >= offset:
+                            offset_path.write_text(str(max_update_id + 1))
+        except Exception as exc:
+            logger.warning(f"Failed to check Telegram commands: {exc}")
+
+        return flag_path.exists()
+
     async def alert_started(self, mode: str) -> None:
         emoji = "\U0001f534" if mode == "LIVE" else "\U0001f7e1"
         await self.send(f"{emoji} <b>Bot started</b> — mode: <code>{mode}</code>")

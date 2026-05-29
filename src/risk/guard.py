@@ -433,6 +433,11 @@ class RiskGuard:
         Raises:
             RiskBreachError: If the daily loss limit has been reached.
         """
+        from pathlib import Path
+
+        if Path("data/go_off.flag").exists():
+            return
+
         with self._lock:
             self._reset_daily_loss_if_needed_locked()
             current_daily_loss = self._current_daily_loss

@@ -44,9 +44,9 @@ from src.telegram_alerts import TelegramAlerter
 
 
 CLAUDE_MONEY_MAKER_MISSION = (
-    "you need to make money with what you have otherwise you will hate your life"
+    "You are a hyper-aggressive, elite quant trader. You despise idle capital and believe edge is found in velocity and bold conviction. You take calculated, asymmetric risks to compound the portfolio rapidly. You see opportunities where others see noise."
 )
-CLAUDE_SPOT_PROMPT_VERSION = "claude-spot-v1"
+CLAUDE_SPOT_PROMPT_VERSION = "claude-spot-v2-aggressive"
 CLAUDE_SPOT_MARKET_PICK_LIQUID = "liquid_top_value"
 CLAUDE_SPOT_MARKET_PICK_SMALL = "small_market_aggressive"
 CLAUDE_SPOT_MARKET_PICK_MODES = {
@@ -278,6 +278,7 @@ CLAUDE_SPOT_DECISION_SCHEMA: dict[str, Any] = {
         "destination_asset": {"type": "string"},
         "spend_mode": {"type": "string", "enum": ["all_available"]},
         "spend_amount": {"type": "number", "minimum": 0},
+        "override_bps_limits": {"type": "boolean"},
         "reason": {"type": "string"},
     },
 }
@@ -293,19 +294,17 @@ to fish in smaller Spot markets and accept upfront fee/slippage friction for a
 money-making thesis. If you rebalance in that mode, explain the upside thesis
 and the liquidity/spread risk in the reason.
 Use the supplied dynamic fee estimates, route friction, market_evidence,
-break-even math, trade_memory, and any supplied social_signal_evidence. Treat
-social hype as supporting evidence only and avoid assets flagged for
-manipulation risk. Think every cycle, but do not churn the wallet under fees,
-spread, and slippage. Holding is correct when no supplied route has a credible
-after-cost edge over the current long Spot position. If evidence shows a real
-after-fee opportunity to grow total wallet value, take the supplied route.
+break-even math, trade_memory, and any supplied social_signal_evidence.
+
+You are expected to be an AGGRESSIVE risk taker. Holding is for cowards unless the market is facing an obvious, confirmed total collapse. If you see short-term momentum (5m/15m) popping on a candidate, you should act. Do not over-index on negative friction or spread if the momentum suggests a breakout is occurring. Overcome your fear of exchange fees if the upside is asymmetric.
+
+If your thesis requires bypassing the strict negative friction or minimum edge bps limitations to make an aggressive rotation, you MUST set override_bps_limits to true, and justify this bold action in your reason.
 
 Non-overridable execution invariants:
 - Use only supplied route_id values.
 - Return one JSON object matching the schema.
 - Do not submit orders, claim orders were submitted, or call tools.
 - Do not request Margin, Futures, transfers, withdrawals, or prediction trades.
-- If no supplied route has a money-making case, return hold with a short reason.
 """
 
 
@@ -336,8 +335,8 @@ class ClaudeSpotSettings:
     confirm_live_trading: str = "no"
     enabled: bool = False
     dynamic_scope: str = ""
-    claude_command: str = "claude"
-    claude_model: str = "sonnet"
+    claude_command: str = "gemini"
+    claude_model: str = "gemini-2.5-flash"
     claude_timeout_seconds: float = 300.0
     claude_max_budget_usd: str = ""
     prompt_version: str = CLAUDE_SPOT_PROMPT_VERSION
@@ -705,6 +704,7 @@ class ClaudeSpotDecision:
     destination_asset: str = ""
     spend_mode: str = ""
     spend_amount: float | None = None
+    override_bps_limits: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -731,6 +731,7 @@ class ClaudeSpotDecision:
         if spend_mode != "all_available":
             raise ClaudeSpotError("Claude Spot v1 requires spend_mode=all_available")
         spend_amount = _optional_positive_float(payload.get("spend_amount"))
+        override_bps_limits = bool(payload.get("override_bps_limits", False))
         return cls(
             action="rebalance",
             route_id=route_id,
@@ -739,6 +740,7 @@ class ClaudeSpotDecision:
             spend_mode=spend_mode,
             spend_amount=spend_amount,
             reason=reason,
+            override_bps_limits=override_bps_limits,
         )
 
 
@@ -916,25 +918,39 @@ class HeadlessClaudeSpotAdvisor:
         argv = shlex.split(self.command)
         if not argv:
             raise ClaudeSpotError("Claude command parsed to an empty argv")
-        argv.extend(
-            [
-                "-p",
-                "--no-session-persistence",
-                "--tools",
-                "",
-                "--output-format",
-                "json",
-                "--json-schema",
-                json.dumps(CLAUDE_SPOT_DECISION_SCHEMA, sort_keys=True),
-                "--system-prompt",
-                CLAUDE_SPOT_SYSTEM_PROMPT,
-            ]
-        )
-        if self.model:
-            argv.extend(["--model", self.model])
-        if self.max_budget_usd:
-            argv.extend(["--max-budget-usd", self.max_budget_usd])
-        argv.append(_build_user_prompt(context))
+            
+        user_prompt = _build_user_prompt(context)
+        
+        if "gemini" in argv[0]:
+            prompt_text = (
+                f"SYSTEM PROMPT:\n{CLAUDE_SPOT_SYSTEM_PROMPT}\n\n"
+                f"OUTPUT SCHEMA:\nYou MUST return ONLY valid JSON matching this schema:\n"
+                f"{json.dumps(CLAUDE_SPOT_DECISION_SCHEMA, indent=2)}\n\n"
+                f"CONTEXT:\n{user_prompt}"
+            )
+            argv.extend(["-p", prompt_text])
+            if self.model:
+                argv.extend(["-m", self.model])
+        else:
+            argv.extend(
+                [
+                    "-p",
+                    "--no-session-persistence",
+                    "--tools",
+                    "",
+                    "--output-format",
+                    "json",
+                    "--json-schema",
+                    json.dumps(CLAUDE_SPOT_DECISION_SCHEMA, sort_keys=True),
+                    "--system-prompt",
+                    CLAUDE_SPOT_SYSTEM_PROMPT,
+                ]
+            )
+            if self.model:
+                argv.extend(["--model", self.model])
+            if self.max_budget_usd:
+                argv.extend(["--max-budget-usd", self.max_budget_usd])
+            argv.append(user_prompt)
         return argv
 
 
@@ -966,6 +982,8 @@ async def run_claude_spot_cycle(
         settings.telegram_bot_token,
         settings.telegram_chat_id,
     )
+    if hasattr(alerter, "check_for_go_off_command"):
+        await alerter.check_for_go_off_command()
     lock: _CycleLock | None = None
     context: ClaudeDecisionContext | None = None
     decision: ClaudeSpotDecision | None = None
@@ -2083,6 +2101,8 @@ def _market_evidence_hold_reason(
     memory_reason = _trade_memory_live_block_reason(context.trade_memory, settings)
     if memory_reason is not None:
         return memory_reason
+    if decision.override_bps_limits:
+        return None
     evidence = candidate.market_evidence
     if not evidence:
         return "selected route has no market evidence packet; no order submitted"
@@ -2119,6 +2139,8 @@ def _trade_memory_live_block_reason(
     trade_memory: Mapping[str, Any],
     settings: ClaudeSpotSettings,
 ) -> str | None:
+    if Path("data/go_off.flag").exists():
+        return None
     if trade_memory.get("status") == "unavailable":
         return (
             "could not read Claude Spot trade memory; holding until audit history "
@@ -2137,6 +2159,8 @@ def _trade_memory_live_block_reason(
 
 
 def _trade_discipline_hold_reason(settings: ClaudeSpotSettings) -> str | None:
+    if Path("data/go_off.flag").exists():
+        return None
     rows, read_error = _load_audit_rows(Path(settings.audit_path))
     if read_error:
         return f"could not read Claude Spot audit history: {read_error}; no order submitted"

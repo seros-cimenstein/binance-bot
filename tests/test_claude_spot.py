@@ -831,7 +831,7 @@ def test_headless_claude_prompt_contains_mission_and_schema(
     system_prompt = argv[argv.index("--system-prompt") + 1]
     user_prompt = argv[-1]
     assert CLAUDE_MONEY_MAKER_MISSION in system_prompt
-    assert "do not churn" in system_prompt
+    assert "AGGRESSIVE risk taker" in system_prompt
     assert "social_signal_evidence" in system_prompt
     assert "after all modeled fees" in user_prompt
     assert "speculative_min_edge_bps" in user_prompt
