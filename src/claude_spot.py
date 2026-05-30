@@ -2053,9 +2053,9 @@ def _preflight(settings: ClaudeSpotSettings, *, submit_order: bool) -> None:
     if settings.require_proven_edge and os.getenv("CLAUDE_SPOT_PROVEN_EDGE", "").strip().lower() != "yes":
         raise ClaudeSpotError(
             "Claude Spot live submission requires CLAUDE_SPOT_PROVEN_EDGE=yes. "
-            "Run scripts/claude_spot_backtest.py and only set this when the harness "
-            "shows positive risk-adjusted edge net of fees. Until then, live submission "
-            "is paper-only."
+            "Run `python -m src.claude_spot_backtest --start <iso> --end <iso>` "
+            "and only set this when the harness shows positive risk-adjusted edge "
+            "net of fees. Until then, live submission is paper-only."
         )
 
 

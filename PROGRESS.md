@@ -5,6 +5,35 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-05-30: Phase 43 calibration landed. Replaced the "hyper-aggressive"
+  mission and "holding is for cowards" framing with a cost-aware mission,
+  removed the `override_bps_limits` decision field and its bypass of the
+  market-evidence gate, tightened `allow_negative_friction_bps` default
+  300 → 40 bps, and switched `market_pick_mode` default to
+  `liquid_top_value`. Added a new `CLAUDE_SPOT_PROVEN_EDGE=yes` preflight
+  gate that keeps live submission paper-only until a positive backtest
+  result is in hand. Prompt version v2-aggressive → v3-calibrated for audit
+  trail clarity.
+- 2026-05-30: Added `src/claude_spot_backtest.py` — a deterministic CCXT
+  historical replay harness that models taker fees, half-spread, and
+  slippage, then routes capital only when expected edge clears the cost
+  bar. Outputs verdict (`edge_likely` / `edge_marginal` / `no_edge` /
+  `no_trades` / `no_data`), Sharpe, drawdown, fee drag, win rate, and
+  per-asset holding time. Smoke-tested against last 10 days of BTC/ETH 1h
+  klines: verdict `no_edge`, -5.78% total return, Sharpe -3.0. Confirms
+  the existing signal does **not** clear its cost bar; live gate
+  correctly stays closed.
+- 2026-05-30: Added `RulesEngineAdvisor` (deterministic edge-bar decider)
+  and `RulesFirstAdvisor` (rules propose, LLM can veto/approve only,
+  cannot pick a different route). Selectable via
+  `CLAUDE_SPOT_DECISION_MODE` ∈ `{rules_only, llm_only, rules_first}`,
+  default `rules_only`. Discretionary LLM behavior is no longer on the
+  default live path.
+- 2026-05-30: `binance-claude-spot.timer` stopped while the calibration
+  patches were verified. Full suite: 367 passed. The timer remains
+  stopped pending an explicit operator decision; even if restarted, the
+  `CLAUDE_SPOT_PROVEN_EDGE` gate keeps live submission blocked until a
+  positive backtest exists.
 - 2026-05-25: Roadmap phases 1 through 11 are implemented and locally verified.
 - 2026-05-25: Documentation tracking was cleaned up by completing the phase 11
   coverage parent item and moving active handoff work into this file.

@@ -249,23 +249,36 @@ submission. Audit rows default to `data/live-spot-allocations.jsonl`.
 
 ## Claude Autonomous Spot Brain
 
-Phase 32 adds a separate Claude-controlled Spot runtime. It does not modify the
-paper-only pool. It asks headless Claude Code for one schema-validated decision,
-then either holds or executes one dynamically routed Spot action of up to three
-serial order legs.
+The Claude Spot runtime decides one Spot action per cycle (hold or one
+dynamically routed rebalance of up to three serial legs). It does not modify
+the paper-only pool.
 
-Plan one Claude decision without submitting orders:
+### Decision regime (phase 43, calibrated)
+
+The default decider is `RulesEngineAdvisor`: a deterministic rule that picks
+the candidate route whose `market_evidence.expected_edge_after_friction_bps`
+is the largest among those that pass the market-evidence gate and stay under
+the friction cap, otherwise holds. No LLM call.
+
+Selectable via `CLAUDE_SPOT_DECISION_MODE`:
+
+| Value           | Behavior                                              |
+| --------------- | ----------------------------------------------------- |
+| `rules_only`    | Deterministic only (default).                         |
+| `llm_only`      | Legacy LLM-only decider. Kept for back-compat.        |
+| `rules_first`   | Rules engine proposes; LLM can only veto or approve.  |
+
+Plan one decision without submitting orders:
 
 ```bash
 cd /home/user/projects/binance-bot
 .venv/bin/python -m src.claude_spot --plan-only
 ```
 
-The user service files are staged as `binance-claude-spot.service` and
-`binance-claude-spot.timer`. The timer runs one oneshot cycle every 15 minutes.
-It should remain disabled until live mode is intentionally configured.
+### Live submit gates
 
-Live submit mode requires all of these environment gates:
+`binance-claude-spot.timer` should stay disabled until live is intentionally
+configured. Live submit requires every gate below:
 
 ```bash
 CLAUDE_SPOT_ENABLED=true
@@ -273,17 +286,49 @@ CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot
 USE_TESTNET=false
 DRY_RUN=false
 CONFIRM_LIVE_TRADING=yes
+CLAUDE_SPOT_PROVEN_EDGE=yes    # set ONLY after a positive backtest
 ```
 
-When enabled, Claude may use the whole available Spot wallet and may override
-Phase 13 warm-up, canary caps, daily notional/order limits, turnover limits,
-allocation-percentage caps, and drawdown gates. Binance market rules, available
-balances, fee handling, Spot permission/order-test preflight, configured
-dynamic scope, `data/claude-spot.stop`, JSONL audit, reconciliation, and
-halt-on-ambiguous-leg behavior remain enforced. Margin, futures, transfer,
-withdrawal, and prediction writes remain unavailable in this phase.
-The default context is capped to the top `20` dynamic candidates so one cycle
-stays inside Binance request-weight limits.
+`CLAUDE_SPOT_PROVEN_EDGE=yes` is the final gate. The runtime refuses live
+submission until an operator has run the historical backtest harness and
+seen positive risk-adjusted edge net of fees. To bypass the gate entirely,
+set `CLAUDE_SPOT_REQUIRE_PROVEN_EDGE=false`, but that is **not recommended**.
+
+### Cost-aware defaults
+
+The deployed code now defaults to cost-aware behavior:
+`CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS=40` (was 300) and
+`CLAUDE_SPOT_MARKET_PICK_MODE=liquid_top_value` (was small_market_aggressive).
+The `override_bps_limits` decision field has been removed; there is no
+LLM-controlled bypass of the friction or evidence gates.
+
+Binance market rules, available balances, fee handling, Spot
+permission/order-test preflight, configured dynamic scope, `data/claude-spot.stop`,
+JSONL audit, reconciliation, and halt-on-ambiguous-leg behavior remain
+enforced. Margin, futures, transfer, withdrawal, and prediction writes remain
+unavailable. The default context is capped to the top `20` dynamic
+candidates so one cycle stays inside Binance request-weight limits.
+
+### Backtesting before live
+
+Run the historical replay harness to measure edge after modeled fees, spread,
+and slippage:
+
+```bash
+cd /home/user/projects/binance-bot
+.venv/bin/python -m src.claude_spot_backtest \
+  --symbols BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT \
+  --interval 1h \
+  --start 2026-01-01 --end 2026-05-01 \
+  --output data/claude-spot-backtest.json
+```
+
+The JSON output includes a `verdict`:
+
+- `edge_likely` — Sharpe > 1 and total return > 0. Plausibly safe to promote.
+- `edge_marginal` — positive return, modest Sharpe. Not enough.
+- `no_edge` — strategy did not clear its cost bar. Do **not** set `PROVEN_EDGE=yes`.
+- `no_trades` / `no_data` — insufficient window or signals; rerun with more data.
 
 ## Margin Dry Run
 
