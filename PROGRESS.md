@@ -34,6 +34,21 @@ the durable roadmap and use this file for the current working state.
   stopped pending an explicit operator decision; even if restarted, the
   `CLAUDE_SPOT_PROVEN_EDGE` gate keeps live submission blocked until a
   positive backtest exists.
+- 2026-05-30: Phase 44 — funding-rate harvest research and runtime
+  scaffolding. Added `src/funding_arb_backtest.py` (delta-neutral
+  replay with realistic fees/spread/slippage and universe selection) and
+  `src/funding_arb.py` (live runtime: settings, persistent positions,
+  deterministic open/close/hold advisor, plan-only and paper modes).
+  Backtest result: top 60 USDT perps (2025-12-01 to 2026-05-30, 1h):
+  +5.84% over 6 months at 5 bps/leg slippage, Sharpe 5.4, 59% win rate,
+  max drawdown 0.39%, verdict `edge_likely`. Majors-only verdict:
+  `no_edge` (-9.1%). Edge lives in alt-perp funding. Layer C (live
+  execution: dual-leg orders, collateral transfer, rollback,
+  reconciliation) deliberately not yet implemented; runtime currently
+  raises on `--submit-live` after the new `FUNDING_ARB_PROVEN_EDGE`
+  preflight gate. Smoke-tested `--paper` cycle live: 5 positions opened
+  at 0.5 bps entry threshold, funding accrual correct on second cycle.
+  Full suite: 398 passed.
 - 2026-05-25: Roadmap phases 1 through 11 are implemented and locally verified.
 - 2026-05-25: Documentation tracking was cleaned up by completing the phase 11
   coverage parent item and moving active handoff work into this file.

@@ -330,6 +330,85 @@ The JSON output includes a `verdict`:
 - `no_edge` — strategy did not clear its cost bar. Do **not** set `PROVEN_EDGE=yes`.
 - `no_trades` / `no_data` — insufficient window or signals; rerun with more data.
 
+## Delta-Neutral Funding-Rate Harvest
+
+`src/funding_arb_backtest.py` is the research harness; `src/funding_arb.py`
+is the live counterpart. Strategy: long spot + short USD-M perp 1:1, harvest
+the funding rate every 8h, close when funding falls below the exit threshold,
+basis blows out, or max-hold elapses.
+
+### Backtest first
+
+```bash
+cd /home/user/projects/binance-bot
+.venv/bin/python -m src.funding_arb_backtest \
+  --universe perp_usdt_top \
+  --universe-size 60 \
+  --min-quote-volume-usdt 50000000 \
+  --start 2025-12-01 --end 2026-05-30 \
+  --funding-cache /tmp/funding-cache \
+  --entry-funding-bps 3 --exit-funding-bps -1 \
+  --slippage-per-leg-bps 5 \
+  --output data/funding-backtest.json
+```
+
+Recent 6-month verdict on top-60 perps at 5 bps/leg slippage:
+`edge_likely`, +5.84% return, Sharpe 5.4, 59% win rate, max drawdown 0.39%.
+Majors-only over the same window: `no_edge` (-9.1%) — alt funding is where
+the edge lives.
+
+### Runtime modes
+
+`src/funding_arb.py` has three modes selectable via mutually-exclusive flags:
+
+| Flag             | Behavior                                                                |
+| ---------------- | ----------------------------------------------------------------------- |
+| `--plan-only`    | Compute decisions, audit them. Do not mutate state. Default.            |
+| `--paper`        | Materialize decisions in `data/funding-arb-state.json`, accrue funding, write closed trades to `data/funding-arb-ledger.jsonl`. No real orders. |
+| `--submit-live`  | Reserved for layer C live execution. Currently raises after preflight.  |
+
+```bash
+cd /home/user/projects/binance-bot
+.venv/bin/python -m src.funding_arb --plan-only
+.venv/bin/python -m src.funding_arb --paper
+```
+
+The paper layer accrues funding **once per cycle** at the current rate.
+Deploy on an 8h timer aligned with Binance funding windows (00, 08, 16 UTC)
+for a fidelity match to the backtest model.
+
+### Live-submit gates (layer C, not yet implemented)
+
+When the live executor lands, it will require every gate below:
+
+```bash
+FUNDING_ARB_ENABLED=true
+CONFIRM_LIVE_FUNDING_ARB=yes
+USE_TESTNET=false
+DRY_RUN=false
+FUNDING_ARB_PROVEN_EDGE=yes   # the dedicated gate
+```
+
+`FUNDING_ARB_PROVEN_EDGE=yes` should only be set after the backtest harness
+reports `edge_likely` *under conservative cost assumptions* and the operator
+has reviewed at least 1-2 weeks of paper-mode ledger data on the same
+universe.
+
+### Unmodeled risks (read before going live)
+
+1. **Spot/perp basis tracking error.** The backtest assumes perfect delta
+   neutrality. In practice the spot leg's price may diverge from the perp
+   mark by 10-50 bps even on liquid pairs.
+2. **Liquidation risk on the short perp** if basis spikes against you on
+   isolated margin. Use cross-margin or set `basis_circuit_breaker_bps`
+   tight enough that the circuit fires before liquidation does.
+3. **Survivorship bias.** The `--universe perp_usdt_top` selector ranks
+   by *current* 24h volume; coins delisted during the backtest window are
+   excluded, biasing the historical result upward.
+4. **Funding rate caps.** Binance caps positive funding at the venue's
+   maximum; truly extreme funding (e.g. 75 bps/event) is rare and the
+   historical record may be capped lower than the on-chain reality.
+
 ## Margin Dry Run
 
 The margin module is Phase 19 dry-run modeling only. It may read Binance margin
