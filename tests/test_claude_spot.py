@@ -44,6 +44,9 @@ def _settings(tmp_path: Path, **overrides: Any) -> ClaudeSpotSettings:
         "ticker_stale_seconds": 0.0,
         "market_evidence_enabled": False,
         "require_market_evidence_for_live": False,
+        "require_proven_edge": False,
+        "market_pick_mode": "small_market_aggressive",
+        "allow_negative_friction_bps": 300.0,
     }
     values.update(overrides)
     return ClaudeSpotSettings(**values)
@@ -831,12 +834,13 @@ def test_headless_claude_prompt_contains_mission_and_schema(
     system_prompt = argv[argv.index("--system-prompt") + 1]
     user_prompt = argv[-1]
     assert CLAUDE_MONEY_MAKER_MISSION in system_prompt
-    assert "AGGRESSIVE risk taker" in system_prompt
+    assert "disciplined" in system_prompt.lower()
+    assert "Hold is the default action" in system_prompt
+    assert "There is no bypass flag" in system_prompt
     assert "social_signal_evidence" in system_prompt
-    assert "after all modeled fees" in user_prompt
     assert "speculative_min_edge_bps" in user_prompt
-    assert "concrete speculative thesis" in user_prompt
-    assert "short_returns_bps 5m/15m" in user_prompt
+    assert "speculative thesis" in user_prompt
+    assert "Default to hold" in user_prompt
     assert calls[0]["kwargs"]["timeout"] == 3
 
 
@@ -865,7 +869,7 @@ def test_headless_claude_timeout_is_concise(
         advisor.decide(context)
 
 
-def test_from_env_defaults_to_wider_small_market_friction_and_evidence_caps(
+def test_from_env_defaults_are_calibrated_for_costs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -880,10 +884,12 @@ def test_from_env_defaults_to_wider_small_market_friction_and_evidence_caps(
     monkeypatch.delenv("CLAUDE_SPOT_SPECULATIVE_MODE_ENABLED", raising=False)
     monkeypatch.delenv("CLAUDE_SPOT_SPECULATIVE_MIN_EDGE_BPS", raising=False)
     monkeypatch.delenv("CLAUDE_SPOT_SPECULATIVE_REQUIRE_THESIS", raising=False)
+    monkeypatch.delenv("CLAUDE_SPOT_MARKET_PICK_MODE", raising=False)
+    monkeypatch.delenv("CLAUDE_SPOT_REQUIRE_PROVEN_EDGE", raising=False)
 
     settings = ClaudeSpotSettings.from_env()
 
-    assert settings.allow_negative_friction_bps == pytest.approx(300.0)
+    assert settings.allow_negative_friction_bps == pytest.approx(40.0)
     assert settings.market_evidence_min_edge_bps == pytest.approx(50.0)
     assert settings.leg_rounding_reserve_bps == pytest.approx(5.0)
     assert settings.min_leg_quote_reserve_bps == pytest.approx(25.0)
@@ -891,6 +897,8 @@ def test_from_env_defaults_to_wider_small_market_friction_and_evidence_caps(
     assert settings.speculative_mode_enabled is False
     assert settings.speculative_min_edge_bps == pytest.approx(-1000.0)
     assert settings.speculative_require_thesis is True
+    assert settings.market_pick_mode == "liquid_top_value"
+    assert settings.require_proven_edge is True
 
 
 def test_from_env_loads_speculative_mode(

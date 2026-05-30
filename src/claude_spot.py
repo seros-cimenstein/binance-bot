@@ -44,9 +44,13 @@ from src.telegram_alerts import TelegramAlerter
 
 
 CLAUDE_MONEY_MAKER_MISSION = (
-    "You are a hyper-aggressive, elite quant trader. You despise idle capital and believe edge is found in velocity and bold conviction. You take calculated, asymmetric risks to compound the portfolio rapidly. You see opportunities where others see noise."
+    "You are a disciplined, cost-aware quantitative trader. Idle capital is "
+    "strictly preferable to negative-expected-value trades. You compound by "
+    "refusing trades whose expected edge after all modeled fees, spread, and "
+    "slippage is not materially positive. Hold is the default action; "
+    "rebalances must clear an explicit edge bar."
 )
-CLAUDE_SPOT_PROMPT_VERSION = "claude-spot-v2-aggressive"
+CLAUDE_SPOT_PROMPT_VERSION = "claude-spot-v3-calibrated"
 CLAUDE_SPOT_MARKET_PICK_LIQUID = "liquid_top_value"
 CLAUDE_SPOT_MARKET_PICK_SMALL = "small_market_aggressive"
 CLAUDE_SPOT_MARKET_PICK_MODES = {
@@ -278,7 +282,6 @@ CLAUDE_SPOT_DECISION_SCHEMA: dict[str, Any] = {
         "destination_asset": {"type": "string"},
         "spend_mode": {"type": "string", "enum": ["all_available"]},
         "spend_amount": {"type": "number", "minimum": 0},
-        "override_bps_limits": {"type": "boolean"},
         "reason": {"type": "string"},
     },
 }
@@ -287,24 +290,28 @@ CLAUDE_SPOT_SYSTEM_PROMPT = f"""You are the autonomous Spot trading brain.
 Mission: "{CLAUDE_MONEY_MAKER_MISSION}"
 
 You choose one Spot action from the supplied executable route candidates.
-You may use the whole available Spot wallet represented in the context.
-You may override conservative strategy holds and allocation caps.
-When market_pick_mode is small_market_aggressive, you are explicitly allowed
-to fish in smaller Spot markets and accept upfront fee/slippage friction for a
-money-making thesis. If you rebalance in that mode, explain the upside thesis
-and the liquidity/spread risk in the reason.
-Use the supplied dynamic fee estimates, route friction, market_evidence,
-break-even math, trade_memory, and any supplied social_signal_evidence.
+Hold is always available and is the default when no candidate clears its
+edge bar. Trading just to deploy capital is forbidden; round-trip fees and
+spread compound against you faster than discretionary tape-reads recover.
 
-You are expected to be an AGGRESSIVE risk taker. Holding is for cowards unless the market is facing an obvious, confirmed total collapse. If you see short-term momentum (5m/15m) popping on a candidate, you should act. Do not over-index on negative friction or spread if the momentum suggests a breakout is occurring. Overcome your fear of exchange fees if the upside is asymmetric.
+Use the supplied dynamic fee estimates, route_scope.upfront_friction_allowance_bps,
+candidate immediate_friction_bps, market_evidence.expected_edge_after_friction_bps,
+market_evidence.minimum_expected_edge_bps, trade_memory, and any supplied
+social_signal_evidence. Rebalance only when:
+  1. The route's expected edge after all modeled costs is materially positive.
+  2. The market_evidence packet is ready and its normal gate passes.
+  3. Your reason cites the concrete evidence (which signal, what magnitude, over
+     what horizon) that justifies paying the immediate friction.
 
-If your thesis requires bypassing the strict negative friction or minimum edge bps limitations to make an aggressive rotation, you MUST set override_bps_limits to true, and justify this bold action in your reason.
+If you are unsure, hold. There is no penalty for holding; there is a real,
+measurable penalty for trading without edge.
 
 Non-overridable execution invariants:
 - Use only supplied route_id values.
 - Return one JSON object matching the schema.
 - Do not submit orders, claim orders were submitted, or call tools.
 - Do not request Margin, Futures, transfers, withdrawals, or prediction trades.
+- There is no bypass flag. You cannot override the friction or edge gates.
 """
 
 
@@ -349,13 +356,14 @@ class ClaudeSpotSettings:
     max_route_expansions: int = 10_000
     max_candidate_routes: int = 1
     candidate_limit: int = 5
-    market_pick_mode: str = CLAUDE_SPOT_MARKET_PICK_SMALL
+    market_pick_mode: str = CLAUDE_SPOT_MARKET_PICK_LIQUID
     min_quote_volume_usdt: float = 100_000.0
     max_spread_bps: float = 50.0
     small_min_quote_volume_usdt: float = 5_000.0
     small_max_spread_bps: float = 250.0
     small_candidate_limit: int = 10
-    allow_negative_friction_bps: float = 300.0
+    allow_negative_friction_bps: float = 40.0
+    require_proven_edge: bool = True
     slippage_buffer_bps: float = 25.0
     leg_rounding_reserve_bps: float = 5.0
     min_leg_quote_reserve_bps: float = 25.0
@@ -539,7 +547,7 @@ class ClaudeSpotSettings:
             candidate_limit=_int("CLAUDE_SPOT_CANDIDATE_LIMIT", 5),
             market_pick_mode=os.getenv(
                 "CLAUDE_SPOT_MARKET_PICK_MODE",
-                CLAUDE_SPOT_MARKET_PICK_SMALL,
+                CLAUDE_SPOT_MARKET_PICK_LIQUID,
             ),
             min_quote_volume_usdt=_float("CLAUDE_SPOT_MIN_QUOTE_VOLUME_USDT", 100_000.0),
             max_spread_bps=_float("CLAUDE_SPOT_MAX_SPREAD_BPS", 50.0),
@@ -554,7 +562,11 @@ class ClaudeSpotSettings:
             small_candidate_limit=_int("CLAUDE_SPOT_SMALL_CANDIDATE_LIMIT", 10),
             allow_negative_friction_bps=_float(
                 "CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS",
-                300.0,
+                40.0,
+            ),
+            require_proven_edge=_bool(
+                "CLAUDE_SPOT_REQUIRE_PROVEN_EDGE",
+                True,
             ),
             slippage_buffer_bps=_float("CLAUDE_SPOT_SLIPPAGE_BUFFER_BPS", 25.0),
             leg_rounding_reserve_bps=_float(
@@ -704,7 +716,6 @@ class ClaudeSpotDecision:
     destination_asset: str = ""
     spend_mode: str = ""
     spend_amount: float | None = None
-    override_bps_limits: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -731,7 +742,6 @@ class ClaudeSpotDecision:
         if spend_mode != "all_available":
             raise ClaudeSpotError("Claude Spot v1 requires spend_mode=all_available")
         spend_amount = _optional_positive_float(payload.get("spend_amount"))
-        override_bps_limits = bool(payload.get("override_bps_limits", False))
         return cls(
             action="rebalance",
             route_id=route_id,
@@ -740,7 +750,6 @@ class ClaudeSpotDecision:
             spend_mode=spend_mode,
             spend_amount=spend_amount,
             reason=reason,
-            override_bps_limits=override_bps_limits,
         )
 
 
@@ -1909,6 +1918,13 @@ def _preflight(settings: ClaudeSpotSettings, *, submit_order: bool) -> None:
         raise ClaudeSpotError("Claude Spot live submission requires DRY_RUN=false")
     if settings.confirm_live_trading != "yes":
         raise ClaudeSpotError("Claude Spot live submission requires CONFIRM_LIVE_TRADING=yes")
+    if settings.require_proven_edge and os.getenv("CLAUDE_SPOT_PROVEN_EDGE", "").strip().lower() != "yes":
+        raise ClaudeSpotError(
+            "Claude Spot live submission requires CLAUDE_SPOT_PROVEN_EDGE=yes. "
+            "Run scripts/claude_spot_backtest.py and only set this when the harness "
+            "shows positive risk-adjusted edge net of fees. Until then, live submission "
+            "is paper-only."
+        )
 
 
 async def _ensure_live_permission(
@@ -2101,8 +2117,6 @@ def _market_evidence_hold_reason(
     memory_reason = _trade_memory_live_block_reason(context.trade_memory, settings)
     if memory_reason is not None:
         return memory_reason
-    if decision.override_bps_limits:
-        return None
     evidence = candidate.market_evidence
     if not evidence:
         return "selected route has no market evidence packet; no order submitted"
@@ -3278,23 +3292,21 @@ Return only JSON matching the schema. For rebalance include route_id,
 source_asset, destination_asset, spend_mode=all_available, and spend_amount.
 Use one supplied route_id for rebalance.
 
-If market_pick_mode is small_market_aggressive, you may select a route with
-positive immediate_friction_bps when the small-market upside thesis justifies
-paying fees/slippage now. Do not trade merely to trade; explain why the selected
-small market can plausibly increase total wallet value after all modeled fees,
-spread, and slippage. Do not churn the wallet under a pile of fees; if holding
-is the best after-cost action, hold.
-Use candidate market_evidence, social_signal_evidence, and trade_memory directly. A live route will be
-blocked after your decision if its expected edge after friction does not clear
-the configured evidence gate. If route_scope.speculative_mode_enabled is true,
-you may select a route whose normal market_evidence.gate_pass is false only when
-expected_edge_after_friction_bps is at or above route_scope.speculative_min_edge_bps
-and your reason states a concrete speculative thesis, such as reversal, breakout,
-volume anomaly, oversold mean reversion, or current-position exit risk.
-Use market_evidence.short_returns_bps 5m/15m as the current tape. Do not call an
-asset the strongest setup purely from 24h return or volume if its 5m/15m tape is
-dumping unless you clearly explain why holding through that short-term loss is
-still better after fees than rotating.
+Default to hold. Rebalance only when a specific candidate route's
+market_evidence.expected_edge_after_friction_bps is materially positive and
+clears its minimum_expected_edge_bps. Do not trade merely to trade. If holding
+is the best after-cost action, hold. Citing 5m/15m short-tape momentum alone
+is not sufficient justification to pay round-trip fees and spread.
+
+Use candidate market_evidence, social_signal_evidence, and trade_memory
+directly. A live route will be blocked after your decision if its expected
+edge after friction does not clear the configured evidence gate. If
+route_scope.speculative_mode_enabled is true, you may select a route whose
+normal market_evidence.gate_pass is false only when
+expected_edge_after_friction_bps is at or above
+route_scope.speculative_min_edge_bps and your reason states a concrete
+speculative thesis, such as reversal, breakout, volume anomaly, oversold
+mean reversion, or current-position exit risk. Otherwise, hold.
 
 Decision context:
 {payload}

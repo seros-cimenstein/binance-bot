@@ -129,8 +129,8 @@ def test_user_units_run_from_user_owned_deployment_without_privileged_user() -> 
     assert "BINANCE_BOT_DB_SETTING_KEY=POOL_DB_PATH" in pool_backup
     assert "BINANCE_BOT_BACKUP_RETENTION=35" in pool_backup
     assert "Unit=binance-pool-paper-backup.service" in pool_timer
-    assert "OnActiveSec=10min" in claude_timer
-    assert "OnUnitActiveSec=10min" in claude_timer
+    assert "OnActiveSec=4min" in claude_timer
+    assert "OnUnitActiveSec=4min" in claude_timer
 
 
 def test_user_deployment_preserves_existing_database_after_migration() -> None:
