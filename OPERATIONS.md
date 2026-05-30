@@ -365,7 +365,7 @@ the edge lives.
 | ---------------- | ----------------------------------------------------------------------- |
 | `--plan-only`    | Compute decisions, audit them. Do not mutate state. Default.            |
 | `--paper`        | Materialize decisions in `data/funding-arb-state.json`, accrue funding, write closed trades to `data/funding-arb-ledger.jsonl`. No real orders. |
-| `--submit-live`  | Reserved for layer C live execution. Currently raises after preflight.  |
+| `--submit-live`  | Execute dual-leg spot+perp orders via `FundingArbExecutor`. Reconciles vs on-exchange state first; halts on mismatch. Behind every preflight gate. |
 
 ```bash
 cd /home/user/projects/binance-bot
@@ -377,9 +377,28 @@ The paper layer accrues funding **once per cycle** at the current rate.
 Deploy on an 8h timer aligned with Binance funding windows (00, 08, 16 UTC)
 for a fidelity match to the backtest model.
 
-### Live-submit gates (layer C, not yet implemented)
+### Deploy as a systemd timer
 
-When the live executor lands, it will require every gate below:
+User-scoped service + timer units are staged at
+`deploy/user/binance-funding-arb.{service,timer}`. The timer fires at
+00:01, 08:01, 16:01 UTC — one minute after each Binance funding event so
+the just-applied rate is captured in the cycle's signal snapshot.
+
+The service is configured to invoke `--paper` by default. **Do not edit
+ExecStart to `--submit-live` until you have at least 1-2 weeks of paper
+ledger data showing the runtime fires correctly and the realized P&L
+roughly tracks the backtest's expectation.**
+
+```bash
+cp deploy/user/binance-funding-arb.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now binance-funding-arb.timer
+journalctl --user -u binance-funding-arb.service -f
+```
+
+### Live-submit gates
+
+`--submit-live` requires every gate below:
 
 ```bash
 FUNDING_ARB_ENABLED=true
@@ -393,6 +412,27 @@ FUNDING_ARB_PROVEN_EDGE=yes   # the dedicated gate
 reports `edge_likely` *under conservative cost assumptions* and the operator
 has reviewed at least 1-2 weeks of paper-mode ledger data on the same
 universe.
+
+### Live executor: dual-leg invariants
+
+`src/funding_arb_executor.py` enforces the following invariants:
+
+* **Open**: spot BUY runs first, then perp SHORT. If the perp leg fails
+  (network, rejection, zero fill), the executor immediately places a spot
+  SELL to flatten before raising. If the rollback SELL itself fails, the
+  exception text contains `manual reconciliation required` and the
+  position is **not** added to local state — operator must reconcile by
+  hand.
+* **Close**: perp BUY (with `reduceOnly=true`) runs first to release
+  margin, then spot SELL. If the spot leg fails after the perp leg
+  succeeds, the exception text reflects this and the operator must sell
+  the spot leg manually.
+* **Reconcile**: every live cycle compares on-exchange spot free balances
+  and futures position sizes to local state *before* processing decisions.
+  Any mismatch halts the cycle and raises — no orders are sent.
+* **Collateral**: USDT is transferred spot→futures before each open via
+  `sapi/v1/asset/transfer` (type `MAIN_UMFUTURE`) and back after each
+  close (type `UMFUTURE_MAIN`). Failed sweeps are non-fatal and logged.
 
 ### Unmodeled risks (read before going live)
 
