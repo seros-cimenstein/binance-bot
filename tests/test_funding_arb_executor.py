@@ -316,6 +316,7 @@ async def test_run_cycle_live_halts_on_reconciliation_mismatch(
     settings = FundingArbSettings(
         api_key="k", api_secret="s", use_testnet=False, dry_run=False,
         enabled=True, confirm_live_funding_arb="yes",
+        dynamic_balance=False,
         state_path=str(tmp_path / "state.json"),
         audit_path=str(tmp_path / "audit.jsonl"),
         ledger_path=str(tmp_path / "ledger.jsonl"),
@@ -369,6 +370,7 @@ async def test_run_cycle_live_opens_position_when_signal_passes(
         enabled=True, confirm_live_funding_arb="yes",
         entry_funding_bps=3.0, exit_funding_bps=-1.0,
         per_position_notional_pct=20.0, starting_balance_usdt=10_000.0,
+        dynamic_balance=False,  # pin to configured balance for predictable sizing
         state_path=str(tmp_path / "state.json"),
         audit_path=str(tmp_path / "audit.jsonl"),
         ledger_path=str(tmp_path / "ledger.jsonl"),
@@ -417,6 +419,7 @@ async def test_run_cycle_live_closes_existing_position_on_exit_signal(
         api_key="k", api_secret="s", use_testnet=False, dry_run=False,
         enabled=True, confirm_live_funding_arb="yes",
         entry_funding_bps=3.0, exit_funding_bps=-1.0,
+        dynamic_balance=False,
         state_path=str(tmp_path / "state.json"),
         audit_path=str(tmp_path / "audit.jsonl"),
         ledger_path=str(tmp_path / "ledger.jsonl"),
@@ -449,3 +452,182 @@ async def test_run_cycle_live_closes_existing_position_on_exit_signal(
     assert len(lines) == 1
     decoded = json.loads(lines[0])
     assert decoded["symbol"] == "BTC/USDT"
+
+
+# ---------------------------------------------------------------------------
+# Dynamic balance feature
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dynamic_balance_uses_live_wallet_for_sizing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import src.funding_arb as fa
+    from src.funding_arb import (
+        CandidateSignal,
+        FundingArbSettings,
+        load_state,
+        run_cycle,
+    )
+
+    async def _universe(_settings):
+        return ["BTC/USDT"]
+
+    async def _signals(_symbols):
+        return [CandidateSignal(symbol="BTC/USDT", funding_bps=5.0, mark_price=200, spot_price=200)]
+
+    monkeypatch.setattr(fa, "_resolve_universe", _universe)
+    monkeypatch.setattr(fa, "_fetch_current_signals", _signals)
+    monkeypatch.setenv("FUNDING_ARB_PROVEN_EDGE", "yes")
+
+    settings = FundingArbSettings(
+        api_key="k", api_secret="s", use_testnet=False, dry_run=False,
+        enabled=True, confirm_live_funding_arb="yes",
+        entry_funding_bps=3.0, exit_funding_bps=-1.0,
+        per_position_notional_pct=20.0,
+        starting_balance_usdt=10_000.0,  # configured but should be overridden
+        dynamic_balance=True,
+        state_path=str(tmp_path / "state.json"),
+        audit_path=str(tmp_path / "audit.jsonl"),
+        ledger_path=str(tmp_path / "ledger.jsonl"),
+        emergency_stop_path=str(tmp_path / "stop"),
+    )
+
+    spot = FakeSpot(last=200.0)
+    spot.balance = {"free": {"BTC": 0.0, "USDT": 600.0}}  # actual wallet
+    futures = FakeFutures(last=200.0)
+    futures.balance = {"free": {"USDT": 400.0}}  # actual wallet
+    executor = _exec(spot=spot, futures=futures)
+
+    result = await run_cycle(settings, mode="live", executor=executor)
+    # Dynamic balance = 1000 USDT. 20% per position = 200 USDT notional.
+    # At $200/BTC → 1 BTC.
+    state = load_state(settings.state_path)
+    assert len(state.positions) == 1
+    assert state.positions[0].spot_qty == pytest.approx(1.0)
+    assert result["balance_source"] == "live"
+    assert result["effective_balance_usdt"] == pytest.approx(1_000.0)
+    assert result["configured_balance_usdt"] == pytest.approx(10_000.0)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_balance_falls_back_when_fetch_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import src.funding_arb as fa
+    from src.funding_arb import (
+        CandidateSignal,
+        FundingArbSettings,
+        run_cycle,
+    )
+
+    async def _universe(_settings):
+        return ["BTC/USDT"]
+
+    async def _signals(_symbols):
+        return [CandidateSignal(symbol="BTC/USDT", funding_bps=5.0, mark_price=200, spot_price=200)]
+
+    monkeypatch.setattr(fa, "_resolve_universe", _universe)
+    monkeypatch.setattr(fa, "_fetch_current_signals", _signals)
+    monkeypatch.setenv("FUNDING_ARB_PROVEN_EDGE", "yes")
+
+    settings = FundingArbSettings(
+        api_key="k", api_secret="s", use_testnet=False, dry_run=False,
+        enabled=True, confirm_live_funding_arb="yes",
+        entry_funding_bps=3.0, exit_funding_bps=-1.0,
+        per_position_notional_pct=20.0, starting_balance_usdt=5_000.0,
+        dynamic_balance=True,
+        state_path=str(tmp_path / "state.json"),
+        audit_path=str(tmp_path / "audit.jsonl"),
+        ledger_path=str(tmp_path / "ledger.jsonl"),
+        emergency_stop_path=str(tmp_path / "stop"),
+    )
+
+    class FlakeySpot(FakeSpot):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.fetch_balance_calls = 0
+
+        async def fetch_balance(self):
+            self.fetch_balance_calls += 1
+            if self.fetch_balance_calls == 1:
+                raise RuntimeError("network blip")  # fail dynamic-balance fetch only
+            return self.balance
+
+    spot = FlakeySpot(last=200.0)
+    futures = FakeFutures(last=200.0)
+    futures.balance = {"free": {"USDT": 100.0}}
+    executor = _exec(spot=spot, futures=futures)
+
+    result = await run_cycle(settings, mode="live", executor=executor)
+    assert result["balance_source"] == "fallback_configured"
+    assert result["effective_balance_usdt"] == pytest.approx(5_000.0)
+
+
+@pytest.mark.asyncio
+async def test_low_balance_blocks_new_opens_but_allows_closes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import src.funding_arb as fa
+    from src.funding_arb import (
+        CandidateSignal,
+        FundingArbPosition,
+        FundingArbSettings,
+        FundingArbState,
+        load_state,
+        run_cycle,
+        save_state,
+    )
+
+    async def _universe(_settings):
+        return ["SOL/USDT", "BTC/USDT"]
+
+    async def _signals(_symbols):
+        return [
+            CandidateSignal(symbol="SOL/USDT", funding_bps=8.0, mark_price=100, spot_price=100),
+            CandidateSignal(symbol="BTC/USDT", funding_bps=-3.0, mark_price=200, spot_price=200),
+        ]
+
+    monkeypatch.setattr(fa, "_resolve_universe", _universe)
+    monkeypatch.setattr(fa, "_fetch_current_signals", _signals)
+    monkeypatch.setenv("FUNDING_ARB_PROVEN_EDGE", "yes")
+
+    settings = FundingArbSettings(
+        api_key="k", api_secret="s", use_testnet=False, dry_run=False,
+        enabled=True, confirm_live_funding_arb="yes",
+        entry_funding_bps=3.0, exit_funding_bps=-1.0,
+        starting_balance_usdt=9.0, dynamic_balance=False,
+        min_balance_usdt=50.0,
+        state_path=str(tmp_path / "state.json"),
+        audit_path=str(tmp_path / "audit.jsonl"),
+        ledger_path=str(tmp_path / "ledger.jsonl"),
+        emergency_stop_path=str(tmp_path / "stop"),
+    )
+    # Pre-seed one held position so we can verify it gets closed even at low balance.
+    save_state(
+        FundingArbState(
+            positions=(FundingArbPosition(
+                symbol="BTC/USDT", open_time_ms=0, entry_funding_bps=5.0,
+                notional_usdt=2_000.0, spot_qty=10.0, perp_qty=-10.0,
+            ),)
+        ),
+        settings.state_path,
+    )
+
+    spot = FakeSpot(last=200.0)
+    spot.balance = {"free": {"BTC": 10.5, "USDT": 9.0}}
+    futures = FakeFutures(last=200.0)
+    futures.positions = [{"symbol": "BTC/USDT", "contracts": -10.0}]
+    executor = _exec(spot=spot, futures=futures)
+
+    result = await run_cycle(settings, mode="live", executor=executor)
+    actions = [d["action"] for d in result["decisions"]]
+    assert "close" in actions
+    assert "open" not in actions
+    assert result["insufficient_balance"] is True
+    state = load_state(settings.state_path)
+    assert state.positions == ()  # the held BTC was closed

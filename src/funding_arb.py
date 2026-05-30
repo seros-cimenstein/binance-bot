@@ -36,7 +36,7 @@ import argparse
 import asyncio
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -79,6 +79,13 @@ class FundingArbSettings:
     ledger_path: str = "data/funding-arb-ledger.jsonl"
     emergency_stop_path: str = "data/funding-arb.stop"
 
+    # Resolve starting_balance_usdt from the live exchange (spot USDT free +
+    # futures USDT free) each cycle, so the bot auto-scales with deposits,
+    # withdrawals, and accumulated P&L. When unset or on fetch failure, the
+    # configured ``starting_balance_usdt`` is used.
+    dynamic_balance: bool = True
+    min_balance_usdt: float = 50.0  # below this the runtime refuses to trade
+
     def validate(self) -> None:
         if self.starting_balance_usdt <= 0:
             raise FundingArbError("starting_balance_usdt must be positive")
@@ -90,6 +97,8 @@ class FundingArbSettings:
             raise FundingArbError("max_hold_funding_events must be positive")
         if self.basis_circuit_breaker_bps <= 0:
             raise FundingArbError("basis_circuit_breaker_bps must be positive")
+        if self.min_balance_usdt < 0:
+            raise FundingArbError("min_balance_usdt must be non-negative")
         if self.entry_funding_bps <= self.exit_funding_bps:
             raise FundingArbError(
                 "entry_funding_bps must be strictly above exit_funding_bps"
@@ -156,6 +165,8 @@ class FundingArbSettings:
             emergency_stop_path=os.getenv(
                 "FUNDING_ARB_EMERGENCY_STOP_PATH", "data/funding-arb.stop"
             ),
+            dynamic_balance=_bool("FUNDING_ARB_DYNAMIC_BALANCE", True),
+            min_balance_usdt=_float("FUNDING_ARB_MIN_BALANCE_USDT", 50.0),
         )
         settings.validate()
         return settings
@@ -522,6 +533,96 @@ def _utc_timestamp() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+async def fetch_live_usdt_balance(
+    api_key: str,
+    api_secret: str,
+    *,
+    spot_client: Any | None = None,
+    futures_client: Any | None = None,
+) -> float:
+    """Return total free USDT across spot + USD-M futures wallets.
+
+    Used by dynamic balance sizing. ``spot_client`` and ``futures_client``
+    may be pre-built clients (e.g. from an existing executor) to avoid
+    constructing throwaway ccxt sessions; otherwise short-lived clients
+    are built and closed in this call.
+    """
+
+    def _free_usdt(payload: Any) -> float:
+        if not isinstance(payload, Mapping):
+            return 0.0
+        free = payload.get("free")
+        if isinstance(free, Mapping):
+            try:
+                return float(free.get("USDT") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
+
+    owns_clients = spot_client is None and futures_client is None
+    if owns_clients:
+        import ccxt.async_support as ccxt_async
+
+        spot_client = ccxt_async.binance(
+            {
+                "apiKey": api_key,
+                "secret": api_secret,
+                "enableRateLimit": True,
+                "options": {"adjustForTimeDifference": True, "fetchCurrencies": False},
+            }
+        )
+        futures_client = ccxt_async.binanceusdm(
+            {
+                "apiKey": api_key,
+                "secret": api_secret,
+                "enableRateLimit": True,
+                "options": {"adjustForTimeDifference": True, "fetchCurrencies": False},
+            }
+        )
+    try:
+        spot_payload = await spot_client.fetch_balance()
+        futures_payload = await futures_client.fetch_balance()
+        return _free_usdt(spot_payload) + _free_usdt(futures_payload)
+    finally:
+        if owns_clients:
+            try:
+                await spot_client.close()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
+            try:
+                await futures_client.close()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
+
+
+async def _resolve_cycle_balance(
+    settings: FundingArbSettings,
+    *,
+    executor: Any | None,
+) -> tuple[float, str]:
+    """Returns (effective_balance_usdt, source_label).
+
+    The source label is recorded in the audit payload so operators can tell
+    at a glance whether the cycle sized off live wallet data or fell back
+    to the configured value.
+    """
+    if not settings.dynamic_balance:
+        return settings.starting_balance_usdt, "configured"
+    try:
+        if executor is not None:
+            balance = await fetch_live_usdt_balance(
+                settings.api_key,
+                settings.api_secret,
+                spot_client=executor.spot,
+                futures_client=executor.futures,
+            )
+        else:
+            balance = await fetch_live_usdt_balance(settings.api_key, settings.api_secret)
+        return balance, "live"
+    except Exception:  # noqa: BLE001 — fall back, never let balance fetch break the cycle
+        return settings.starting_balance_usdt, "fallback_configured"
+
+
 async def build_live_executor(settings: FundingArbSettings) -> Any:
     """Construct a FundingArbExecutor wired to real Binance Spot + USD-M Futures.
 
@@ -637,10 +738,28 @@ async def run_cycle(
     _preflight(settings, submit_order=(mode == "live"))
 
     state = load_state(settings.state_path)
+    effective_balance, balance_source = await _resolve_cycle_balance(
+        settings, executor=executor
+    )
+    effective_settings = (
+        replace(settings, starting_balance_usdt=effective_balance)
+        if effective_balance != settings.starting_balance_usdt
+        else settings
+    )
+    insufficient_balance = effective_balance < settings.min_balance_usdt
+
     symbols = await _resolve_universe(settings)
     signals = await _fetch_current_signals(symbols)
-    advisor = FundingArbAdvisor(settings)
-    decisions = advisor.decide(state=state, signals=signals)
+    advisor = FundingArbAdvisor(effective_settings)
+    if insufficient_balance:
+        # Skip opening new positions but still allow closes for safety.
+        decisions = [
+            d
+            for d in advisor.decide(state=state, signals=signals)
+            if d.action != "open"
+        ]
+    else:
+        decisions = advisor.decide(state=state, signals=signals)
 
     ledger: list[PaperLedgerEntry] = []
     live_results: list[dict[str, Any]] = []
@@ -649,7 +768,7 @@ async def run_cycle(
     if mode == "paper":
         cycle_ts_ms = _utc_now_ms()
         state, ledger = apply_paper_decisions(
-            settings=settings,
+            settings=effective_settings,
             state=state,
             signals=signals,
             decisions=decisions,
@@ -667,7 +786,7 @@ async def run_cycle(
             halt_reason = f"reconciliation mismatch: {[m.detail for m in report.mismatches]}"
         else:
             state, ledger, live_results = await _execute_live_decisions(
-                settings=settings,
+                settings=effective_settings,
                 state=state,
                 signals=signals,
                 decisions=decisions,
@@ -686,6 +805,11 @@ async def run_cycle(
         "ledger_entries_this_cycle": [asdict(e) for e in ledger],
         "live_results": live_results,
         "halt_reason": halt_reason,
+        "balance_source": balance_source,
+        "configured_balance_usdt": settings.starting_balance_usdt,
+        "effective_balance_usdt": effective_balance,
+        "min_balance_usdt": settings.min_balance_usdt,
+        "insufficient_balance": insufficient_balance,
         "top_signals": sorted(
             [
                 {"symbol": s.symbol, "funding_bps": s.funding_bps, "basis_bps": s.basis_bps()}
