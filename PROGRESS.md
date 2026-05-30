@@ -39,17 +39,32 @@ the durable roadmap and use this file for the current working state.
   replay), `src/funding_arb.py` (settings, state, deterministic
   open/close/hold advisor, plan-only / paper / live cycle), and
   `src/funding_arb_executor.py` (dual-leg spot+perp orders with
-  rollback, collateral transfer, on-exchange reconciliation). Backtest
-  on top 60 USDT perps (2025-12-01 to 2026-05-30, 1h): +5.84% over 6
-  months at 5 bps/leg slippage, Sharpe 5.4, 59% win rate, max drawdown
-  0.39%, verdict `edge_likely`. Majors-only verdict: `no_edge`
-  (-9.1%). Edge lives in alt-perp funding. Live submission blocked
-  behind four sequential gates: FUNDING_ARB_ENABLED,
+  rollback, collateral transfer, on-exchange reconciliation). Live
+  submission blocked behind four sequential gates: FUNDING_ARB_ENABLED,
   CONFIRM_LIVE_FUNDING_ARB, !DRY_RUN/!USE_TESTNET, and the dedicated
   FUNDING_ARB_PROVEN_EDGE. systemd timer staged at
   `deploy/user/binance-funding-arb.{service,timer}` configured for
   `--paper` mode by default, aligned to Binance funding windows
   (00:01, 08:01, 16:01 UTC). Full suite: 412 passed.
+- 2026-05-30: Multi-window backtest sweep on top 60 USDT perps at
+  realistic costs (5 bps/leg slippage, 10 bps spot taker, 5 bps futures
+  taker, 3 bps entry / -1 bps exit, 5 concurrent positions):
+
+      Window                      Total   Annualised  Sharpe  Win%   MaxDD
+      ------                      -----   ----------  ------  ----   -----
+      2024 H1   (Jan-Jun)         +5.59%      +11.5%   +6.04  67.2%   0.81%
+      2024 H2   (Jul-Dec)         +1.23%       +2.5%   +2.25  66.7%   0.37%
+      2025-12 to 2026-05          +6.18%      +12.7%   +6.60  69.4%   0.34%
+      Multi-year (3.5yr, 2023-01 to 2026-05): +14.29% total  (+4.0% ann.)
+                                              Sharpe +2.84, Win 50.8%,
+                                              MaxDD 1.96%, 397 trades.
+
+  All four windows return verdict `edge_likely`. The 3.5-year compounded
+  annualised return (~4%) is the most honest projection for live
+  deployment; the 6-month windows of +6–12% annualised reflect favourable
+  sub-regimes that do not persist. Max drawdown stayed under 2% across
+  every window. Strategy remained delta-neutral as designed. Reports
+  archived at `data/funding-arb-backtests/` (gitignored runtime path).
 - 2026-05-25: Roadmap phases 1 through 11 are implemented and locally verified.
 - 2026-05-25: Documentation tracking was cleaned up by completing the phase 11
   coverage parent item and moving active handoff work into this file.
