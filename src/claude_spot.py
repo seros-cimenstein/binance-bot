@@ -364,6 +364,7 @@ class ClaudeSpotSettings:
     small_candidate_limit: int = 10
     allow_negative_friction_bps: float = 40.0
     require_proven_edge: bool = True
+    decision_mode: str = "rules_only"
     slippage_buffer_bps: float = 25.0
     leg_rounding_reserve_bps: float = 5.0
     min_leg_quote_reserve_bps: float = 25.0
@@ -459,6 +460,10 @@ class ClaudeSpotSettings:
             raise ClaudeSpotError(
                 "CLAUDE_SPOT_MARKET_PICK_MODE must be liquid_top_value or "
                 "small_market_aggressive"
+            )
+        if self.decision_mode not in {"rules_only", "llm_only", "rules_first"}:
+            raise ClaudeSpotError(
+                "CLAUDE_SPOT_DECISION_MODE must be rules_only, llm_only, or rules_first"
             )
         if self.max_route_legs <= 0 or self.max_route_legs > 3:
             raise ClaudeSpotError("max_route_legs must be between 1 and 3")
@@ -568,6 +573,7 @@ class ClaudeSpotSettings:
                 "CLAUDE_SPOT_REQUIRE_PROVEN_EDGE",
                 True,
             ),
+            decision_mode=os.getenv("CLAUDE_SPOT_DECISION_MODE", "rules_only"),
             slippage_buffer_bps=_float("CLAUDE_SPOT_SLIPPAGE_BUFFER_BPS", 25.0),
             leg_rounding_reserve_bps=_float(
                 "CLAUDE_SPOT_LEG_ROUNDING_RESERVE_BPS",
@@ -963,6 +969,137 @@ class HeadlessClaudeSpotAdvisor:
         return argv
 
 
+class RulesEngineAdvisor:
+    """Deterministic Spot decider using market_evidence + friction caps.
+
+    Picks the candidate route whose ``expected_edge_after_friction_bps`` is
+    largest among those that pass: market evidence gate, friction allowance,
+    and minimum edge bar. Otherwise holds. No LLM call.
+    """
+
+    def __init__(self, settings: ClaudeSpotSettings) -> None:
+        self.settings = settings
+
+    def decide(self, context: ClaudeDecisionContext) -> ClaudeSpotDecision:
+        candidates = list(context.candidate_routes)
+        if not candidates:
+            return ClaudeSpotDecision(action="hold", reason="no executable candidate routes")
+
+        min_edge_bps = self.settings.market_evidence_min_edge_bps
+        max_friction_bps = self.settings.allow_negative_friction_bps
+
+        best: tuple[float, ClaudeRouteCandidate] | None = None
+        rejection_reasons: list[str] = []
+        for candidate in candidates:
+            friction = candidate.immediate_friction_bps
+            if friction is not None and friction > max_friction_bps:
+                rejection_reasons.append(
+                    f"{candidate.route_id}: friction {friction:.1f}bps exceeds cap {max_friction_bps:.1f}bps"
+                )
+                continue
+            evidence = candidate.market_evidence or {}
+            if not isinstance(evidence, Mapping):
+                rejection_reasons.append(f"{candidate.route_id}: missing market_evidence")
+                continue
+            if evidence.get("status") != "ready":
+                rejection_reasons.append(
+                    f"{candidate.route_id}: evidence not ready ({evidence.get('status')})"
+                )
+                continue
+            if evidence.get("gate_pass") is not True:
+                rejection_reasons.append(f"{candidate.route_id}: evidence gate did not pass")
+                continue
+            edge = _finite_float_or_none(evidence.get("expected_edge_after_friction_bps"))
+            if edge is None or edge < min_edge_bps:
+                rejection_reasons.append(
+                    f"{candidate.route_id}: edge {edge} below {min_edge_bps:.1f}bps"
+                )
+                continue
+            if best is None or edge > best[0]:
+                best = (edge, candidate)
+
+        if best is None:
+            reason_tail = "; ".join(rejection_reasons[:3]) if rejection_reasons else "no candidate cleared the edge bar"
+            return ClaudeSpotDecision(
+                action="hold",
+                reason=f"rules engine: {reason_tail}",
+            )
+
+        edge_bps, winner = best
+        return ClaudeSpotDecision(
+            action="rebalance",
+            route_id=winner.route_id,
+            source_asset=winner.route.source_asset,
+            destination_asset=winner.route.destination_asset,
+            spend_mode="all_available",
+            spend_amount=None,
+            reason=(
+                f"rules engine: {winner.route_id} expected edge "
+                f"{edge_bps:.1f}bps clears {min_edge_bps:.1f}bps bar; "
+                f"friction {winner.immediate_friction_bps}bps within cap"
+            ),
+        )
+
+
+class RulesFirstAdvisor:
+    """Rules engine proposes; LLM acts as a veto-only second opinion.
+
+    If the rules engine says hold, hold. If it proposes a rebalance and the
+    LLM independently picks the same route, approve. Otherwise hold with a
+    reason citing the disagreement. The LLM cannot pick a different route or
+    overrule a hold.
+    """
+
+    def __init__(self, rules: "ClaudeSpotAdvisor", llm: "ClaudeSpotAdvisor") -> None:
+        self.rules = rules
+        self.llm = llm
+
+    def decide(self, context: ClaudeDecisionContext) -> ClaudeSpotDecision:
+        proposal = self.rules.decide(context)
+        if proposal.action == "hold":
+            return proposal
+        try:
+            llm_view = self.llm.decide(context)
+        except ClaudeSpotError as exc:
+            return ClaudeSpotDecision(
+                action="hold",
+                reason=f"rules proposed {proposal.route_id} but LLM unavailable ({exc}); held",
+            )
+        if llm_view.action == "hold":
+            return ClaudeSpotDecision(
+                action="hold",
+                reason=(
+                    f"rules proposed {proposal.route_id}; LLM vetoed with hold: "
+                    f"{llm_view.reason}"
+                ),
+            )
+        if llm_view.route_id != proposal.route_id:
+            return ClaudeSpotDecision(
+                action="hold",
+                reason=(
+                    f"rules and LLM disagreed (rules={proposal.route_id}, "
+                    f"llm={llm_view.route_id}); held"
+                ),
+            )
+        return proposal
+
+
+def _build_advisor(settings: ClaudeSpotSettings) -> "ClaudeSpotAdvisor":
+    llm = HeadlessClaudeSpotAdvisor(
+        command=settings.claude_command,
+        model=settings.claude_model,
+        timeout_seconds=settings.claude_timeout_seconds,
+        max_budget_usd=settings.claude_max_budget_usd,
+    )
+    mode = settings.decision_mode
+    if mode == "llm_only":
+        return llm
+    rules = RulesEngineAdvisor(settings)
+    if mode == "rules_only":
+        return rules
+    return RulesFirstAdvisor(rules=rules, llm=llm)
+
+
 async def run_claude_spot_cycle(
     settings: ClaudeSpotSettings,
     *,
@@ -981,12 +1118,7 @@ async def run_claude_spot_cycle(
         testnet=settings.use_testnet,
         max_retries=0,
     )
-    advisor = advisor or HeadlessClaudeSpotAdvisor(
-        command=settings.claude_command,
-        model=settings.claude_model,
-        timeout_seconds=settings.claude_timeout_seconds,
-        max_budget_usd=settings.claude_max_budget_usd,
-    )
+    advisor = advisor or _build_advisor(settings)
     alerter = alerter or TelegramAlerter(
         settings.telegram_bot_token,
         settings.telegram_chat_id,

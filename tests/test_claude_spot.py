@@ -1829,3 +1829,171 @@ async def test_second_leg_commission_failure_preserves_submitted_leg(
     assert payload["submission_attempted"] is True
     assert len(payload["submitted_legs"]) == 1
     assert payload["submitted_legs"][0]["symbol"] == "BNB/USDT"
+
+
+# ---------------------------------------------------------------------------
+# Rules engine + LLM-veto wrapper
+# ---------------------------------------------------------------------------
+
+
+def _rules_settings(tmp_path: Path, **overrides: Any) -> ClaudeSpotSettings:
+    overrides.setdefault("market_evidence_min_edge_bps", 50.0)
+    overrides.setdefault("allow_negative_friction_bps", 100.0)
+    return _settings(tmp_path, **overrides)
+
+
+def test_rules_engine_holds_when_no_candidate_clears_gate(tmp_path: Path) -> None:
+    advisor = claude_spot.RulesEngineAdvisor(_rules_settings(tmp_path))
+    context = _decision_context_for_candidate(
+        _candidate_with_evidence(20.0, gate_pass=False)
+    )
+    decision = advisor.decide(context)
+    assert decision.action == "hold"
+    assert "rules engine" in decision.reason
+
+
+def test_rules_engine_rebalances_when_evidence_clears_bar(tmp_path: Path) -> None:
+    advisor = claude_spot.RulesEngineAdvisor(_rules_settings(tmp_path))
+    context = _decision_context_for_candidate(
+        _candidate_with_evidence(80.0, gate_pass=True)
+    )
+    decision = advisor.decide(context)
+    assert decision.action == "rebalance"
+    assert decision.route_id == "BNB->EDEN:test"
+    assert decision.source_asset == "BNB"
+    assert decision.destination_asset == "EDEN"
+    assert decision.spend_mode == "all_available"
+
+
+def test_rules_engine_rejects_excess_friction(tmp_path: Path) -> None:
+    settings = _rules_settings(tmp_path, allow_negative_friction_bps=10.0)
+    advisor = claude_spot.RulesEngineAdvisor(settings)
+    context = _decision_context_for_candidate(
+        _candidate_with_evidence(200.0, gate_pass=True)
+    )
+    decision = advisor.decide(context)
+    assert decision.action == "hold"
+    assert "friction" in decision.reason
+
+
+def test_rules_first_holds_when_rules_propose_hold(tmp_path: Path) -> None:
+    rules = claude_spot.RulesEngineAdvisor(_rules_settings(tmp_path))
+    llm_called: list[bool] = []
+
+    class NeverCalledLLM:
+        def decide(self, _: Any) -> ClaudeSpotDecision:
+            llm_called.append(True)
+            return ClaudeSpotDecision(action="hold", reason="x")
+
+    advisor = claude_spot.RulesFirstAdvisor(rules=rules, llm=NeverCalledLLM())
+    context = _decision_context_for_candidate(
+        _candidate_with_evidence(10.0, gate_pass=False)
+    )
+    decision = advisor.decide(context)
+    assert decision.action == "hold"
+    assert llm_called == []
+
+
+def test_rules_first_approves_when_llm_agrees(tmp_path: Path) -> None:
+    rules = claude_spot.RulesEngineAdvisor(_rules_settings(tmp_path))
+
+    class AgreeingLLM:
+        def decide(self, _: Any) -> ClaudeSpotDecision:
+            return ClaudeSpotDecision(
+                action="rebalance",
+                route_id="BNB->EDEN:test",
+                source_asset="BNB",
+                destination_asset="EDEN",
+                spend_mode="all_available",
+                spend_amount=0.02,
+                reason="llm agrees",
+            )
+
+    advisor = claude_spot.RulesFirstAdvisor(rules=rules, llm=AgreeingLLM())
+    context = _decision_context_for_candidate(
+        _candidate_with_evidence(80.0, gate_pass=True)
+    )
+    decision = advisor.decide(context)
+    assert decision.action == "rebalance"
+    assert decision.route_id == "BNB->EDEN:test"
+
+
+def test_rules_first_holds_when_llm_vetoes(tmp_path: Path) -> None:
+    rules = claude_spot.RulesEngineAdvisor(_rules_settings(tmp_path))
+
+    class VetoingLLM:
+        def decide(self, _: Any) -> ClaudeSpotDecision:
+            return ClaudeSpotDecision(action="hold", reason="vol regime change")
+
+    advisor = claude_spot.RulesFirstAdvisor(rules=rules, llm=VetoingLLM())
+    context = _decision_context_for_candidate(
+        _candidate_with_evidence(80.0, gate_pass=True)
+    )
+    decision = advisor.decide(context)
+    assert decision.action == "hold"
+    assert "vetoed" in decision.reason
+    assert "vol regime change" in decision.reason
+
+
+def test_rules_first_holds_when_llm_picks_different_route(tmp_path: Path) -> None:
+    rules = claude_spot.RulesEngineAdvisor(_rules_settings(tmp_path))
+
+    class DisagreeingLLM:
+        def decide(self, _: Any) -> ClaudeSpotDecision:
+            return ClaudeSpotDecision(
+                action="rebalance",
+                route_id="OTHER:route",
+                source_asset="BNB",
+                destination_asset="DIFF",
+                spend_mode="all_available",
+                spend_amount=0.02,
+                reason="other thesis",
+            )
+
+    advisor = claude_spot.RulesFirstAdvisor(rules=rules, llm=DisagreeingLLM())
+    context = _decision_context_for_candidate(
+        _candidate_with_evidence(80.0, gate_pass=True)
+    )
+    decision = advisor.decide(context)
+    assert decision.action == "hold"
+    assert "disagreed" in decision.reason
+
+
+def test_rules_first_holds_when_llm_errors(tmp_path: Path) -> None:
+    rules = claude_spot.RulesEngineAdvisor(_rules_settings(tmp_path))
+
+    class BrokenLLM:
+        def decide(self, _: Any) -> ClaudeSpotDecision:
+            raise ClaudeSpotError("subprocess crashed")
+
+    advisor = claude_spot.RulesFirstAdvisor(rules=rules, llm=BrokenLLM())
+    context = _decision_context_for_candidate(
+        _candidate_with_evidence(80.0, gate_pass=True)
+    )
+    decision = advisor.decide(context)
+    assert decision.action == "hold"
+    assert "LLM unavailable" in decision.reason
+
+
+def test_decision_mode_validation_rejects_unknown_mode(tmp_path: Path) -> None:
+    with pytest.raises(ClaudeSpotError, match="DECISION_MODE"):
+        _settings(tmp_path, decision_mode="freestyle")
+
+
+def test_build_advisor_selects_by_mode(tmp_path: Path) -> None:
+    rules_settings = _settings(tmp_path, decision_mode="rules_only")
+    llm_settings = _settings(tmp_path, decision_mode="llm_only")
+    hybrid_settings = _settings(tmp_path, decision_mode="rules_first")
+
+    assert isinstance(
+        claude_spot._build_advisor(rules_settings),
+        claude_spot.RulesEngineAdvisor,
+    )
+    assert isinstance(
+        claude_spot._build_advisor(llm_settings),
+        claude_spot.HeadlessClaudeSpotAdvisor,
+    )
+    assert isinstance(
+        claude_spot._build_advisor(hybrid_settings),
+        claude_spot.RulesFirstAdvisor,
+    )
