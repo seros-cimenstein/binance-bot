@@ -76,6 +76,7 @@ class FundingArbSettings:
 
     state_path: str = "data/funding-arb-state.json"
     audit_path: str = "data/funding-arb-decisions.jsonl"
+    ledger_path: str = "data/funding-arb-ledger.jsonl"
     emergency_stop_path: str = "data/funding-arb.stop"
 
     def validate(self) -> None:
@@ -93,7 +94,7 @@ class FundingArbSettings:
             raise FundingArbError(
                 "entry_funding_bps must be strictly above exit_funding_bps"
             )
-        for path_name in ("state_path", "audit_path", "emergency_stop_path"):
+        for path_name in ("state_path", "audit_path", "ledger_path", "emergency_stop_path"):
             if not getattr(self, path_name).strip():
                 raise FundingArbError(f"{path_name} must not be blank")
 
@@ -151,6 +152,7 @@ class FundingArbSettings:
             basis_circuit_breaker_bps=_float("FUNDING_ARB_BASIS_CIRCUIT_BREAKER_BPS", 200.0),
             state_path=os.getenv("FUNDING_ARB_STATE_PATH", "data/funding-arb-state.json"),
             audit_path=os.getenv("FUNDING_ARB_AUDIT_PATH", "data/funding-arb-decisions.jsonl"),
+            ledger_path=os.getenv("FUNDING_ARB_LEDGER_PATH", "data/funding-arb-ledger.jsonl"),
             emergency_stop_path=os.getenv(
                 "FUNDING_ARB_EMERGENCY_STOP_PATH", "data/funding-arb.stop"
             ),
@@ -404,6 +406,118 @@ def append_audit(audit_path: str, payload: Mapping[str, Any]) -> None:
         fh.write("\n")
 
 
+def _utc_now_ms() -> int:
+    return int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+
+
+@dataclass(frozen=True, slots=True)
+class PaperLedgerEntry:
+    """One closed paper trade recorded for P&L attribution."""
+
+    symbol: str
+    open_time_ms: int
+    close_time_ms: int
+    entry_funding_bps: float
+    funding_received_bps: float
+    funding_received_usdt: float
+    events_held: int
+    round_trip_cost_bps: float
+    round_trip_cost_usdt: float
+    net_pnl_bps: float
+    net_pnl_usdt: float
+
+
+def apply_paper_decisions(
+    *,
+    settings: FundingArbSettings,
+    state: FundingArbState,
+    signals: Sequence[CandidateSignal],
+    decisions: Sequence[FundingArbDecision],
+    cycle_ts_ms: int,
+) -> tuple[FundingArbState, list[PaperLedgerEntry]]:
+    """Apply open/close/hold decisions to in-memory state for paper trading.
+
+    Funding is credited once per cycle, per open position, at the current
+    funding rate. Closes incur the modelled round-trip cost (which is split
+    across open + close; opens pay nothing in paper mode, closes pay the
+    full round-trip — equivalent total cost to the backtest model).
+    """
+    signals_by_symbol = {s.symbol: s for s in signals}
+    close_symbols = {d.symbol for d in decisions if d.action == "close"}
+    open_decisions = [d for d in decisions if d.action == "open"]
+
+    one_side_cost_bps = (
+        settings.taker_fee_spot_bps
+        + settings.taker_fee_futures_bps
+        + 2.0 * settings.slippage_per_leg_bps
+    )
+    round_trip_cost_bps = 2.0 * one_side_cost_bps
+
+    updated: list[FundingArbPosition] = []
+    ledger: list[PaperLedgerEntry] = []
+
+    # 1. Accrue funding on currently open positions, queue closes.
+    for position in state.positions:
+        signal = signals_by_symbol.get(position.symbol)
+        if signal is not None:
+            funding_increment_bps = signal.funding_bps
+            funding_increment_usdt = position.notional_usdt * (signal.funding_bps / 10_000.0)
+            position.funding_received_bps += funding_increment_bps
+            position.funding_received_usdt += funding_increment_usdt
+            position.events_held += 1
+
+        if position.symbol in close_symbols:
+            close_cost_usdt = position.notional_usdt * (round_trip_cost_bps / 10_000.0)
+            net_pnl_usdt = position.funding_received_usdt - close_cost_usdt
+            net_pnl_bps = position.funding_received_bps - round_trip_cost_bps
+            ledger.append(
+                PaperLedgerEntry(
+                    symbol=position.symbol,
+                    open_time_ms=position.open_time_ms,
+                    close_time_ms=cycle_ts_ms,
+                    entry_funding_bps=position.entry_funding_bps,
+                    funding_received_bps=position.funding_received_bps,
+                    funding_received_usdt=position.funding_received_usdt,
+                    events_held=position.events_held,
+                    round_trip_cost_bps=round_trip_cost_bps,
+                    round_trip_cost_usdt=close_cost_usdt,
+                    net_pnl_bps=net_pnl_bps,
+                    net_pnl_usdt=net_pnl_usdt,
+                )
+            )
+            continue
+        updated.append(position)
+
+    # 2. Materialize newly opened positions.
+    for decision in open_decisions:
+        signal = signals_by_symbol.get(decision.symbol)
+        if signal is None or signal.spot_price <= 0:
+            continue
+        spot_qty = decision.notional_usdt / signal.spot_price
+        updated.append(
+            FundingArbPosition(
+                symbol=decision.symbol,
+                open_time_ms=cycle_ts_ms,
+                entry_funding_bps=decision.current_funding_bps,
+                notional_usdt=decision.notional_usdt,
+                spot_qty=spot_qty,
+                perp_qty=-spot_qty,
+            )
+        )
+    return FundingArbState(positions=tuple(updated)), ledger
+
+
+def append_ledger(ledger_path: str, entries: Sequence[PaperLedgerEntry]) -> None:
+    if not entries:
+        return
+    p = Path(ledger_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as fh:
+        for entry in entries:
+            fh.write(json.dumps(asdict(entry), sort_keys=True))
+            fh.write("\n")
+
+
 def _utc_timestamp() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -459,21 +573,51 @@ async def _fetch_current_signals(symbols: Sequence[str]) -> list[CandidateSignal
     return out
 
 
-async def plan_cycle(settings: FundingArbSettings) -> dict[str, Any]:
-    """Run one decision cycle without submitting orders. Returns the audit payload."""
-    _preflight(settings, submit_order=False)
+async def run_cycle(settings: FundingArbSettings, *, mode: str = "plan_only") -> dict[str, Any]:
+    """Run one decision cycle. Modes:
+
+    * ``plan_only`` — compute decisions; do not mutate state or submit orders.
+    * ``paper`` — compute decisions, materialize them in local state,
+      simulate funding accrual and round-trip costs; no real orders.
+    * ``live`` — reserved for layer C; currently raises via ``_preflight``.
+
+    Returns the audit payload, which is also appended to the audit JSONL.
+    """
+    if mode not in {"plan_only", "paper", "live"}:
+        raise FundingArbError(f"unknown funding-arb mode: {mode}")
+    _preflight(settings, submit_order=(mode == "live"))
+    if mode == "live":
+        raise FundingArbError(
+            "live execution path is not yet implemented; only plan_only and paper are supported"
+        )
+
     state = load_state(settings.state_path)
     symbols = await _resolve_universe(settings)
     signals = await _fetch_current_signals(symbols)
     advisor = FundingArbAdvisor(settings)
     decisions = advisor.decide(state=state, signals=signals)
+
+    ledger: list[PaperLedgerEntry] = []
+    if mode == "paper":
+        cycle_ts_ms = _utc_now_ms()
+        state, ledger = apply_paper_decisions(
+            settings=settings,
+            state=state,
+            signals=signals,
+            decisions=decisions,
+            cycle_ts_ms=cycle_ts_ms,
+        )
+        save_state(state, settings.state_path)
+        append_ledger(settings.ledger_path, ledger)
+
     payload = {
         "timestamp": _utc_timestamp(),
-        "mode": "plan_only",
+        "mode": mode,
         "universe_size": len(symbols),
         "signals_count": len(signals),
         "open_positions": len(state.positions),
         "decisions": [asdict(d) for d in decisions],
+        "ledger_entries_this_cycle": [asdict(e) for e in ledger],
         "top_signals": sorted(
             [
                 {"symbol": s.symbol, "funding_bps": s.funding_bps, "basis_bps": s.basis_bps()}
@@ -487,27 +631,43 @@ async def plan_cycle(settings: FundingArbSettings) -> dict[str, Any]:
     return payload
 
 
+async def plan_cycle(settings: FundingArbSettings) -> dict[str, Any]:
+    """Backwards-compatible thin wrapper that runs a plan_only cycle."""
+    return await run_cycle(settings, mode="plan_only")
+
+
 def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Funding-arb runtime. Plan-only by default; live submission gated."
+        description="Funding-arb runtime. Plan-only by default; paper and live are opt-in."
     )
-    parser.add_argument("--plan-only", action="store_true", default=True, help="(default)")
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--plan-only",
+        action="store_const",
+        const="plan_only",
+        dest="mode",
+        help="compute decisions without mutating state (default)",
+    )
+    group.add_argument(
+        "--paper",
+        action="store_const",
+        const="paper",
+        dest="mode",
+        help="materialize decisions in local state with simulated funding/fees, no real orders",
+    )
+    group.add_argument(
         "--submit-live",
-        action="store_true",
-        help="reserved for future live-execution phase; currently raises",
+        action="store_const",
+        const="live",
+        dest="mode",
+        help="reserved for layer C live execution; currently raises after preflight gating",
     )
+    parser.set_defaults(mode="plan_only")
     args = parser.parse_args(argv)
 
     try:
         settings = FundingArbSettings.from_env()
-        if args.submit_live:
-            # Force preflight to surface the gating message.
-            _preflight(settings, submit_order=True)
-            raise FundingArbError(
-                "live execution path is not yet implemented; only plan-only is supported"
-            )
-        result = asyncio.run(plan_cycle(settings))
+        result = asyncio.run(run_cycle(settings, mode=args.mode))
     except FundingArbError as exc:
         print(f"funding-arb failed: {exc}")
         return 1
