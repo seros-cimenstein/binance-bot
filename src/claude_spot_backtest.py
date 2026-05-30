@@ -153,18 +153,20 @@ def _bars_per_year(interval: str) -> float:
 def _align_by_open_time(
     klines_by_symbol: Mapping[str, Sequence[Kline]],
 ) -> tuple[list[int], dict[str, dict[int, Kline]]]:
+    """Build a union-of-times grid plus per-symbol open_ms -> kline index.
+
+    Using the union (not intersection) lets newer listings join the grid
+    when they actually have data, without truncating the entire analysis to
+    the shortest series. The replay engine checks per-symbol availability
+    at each timestep before scoring or applying returns.
+    """
     by_ts: dict[str, dict[int, Kline]] = {}
-    common_times: set[int] | None = None
+    all_times: set[int] = set()
     for symbol, klines in klines_by_symbol.items():
         indexed: dict[int, Kline] = {_open_ms(k): k for k in klines}
         by_ts[symbol] = indexed
-        if common_times is None:
-            common_times = set(indexed.keys())
-        else:
-            common_times &= indexed.keys()
-    if not common_times:
-        return [], by_ts
-    return sorted(common_times), by_ts
+        all_times.update(indexed.keys())
+    return sorted(all_times), by_ts
 
 
 def replay(
@@ -217,15 +219,18 @@ def replay(
     for i in range(cfg.lookback_bars, len(times) - 1):
         ts = times[i]
         next_ts = times[i + 1]
+        ts_lookback = times[i - cfg.lookback_bars]
 
-        # Score every candidate from the current bar's perspective.
+        # Score every candidate from the current bar's perspective. Skip
+        # symbols that are missing klines at the lookback or current timestamp.
         best_symbol: str | None = None
         best_edge_bps = -math.inf
-        signals: dict[str, float] = {}
         for symbol in symbols:
             klines = by_ts[symbol]
-            here = klines[ts]
-            past = klines[times[i - cfg.lookback_bars]]
+            here = klines.get(ts)
+            past = klines.get(ts_lookback)
+            if here is None or past is None:
+                continue
             past_close = _close(past)
             if past_close <= 0:
                 continue
@@ -233,10 +238,14 @@ def replay(
             spread_bps = _half_spread_bps(here, cfg=cfg)
             cost_bps = _round_trip_cost_bps(spread_bps, cfg=cfg)
             expected_edge_bps = lookback_return_bps - cost_bps
-            signals[symbol] = expected_edge_bps
             if expected_edge_bps > best_edge_bps:
                 best_edge_bps = expected_edge_bps
                 best_symbol = symbol
+
+        # Force-exit if the held asset has no data this bar.
+        held_here = None if held == BASE_CASH else by_ts.get(held, {}).get(ts)
+        if held != BASE_CASH and held_here is None:
+            held = BASE_CASH
 
         # Decide whether to switch.
         eligible = (
@@ -268,17 +277,25 @@ def replay(
             held = best_symbol
             last_switch_idx = i
 
-        # Apply next-bar return for the held asset.
+        # Apply next-bar return for the held asset. If the held asset has no
+        # data at either ts or next_ts, treat the bar as flat cash and force
+        # the next iteration to consider rotating out.
         if held == BASE_CASH:
             step_return = 0.0
         else:
             klines = by_ts[held]
-            here_close = _close(klines[ts])
-            next_close = _close(klines[next_ts])
-            if here_close <= 0:
+            here_kline = klines.get(ts)
+            next_kline = klines.get(next_ts)
+            if here_kline is None or next_kline is None:
                 step_return = 0.0
+                if next_kline is None:
+                    held = BASE_CASH
             else:
-                step_return = next_close / here_close - 1.0
+                here_close = _close(here_kline)
+                if here_close <= 0:
+                    step_return = 0.0
+                else:
+                    step_return = _close(next_kline) / here_close - 1.0
         equity *= 1.0 + step_return
         per_step_returns.append(step_return)
         if step_return > 0:
@@ -366,20 +383,93 @@ async def _fetch_klines_for_symbols(
     interval: str,
     start: datetime,
     end: datetime,
+    cache_dir: Path | None = None,
+    concurrency: int = 6,
 ) -> dict[str, list[list[Any]]]:
+    """Fetch klines for many symbols concurrently with optional disk cache."""
     from src.data.history import HistoryFetcher
 
     fetcher = HistoryFetcher()
+    sem = asyncio.Semaphore(max(concurrency, 1))
     result: dict[str, list[list[Any]]] = {}
-    for symbol in symbols:
-        klines = await fetcher.fetch_klines(
-            symbol,
-            interval,
-            start_time=start,
-            end_time=end,
-        )
-        result[symbol] = [list(k) for k in klines]
+
+    def _cache_path(symbol: str) -> Path | None:
+        if cache_dir is None:
+            return None
+        key = symbol.replace("/", "_").replace(":", "_")
+        return cache_dir / f"{interval}_{key}_{int(start.timestamp())}_{int(end.timestamp())}.json"
+
+    async def _one(symbol: str) -> None:
+        path = _cache_path(symbol)
+        if path is not None and path.exists():
+            try:
+                result[symbol] = json.loads(path.read_text())
+                return
+            except (OSError, json.JSONDecodeError):
+                pass
+        async with sem:
+            klines = await fetcher.fetch_klines(
+                symbol,
+                interval,
+                start_time=start,
+                end_time=end,
+            )
+        rows = [list(k) for k in klines]
+        result[symbol] = rows
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(rows))
+
+    await asyncio.gather(*(_one(s) for s in symbols))
     return result
+
+
+async def _fetch_spot_usdt_universe(
+    *,
+    max_symbols: int,
+    min_quote_volume_usdt: float,
+) -> list[str]:
+    """Return the top-N USDT spot symbols by 24h volume, excluding fiat bases."""
+    import aiohttp
+
+    from src.claude_spot import CLAUDE_SPOT_FIAT_ASSETS
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get("https://api.binance.com/api/v3/exchangeInfo") as resp:
+            resp.raise_for_status()
+            info = await resp.json()
+        async with session.get("https://api.binance.com/api/v3/ticker/24hr") as resp:
+            resp.raise_for_status()
+            tickers = await resp.json()
+
+    volume_by_symbol: dict[str, float] = {}
+    for row in tickers:
+        try:
+            volume_by_symbol[row["symbol"]] = float(row.get("quoteVolume", 0.0))
+        except (KeyError, ValueError, TypeError):
+            continue
+
+    candidates: list[tuple[float, str]] = []
+    for sym in info.get("symbols", []):
+        if sym.get("status") != "TRADING":
+            continue
+        if not sym.get("isSpotTradingAllowed"):
+            continue
+        if sym.get("quoteAsset") != "USDT":
+            continue
+        base = sym.get("baseAsset", "")
+        if base in CLAUDE_SPOT_FIAT_ASSETS:
+            continue
+        if base.endswith("UP") or base.endswith("DOWN") or base.endswith("BULL") or base.endswith("BEAR"):
+            continue  # leveraged tokens are not in scope
+        binance_symbol = sym.get("symbol", "")
+        volume = volume_by_symbol.get(binance_symbol, 0.0)
+        if volume < min_quote_volume_usdt:
+            continue
+        candidates.append((volume, f"{base}/USDT"))
+
+    candidates.sort(reverse=True)
+    return [s for _, s in candidates[:max_symbols]]
 
 
 def _load_fixture(path: Path) -> dict[str, list[list[Any]]]:
@@ -410,6 +500,38 @@ def _build_parser() -> argparse.ArgumentParser:
         required=False,
         default="BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT",
         help="comma-separated CCXT-style symbols (default: top liquid USDT pairs)",
+    )
+    parser.add_argument(
+        "--universe",
+        default="",
+        choices=("", "spot_usdt_top"),
+        help=(
+            "if set to spot_usdt_top, ignore --symbols and pull all Binance spot "
+            "USDT pairs (ex fiats / leveraged tokens) ranked by 24h quote volume"
+        ),
+    )
+    parser.add_argument(
+        "--universe-size",
+        type=int,
+        default=200,
+        help="max symbols when --universe is set",
+    )
+    parser.add_argument(
+        "--min-quote-volume-usdt",
+        type=float,
+        default=1_000_000.0,
+        help="minimum 24h quote volume in USDT for --universe filtering",
+    )
+    parser.add_argument(
+        "--klines-cache",
+        default="",
+        help="directory to cache fetched klines so re-runs are fast",
+    )
+    parser.add_argument(
+        "--fetch-concurrency",
+        type=int,
+        default=6,
+        help="parallel kline fetches (respect Binance rate limits)",
     )
     parser.add_argument("--interval", default=defaults.interval)
     parser.add_argument(
@@ -464,9 +586,35 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("either --fixture or --start must be supplied")
         start = _parse_iso(args.start)
         end = _parse_iso(args.end) if args.end else datetime.now(tz=timezone.utc)
-        symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+        if args.universe == "spot_usdt_top":
+            symbols = asyncio.run(
+                _fetch_spot_usdt_universe(
+                    max_symbols=args.universe_size,
+                    min_quote_volume_usdt=args.min_quote_volume_usdt,
+                )
+            )
+            print(
+                json.dumps(
+                    {
+                        "universe": "spot_usdt_top",
+                        "symbol_count": len(symbols),
+                        "first_10": symbols[:10],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+        cache_dir = Path(args.klines_cache) if args.klines_cache else None
         klines = asyncio.run(
-            _fetch_klines_for_symbols(symbols, interval=args.interval, start=start, end=end)
+            _fetch_klines_for_symbols(
+                symbols,
+                interval=args.interval,
+                start=start,
+                end=end,
+                cache_dir=cache_dir,
+                concurrency=args.fetch_concurrency,
+            )
         )
 
     result = replay(klines, cfg)
