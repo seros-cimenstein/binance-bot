@@ -477,12 +477,20 @@ async def _execute_decisions(
                 order_id=str(order.get("id") or ""), success=filled > 0,
             ))
             current_holdings.pop(d.symbol, None)
+            from src.alerts import maybe_telegram
+            await maybe_telegram(
+                f"trend filter SELL {d.symbol}: {filled:.6f} @ ${avg:.4f} = ${notional:.4f}"
+            )
         except Exception as exc:  # noqa: BLE001 — log + continue
             ledger.append(TrendFilterLedgerEntry(
                 timestamp_ms=current_time_ms, action="sell", symbol=d.symbol,
                 qty=0.0, price=0.0, notional_usdt=0.0, fee_quote=0.0,
                 order_id="", success=False, error=f"{type(exc).__name__}: {str(exc)[:200]}",
             ))
+            from src.alerts import maybe_telegram
+            await maybe_telegram(
+                f"trend filter SELL FAILED {d.symbol}: {type(exc).__name__}: {str(exc)[:150]}"
+            )
 
     # Buys after sells settle. Use raw amount (base qty) for create_order.
     for d in decisions:
@@ -513,12 +521,20 @@ async def _execute_decisions(
                     symbol=d.symbol, qty=filled, entry_price=avg,
                     entry_time_ms=current_time_ms,
                 )
+            from src.alerts import maybe_telegram
+            await maybe_telegram(
+                f"trend filter BUY {d.symbol}: {filled:.6f} @ ${avg:.4f} = ${notional:.4f}"
+            )
         except Exception as exc:  # noqa: BLE001 — log + continue
             ledger.append(TrendFilterLedgerEntry(
                 timestamp_ms=current_time_ms, action="buy", symbol=d.symbol,
                 qty=0.0, price=0.0, notional_usdt=0.0, fee_quote=0.0,
                 order_id="", success=False, error=f"{type(exc).__name__}: {str(exc)[:200]}",
             ))
+            from src.alerts import maybe_telegram
+            await maybe_telegram(
+                f"trend filter BUY FAILED {d.symbol}: {type(exc).__name__}: {str(exc)[:150]}"
+            )
     return current_holdings, ledger
 
 

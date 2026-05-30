@@ -364,6 +364,16 @@ async def run_once(
                 )
         enriched.append(event)
 
+        # Alert on every fresh spot listing — these are rare enough (a few
+        # per week) that every one is worth a ping regardless of mode.
+        if event.listing_type == "spot_list" and event.detected_token:
+            from src.alerts import maybe_telegram
+            pair_note = f" ({event.detected_pair} exists on spot)" if event.detected_pair else " (pair not yet live on spot)"
+            await maybe_telegram(
+                f"New Binance spot listing detected: {event.detected_token}{pair_note}\n"
+                f"Title: {event.title[:200]}"
+            )
+
         if mode == "live" and event.listing_type == "spot_list" and event.detected_pair:
             result = await _execute_event_live(event=event, settings=settings, spot_client=spot_client)
             actions.append({"article_id": event.article_id, **result})

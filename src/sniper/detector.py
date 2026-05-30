@@ -256,6 +256,9 @@ async def run_detector(
             events.append(event)
             by_label[event.program_label] = by_label.get(event.program_label, 0) + 1
             _audit(audit_path, event.as_dict())
+            # The sniper detector fires a lot (≈1/sec on pump.fun). Skip the
+            # per-event alert here; alerts come from the scorer phase that
+            # filters down to tradeable candidates.
             if Path(emergency_stop_path).exists():
                 return
 

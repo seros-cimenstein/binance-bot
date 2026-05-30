@@ -784,6 +784,11 @@ async def run_cycle(
         report = await executor.reconcile({p.symbol: p for p in state.positions})
         if not report.ok:
             halt_reason = f"reconciliation mismatch: {[m.detail for m in report.mismatches]}"
+            from src.alerts import maybe_telegram
+            await maybe_telegram(
+                f"funding arb HALTED — on-exchange state does not match local state. "
+                f"Manual investigation required. Detail: {halt_reason[:300]}"
+            )
         else:
             state, ledger, live_results = await _execute_live_decisions(
                 settings=effective_settings,
@@ -907,6 +912,12 @@ async def _execute_live_decisions(
             }
         )
         held_after.pop(symbol, None)
+        from src.alerts import maybe_telegram
+        await maybe_telegram(
+            f"funding arb CLOSE {symbol}: realised P&L ${close_result.realized_pnl_usdt:+.4f}, "
+            f"held {position.events_held} funding events, funding collected "
+            f"{position.funding_received_bps:+.2f} bps"
+        )
 
     # 3. Execute opens.
     for decision in open_decisions:
@@ -923,6 +934,12 @@ async def _execute_live_decisions(
             )
             continue
         held_after[decision.symbol] = open_result.position
+        from src.alerts import maybe_telegram
+        await maybe_telegram(
+            f"funding arb OPEN {decision.symbol}: filled {open_result.spot_leg.filled_qty:.6f} "
+            f"@ entry funding {decision.current_funding_bps:.2f} bps, notional "
+            f"${decision.notional_usdt:.4f}"
+        )
         live_results.append(
             {
                 "action": "open",
