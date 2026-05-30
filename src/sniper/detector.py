@@ -67,7 +67,7 @@ class PoolCreationEvent:
     slot: int
     detected_at_ms: int
     matched_markers: tuple[str, ...]
-    log_excerpt: tuple[str, ...]  # first few log lines for diagnostics
+    log_excerpt: tuple[str, ...]  # full log lines; previously a 5-line truncation
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -133,7 +133,7 @@ def parse_log_notification(
         slot=slot,
         detected_at_ms=_utc_now_ms(),
         matched_markers=matched,
-        log_excerpt=tuple(log_strs[:5]),
+        log_excerpt=tuple(log_strs),
     )
 
 
