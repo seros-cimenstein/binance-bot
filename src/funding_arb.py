@@ -522,6 +522,48 @@ def _utc_timestamp() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+async def build_live_executor(settings: FundingArbSettings) -> Any:
+    """Construct a FundingArbExecutor wired to real Binance Spot + USD-M Futures.
+
+    Kept out of ``run_cycle`` so tests can inject a mock executor and so the
+    ccxt import is lazy.
+    """
+    import ccxt.async_support as ccxt_async
+
+    from src.funding_arb_executor import FundingArbExecutor
+
+    spot = ccxt_async.binance(
+        {
+            "apiKey": settings.api_key,
+            "secret": settings.api_secret,
+            "enableRateLimit": True,
+            "options": {"adjustForTimeDifference": True, "fetchCurrencies": False},
+        }
+    )
+    futures = ccxt_async.binanceusdm(
+        {
+            "apiKey": settings.api_key,
+            "secret": settings.api_secret,
+            "enableRateLimit": True,
+            "options": {"adjustForTimeDifference": True, "fetchCurrencies": False},
+        }
+    )
+
+    class _CcxtCollateral:
+        async def transfer_spot_to_futures(self, amount_usdt: float):
+            # Binance universal transfer: MAIN_UMFUTURE
+            return await spot.sapi_post_asset_transfer(
+                {"type": "MAIN_UMFUTURE", "asset": "USDT", "amount": amount_usdt}
+            )
+
+        async def transfer_futures_to_spot(self, amount_usdt: float):
+            return await spot.sapi_post_asset_transfer(
+                {"type": "UMFUTURE_MAIN", "asset": "USDT", "amount": amount_usdt}
+            )
+
+    return FundingArbExecutor(spot=spot, futures=futures, collateral=_CcxtCollateral())
+
+
 async def _resolve_universe(settings: FundingArbSettings) -> list[str]:
     if settings.universe:
         return list(settings.universe)
@@ -573,23 +615,26 @@ async def _fetch_current_signals(symbols: Sequence[str]) -> list[CandidateSignal
     return out
 
 
-async def run_cycle(settings: FundingArbSettings, *, mode: str = "plan_only") -> dict[str, Any]:
+async def run_cycle(
+    settings: FundingArbSettings,
+    *,
+    mode: str = "plan_only",
+    executor: Any | None = None,
+) -> dict[str, Any]:
     """Run one decision cycle. Modes:
 
     * ``plan_only`` — compute decisions; do not mutate state or submit orders.
     * ``paper`` — compute decisions, materialize them in local state,
       simulate funding accrual and round-trip costs; no real orders.
-    * ``live`` — reserved for layer C; currently raises via ``_preflight``.
+    * ``live`` — execute decisions against the real exchange using the
+      provided ``executor`` (a ``FundingArbExecutor``). Reconciles
+      on-exchange state with local state first and halts on mismatch.
 
     Returns the audit payload, which is also appended to the audit JSONL.
     """
     if mode not in {"plan_only", "paper", "live"}:
         raise FundingArbError(f"unknown funding-arb mode: {mode}")
     _preflight(settings, submit_order=(mode == "live"))
-    if mode == "live":
-        raise FundingArbError(
-            "live execution path is not yet implemented; only plan_only and paper are supported"
-        )
 
     state = load_state(settings.state_path)
     symbols = await _resolve_universe(settings)
@@ -598,6 +643,9 @@ async def run_cycle(settings: FundingArbSettings, *, mode: str = "plan_only") ->
     decisions = advisor.decide(state=state, signals=signals)
 
     ledger: list[PaperLedgerEntry] = []
+    live_results: list[dict[str, Any]] = []
+    halt_reason: str | None = None
+
     if mode == "paper":
         cycle_ts_ms = _utc_now_ms()
         state, ledger = apply_paper_decisions(
@@ -610,6 +658,24 @@ async def run_cycle(settings: FundingArbSettings, *, mode: str = "plan_only") ->
         save_state(state, settings.state_path)
         append_ledger(settings.ledger_path, ledger)
 
+    if mode == "live":
+        if executor is None:
+            raise FundingArbError("live mode requires an executor instance")
+        # Reconcile first; halt on mismatch.
+        report = await executor.reconcile({p.symbol: p for p in state.positions})
+        if not report.ok:
+            halt_reason = f"reconciliation mismatch: {[m.detail for m in report.mismatches]}"
+        else:
+            state, ledger, live_results = await _execute_live_decisions(
+                settings=settings,
+                state=state,
+                signals=signals,
+                decisions=decisions,
+                executor=executor,
+            )
+            save_state(state, settings.state_path)
+            append_ledger(settings.ledger_path, ledger)
+
     payload = {
         "timestamp": _utc_timestamp(),
         "mode": mode,
@@ -618,6 +684,8 @@ async def run_cycle(settings: FundingArbSettings, *, mode: str = "plan_only") ->
         "open_positions": len(state.positions),
         "decisions": [asdict(d) for d in decisions],
         "ledger_entries_this_cycle": [asdict(e) for e in ledger],
+        "live_results": live_results,
+        "halt_reason": halt_reason,
         "top_signals": sorted(
             [
                 {"symbol": s.symbol, "funding_bps": s.funding_bps, "basis_bps": s.basis_bps()}
@@ -628,7 +696,122 @@ async def run_cycle(settings: FundingArbSettings, *, mode: str = "plan_only") ->
         )[:10],
     }
     append_audit(settings.audit_path, payload)
+    if halt_reason is not None:
+        raise FundingArbError(halt_reason)
     return payload
+
+
+async def _execute_live_decisions(
+    *,
+    settings: FundingArbSettings,
+    state: FundingArbState,
+    signals: Sequence[CandidateSignal],
+    decisions: Sequence[FundingArbDecision],
+    executor: Any,
+) -> tuple[FundingArbState, list[PaperLedgerEntry], list[dict[str, Any]]]:
+    """Run live closes first (free capacity), then opens. Update state from results."""
+    cycle_ts_ms = _utc_now_ms()
+    signals_by_symbol = {s.symbol: s for s in signals}
+    positions_by_symbol = {p.symbol: p for p in state.positions}
+    close_symbols = [d.symbol for d in decisions if d.action == "close"]
+    open_decisions = [d for d in decisions if d.action == "open"]
+
+    one_side_cost_bps = (
+        settings.taker_fee_spot_bps
+        + settings.taker_fee_futures_bps
+        + 2.0 * settings.slippage_per_leg_bps
+    )
+    round_trip_cost_bps = 2.0 * one_side_cost_bps
+
+    ledger: list[PaperLedgerEntry] = []
+    live_results: list[dict[str, Any]] = []
+
+    # 1. Accrue current funding on still-held positions (those NOT being closed).
+    held_after: dict[str, FundingArbPosition] = {}
+    for symbol, position in positions_by_symbol.items():
+        signal = signals_by_symbol.get(symbol)
+        if signal is not None and symbol not in close_symbols:
+            funding_increment_usdt = position.notional_usdt * (signal.funding_bps / 10_000.0)
+            position.funding_received_bps += signal.funding_bps
+            position.funding_received_usdt += funding_increment_usdt
+            position.events_held += 1
+        held_after[symbol] = position
+
+    # 2. Execute closes.
+    for symbol in close_symbols:
+        position = positions_by_symbol.get(symbol)
+        if position is None:
+            continue
+        # Accrue the final funding event before closing too.
+        signal = signals_by_symbol.get(symbol)
+        if signal is not None:
+            funding_increment_usdt = position.notional_usdt * (signal.funding_bps / 10_000.0)
+            position.funding_received_bps += signal.funding_bps
+            position.funding_received_usdt += funding_increment_usdt
+            position.events_held += 1
+        try:
+            close_result = await executor.close_position(position)
+        except FundingArbError as exc:
+            live_results.append(
+                {"action": "close", "symbol": symbol, "ok": False, "error": str(exc)}
+            )
+            # Keep the position in state if close failed; manual intervention.
+            continue
+        ledger.append(
+            PaperLedgerEntry(
+                symbol=symbol,
+                open_time_ms=position.open_time_ms,
+                close_time_ms=cycle_ts_ms,
+                entry_funding_bps=position.entry_funding_bps,
+                funding_received_bps=position.funding_received_bps,
+                funding_received_usdt=position.funding_received_usdt,
+                events_held=position.events_held,
+                round_trip_cost_bps=round_trip_cost_bps,
+                round_trip_cost_usdt=position.notional_usdt * (round_trip_cost_bps / 10_000.0),
+                net_pnl_bps=position.funding_received_bps - round_trip_cost_bps,
+                net_pnl_usdt=close_result.realized_pnl_usdt - position.notional_usdt * (round_trip_cost_bps / 10_000.0),
+            )
+        )
+        live_results.append(
+            {
+                "action": "close",
+                "symbol": symbol,
+                "ok": True,
+                "realized_pnl_usdt": close_result.realized_pnl_usdt,
+                "spot_order_id": close_result.spot_leg.order_id,
+                "perp_order_id": close_result.perp_leg.order_id,
+            }
+        )
+        held_after.pop(symbol, None)
+
+    # 3. Execute opens.
+    for decision in open_decisions:
+        try:
+            open_result = await executor.open_position(
+                decision.symbol,
+                notional_usdt=decision.notional_usdt,
+                entry_funding_bps=decision.current_funding_bps,
+                open_time_ms=cycle_ts_ms,
+            )
+        except FundingArbError as exc:
+            live_results.append(
+                {"action": "open", "symbol": decision.symbol, "ok": False, "error": str(exc)}
+            )
+            continue
+        held_after[decision.symbol] = open_result.position
+        live_results.append(
+            {
+                "action": "open",
+                "symbol": decision.symbol,
+                "ok": True,
+                "spot_order_id": open_result.spot_leg.order_id,
+                "perp_order_id": open_result.perp_leg.order_id,
+                "filled_qty": open_result.spot_leg.filled_qty,
+            }
+        )
+
+    new_state = FundingArbState(positions=tuple(held_after.values()))
+    return new_state, ledger, live_results
 
 
 async def plan_cycle(settings: FundingArbSettings) -> dict[str, Any]:
@@ -667,12 +850,31 @@ def run(argv: list[str] | None = None) -> int:
 
     try:
         settings = FundingArbSettings.from_env()
-        result = asyncio.run(run_cycle(settings, mode=args.mode))
+        if args.mode == "live":
+            result = asyncio.run(_run_live(settings))
+        else:
+            result = asyncio.run(run_cycle(settings, mode=args.mode))
     except FundingArbError as exc:
         print(f"funding-arb failed: {exc}")
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
+
+
+async def _run_live(settings: FundingArbSettings) -> dict[str, Any]:
+    executor = await build_live_executor(settings)
+    try:
+        return await run_cycle(settings, mode="live", executor=executor)
+    finally:
+        # Close any underlying aiohttp sessions ccxt owns.
+        try:
+            await executor.spot.close()
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            pass
+        try:
+            await executor.futures.close()
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            pass
 
 
 if __name__ == "__main__":
