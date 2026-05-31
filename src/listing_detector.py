@@ -57,7 +57,19 @@ class ListingDetectorSettings:
     poll_interval_seconds: int = 30
     quote_asset: str = "USDT"  # only trade pairs with this quote
     notional_usdt: float = 5.0
-    hold_seconds: int = 600  # 10 minutes
+    # Hold mode shape:
+    #   "flat"     — buy, sleep ``hold_seconds``, market sell. Default. Best
+    #                for the first-hour pop on freshly-listed tokens.
+    #   "trailing" — buy, sleep ``hold_seconds`` (initial floor), then poll
+    #                ``poll_interval_seconds`` for up to ``max_hold_seconds``;
+    #                sell once price drops ``trailing_stop_pct`` from the
+    #                running peak. Captures multi-day pumps without giving
+    #                back all the gains.
+    hold_mode: str = "flat"
+    hold_seconds: int = 600  # 10 minutes — also the trailing initial floor
+    trailing_stop_pct: float = 15.0
+    max_hold_seconds: int = 86_400  # 24 hours, trailing-mode hard cap
+    trailing_poll_interval_seconds: int = 60
     min_balance_usdt: float = 5.0
     dynamic_balance: bool = True
     enabled: bool = False
@@ -99,7 +111,13 @@ class ListingDetectorSettings:
             poll_interval_seconds=_int("LISTING_DETECTOR_POLL_INTERVAL_SECONDS", 30),
             quote_asset=os.getenv("LISTING_DETECTOR_QUOTE_ASSET", "USDT"),
             notional_usdt=_float("LISTING_DETECTOR_NOTIONAL_USDT", 5.0),
+            hold_mode=os.getenv("LISTING_DETECTOR_HOLD_MODE", "flat"),
             hold_seconds=_int("LISTING_DETECTOR_HOLD_SECONDS", 600),
+            trailing_stop_pct=_float("LISTING_DETECTOR_TRAILING_STOP_PCT", 15.0),
+            max_hold_seconds=_int("LISTING_DETECTOR_MAX_HOLD_SECONDS", 86_400),
+            trailing_poll_interval_seconds=_int(
+                "LISTING_DETECTOR_TRAILING_POLL_INTERVAL_SECONDS", 60,
+            ),
             min_balance_usdt=_float("LISTING_DETECTOR_MIN_BALANCE_USDT", 5.0),
             dynamic_balance=_bool("LISTING_DETECTOR_DYNAMIC_BALANCE", True),
             enabled=_bool("LISTING_DETECTOR_ENABLED", False),
@@ -120,11 +138,24 @@ class ListingEvent:
     title: str
     release_time_ms: int
     listing_type: str  # "spot_list" | "spot_add" | "hodler_airdrop" | "futures_only" | "other"
-    detected_token: str | None
-    detected_pair: str | None  # if known to exist on this venue
+    # All tickers found in the title's parenthesized form, in announcement
+    # order. ``detected_pairs`` is filled in by the detector for pairs that
+    # actually exist on this venue (used to short-circuit dead listings).
+    detected_tokens: tuple[str, ...] = ()
+    detected_pairs: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def detected_token(self) -> str | None:
+        """First detected ticker, for backward-compat with single-token consumers."""
+        return self.detected_tokens[0] if self.detected_tokens else None
+
+    @property
+    def detected_pair(self) -> str | None:
+        """First detected exchange pair, for backward-compat."""
+        return self.detected_pairs[0] if self.detected_pairs else None
 
 
 @dataclass(slots=True)
@@ -174,18 +205,32 @@ def classify_title(title: str) -> str:
     return "other"
 
 
-def extract_ticker(title: str) -> str | None:
-    """Extract the first uppercase ticker found in parentheses.
+_TICKER_BLOCKLIST = frozenset({
+    "UTC", "USD", "USDT", "EU", "USA", "UK", "AI", "BNB", "USDⓈ",
+})
 
-    Filters out common non-ticker abbreviations like UTC, USDT, EU.
+
+def extract_tickers(title: str) -> tuple[str, ...]:
+    """Extract every uppercase ticker in parentheses, deduped in announcement order.
+
+    Multi-token announcements (e.g. ``"List X (XYZ) and Y (OPG) with Seed Tag"``)
+    return both. Common non-ticker abbreviations (UTC, USDT, etc.) are filtered.
     """
-    blocklist = {"UTC", "USD", "USDT", "EU", "USA", "UK", "AI", "BNB", "USDⓈ"}
+    out: list[str] = []
+    seen: set[str] = set()
     for match in _TICKER_PATTERN.finditer(title):
         candidate = match.group(1)
-        if candidate in blocklist:
+        if candidate in _TICKER_BLOCKLIST or candidate in seen:
             continue
-        return candidate
-    return None
+        seen.add(candidate)
+        out.append(candidate)
+    return tuple(out)
+
+
+def extract_ticker(title: str) -> str | None:
+    """Back-compat wrapper: returns the first ticker only, or None."""
+    tokens = extract_tickers(title)
+    return tokens[0] if tokens else None
 
 
 def parse_announcement(article: Mapping[str, Any]) -> ListingEvent:
@@ -195,8 +240,8 @@ def parse_announcement(article: Mapping[str, Any]) -> ListingEvent:
         title=title,
         release_time_ms=int(article.get("releaseDate") or 0),
         listing_type=classify_title(title),
-        detected_token=extract_ticker(title),
-        detected_pair=None,  # filled in by detector if pair exists
+        detected_tokens=extract_tickers(title),
+        detected_pairs=(),  # filled in by run_once if pairs exist on exchange
     )
 
 
@@ -293,32 +338,85 @@ def _preflight_live(settings: ListingDetectorSettings) -> None:
         )
 
 
+async def _ticker_last_price(spot_client: Any, symbol: str) -> float | None:
+    try:
+        ticker = await spot_client.fetch_ticker(symbol)
+    except Exception:  # noqa: BLE001 — caller treats None as transient failure
+        return None
+    if not isinstance(ticker, Mapping):
+        return None
+    raw = ticker.get("last") or ticker.get("close")
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _hold_then_sell_price(
+    *, settings: ListingDetectorSettings, spot_client: Any, sym: str, avg_buy: float,
+) -> tuple[float, str]:
+    """Decide when to fire the market sell. Returns ``(final_hold_seconds, exit_reason)``."""
+    if settings.hold_mode == "flat":
+        await asyncio.sleep(settings.hold_seconds)
+        return float(settings.hold_seconds), "flat_hold_elapsed"
+    if settings.hold_mode != "trailing":
+        raise ListingDetectorError(f"unknown hold_mode: {settings.hold_mode}")
+
+    # Trailing-stop hold: sit through the initial floor, then poll the ticker
+    # and exit if the peak retraces past ``trailing_stop_pct`` or we hit the
+    # hard cap.
+    await asyncio.sleep(settings.hold_seconds)
+    peak = max(avg_buy, await _ticker_last_price(spot_client, sym) or avg_buy)
+    elapsed = float(settings.hold_seconds)
+    stop_factor = 1.0 - settings.trailing_stop_pct / 100.0
+    while elapsed < settings.max_hold_seconds:
+        await asyncio.sleep(settings.trailing_poll_interval_seconds)
+        elapsed += settings.trailing_poll_interval_seconds
+        last = await _ticker_last_price(spot_client, sym)
+        if last is None:
+            continue
+        if last > peak:
+            peak = last
+            continue
+        if last <= peak * stop_factor:
+            return elapsed, (
+                f"trailing_stop_hit: last={last:.6f} <= peak*{stop_factor:.4f}="
+                f"{peak * stop_factor:.6f}"
+            )
+    return elapsed, "max_hold_seconds_reached"
+
+
 async def _execute_event_live(
-    *, event: ListingEvent, settings: ListingDetectorSettings, spot_client: Any,
+    *, event: ListingEvent, settings: ListingDetectorSettings,
+    spot_client: Any, pair: str,
 ) -> dict[str, Any]:
-    """Buy at market, hold for hold_seconds, sell at market."""
-    if event.detected_pair is None:
-        return {"action": "skip", "reason": "no exchange pair for token"}
-    sym = event.detected_pair
+    """Buy ``pair`` at market, hold per ``hold_mode``, sell at market."""
+    sym = pair
     try:
         buy_order = await spot_client.create_order(
             symbol=sym, type="market", side="buy", amount=None, price=None,
             params={"quoteOrderQty": settings.notional_usdt},
         )
     except Exception as exc:  # noqa: BLE001 — log + skip
-        return {"action": "buy_failed", "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        return {"action": "buy_failed", "symbol": sym,
+                "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
     filled_qty = float(buy_order.get("filled") or 0.0)
     avg_buy = float(buy_order.get("average") or 0.0)
     if filled_qty <= 0:
-        return {"action": "buy_zero_fill", "buy_order": buy_order}
-    await asyncio.sleep(settings.hold_seconds)
+        return {"action": "buy_zero_fill", "symbol": sym, "buy_order": buy_order}
+
+    final_hold_seconds, exit_reason = await _hold_then_sell_price(
+        settings=settings, spot_client=spot_client, sym=sym, avg_buy=avg_buy,
+    )
+
     try:
         sell_order = await spot_client.create_order(
             symbol=sym, type="market", side="sell", amount=filled_qty,
         )
     except Exception as exc:  # noqa: BLE001 — position stranded, report
-        return {"action": "sell_failed", "buy_order": buy_order,
-                "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        return {"action": "sell_failed", "symbol": sym, "buy_order": buy_order,
+                "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+                "hold_seconds": final_hold_seconds, "exit_reason": exit_reason}
     sold_qty = float(sell_order.get("filled") or 0.0)
     avg_sell = float(sell_order.get("average") or 0.0)
     return {
@@ -329,7 +427,9 @@ async def _execute_event_live(
         "avg_sell": avg_sell,
         "sold_qty": sold_qty,
         "pnl_quote": (avg_sell - avg_buy) * filled_qty,
-        "hold_seconds": settings.hold_seconds,
+        "hold_mode": settings.hold_mode,
+        "hold_seconds": final_hold_seconds,
+        "exit_reason": exit_reason,
         "buy_order_id": str(buy_order.get("id") or ""),
         "sell_order_id": str(sell_order.get("id") or ""),
     }
@@ -353,38 +453,54 @@ async def run_once(
     enriched: list[ListingEvent] = []
     actions: list[dict[str, Any]] = []
     for event in new_events:
-        if event.listing_type == "spot_list" and event.detected_token and spot_client is not None:
-            has_pair = await _exchange_has_pair(spot_client, event.detected_token, settings.quote_asset)
-            if has_pair:
+        # Resolve all tradeable pairs for this announcement's tokens.
+        if (event.listing_type == "spot_list" and event.detected_tokens
+                and spot_client is not None):
+            existing_pairs: list[str] = []
+            for token in event.detected_tokens:
+                if await _exchange_has_pair(spot_client, token, settings.quote_asset):
+                    existing_pairs.append(f"{token}/{settings.quote_asset}")
+            if existing_pairs:
                 event = ListingEvent(
                     article_id=event.article_id, title=event.title,
-                    release_time_ms=event.release_time_ms, listing_type=event.listing_type,
-                    detected_token=event.detected_token,
-                    detected_pair=f"{event.detected_token}/{settings.quote_asset}",
+                    release_time_ms=event.release_time_ms,
+                    listing_type=event.listing_type,
+                    detected_tokens=event.detected_tokens,
+                    detected_pairs=tuple(existing_pairs),
                 )
         enriched.append(event)
 
         # Alert on every fresh spot listing — these are rare enough (a few
         # per week) that every one is worth a ping regardless of mode.
-        if event.listing_type == "spot_list" and event.detected_token:
+        if event.listing_type == "spot_list" and event.detected_tokens:
             from src.alerts import maybe_telegram
-            pair_note = f" ({event.detected_pair} exists on spot)" if event.detected_pair else " (pair not yet live on spot)"
+            tokens_str = ", ".join(event.detected_tokens)
+            if event.detected_pairs:
+                pair_note = f" ({', '.join(event.detected_pairs)} live on spot)"
+            else:
+                pair_note = " (pair(s) not yet live on spot)"
             await maybe_telegram(
-                f"New Binance spot listing detected: {event.detected_token}{pair_note}\n"
+                f"New Binance spot listing detected: {tokens_str}{pair_note}\n"
                 f"Title: {event.title[:200]}"
             )
 
-        if mode == "live" and event.listing_type == "spot_list" and event.detected_pair:
-            result = await _execute_event_live(event=event, settings=settings, spot_client=spot_client)
-            actions.append({"article_id": event.article_id, **result})
-        elif mode == "paper" and event.listing_type == "spot_list" and event.detected_pair:
-            actions.append({
-                "article_id": event.article_id, "action": "paper_buy_sell",
-                "symbol": event.detected_pair,
-                "notional_usdt": settings.notional_usdt,
-                "hold_seconds": settings.hold_seconds,
-                "note": "real-execution P&L requires live mode",
-            })
+        if mode == "live" and event.listing_type == "spot_list" and event.detected_pairs:
+            for pair in event.detected_pairs:
+                result = await _execute_event_live(
+                    event=event, settings=settings,
+                    spot_client=spot_client, pair=pair,
+                )
+                actions.append({"article_id": event.article_id, "pair": pair, **result})
+        elif mode == "paper" and event.listing_type == "spot_list" and event.detected_pairs:
+            for pair in event.detected_pairs:
+                actions.append({
+                    "article_id": event.article_id, "pair": pair,
+                    "action": "paper_buy_sell",
+                    "symbol": pair,
+                    "notional_usdt": settings.notional_usdt,
+                    "hold_seconds": settings.hold_seconds,
+                    "note": "real-execution P&L requires live mode",
+                })
 
     if new_events:
         newest_id = max(e.article_id for e in new_events)
