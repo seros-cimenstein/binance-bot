@@ -176,28 +176,34 @@ async def run_paper_executor(
 
     Returns a summary dict with counts, win rate, total simulated P&L.
     """
-    sem = asyncio.Semaphore(max(1, max_concurrent))
     started_at_ms = _utc_now_ms()
     queued = 0
+    skipped_at_capacity = 0
     in_flight: set[asyncio.Task[PaperSnipeRecord | None]] = set()
 
-    async def _bounded(candidate: TradeCandidate, session: aiohttp.ClientSession) -> PaperSnipeRecord | None:
-        async with sem:
-            return await simulate_snipe(
-                candidate=candidate,
-                entry_sol_atoms=entry_sol_atoms,
-                hold_seconds=hold_seconds,
-                slippage_bps=slippage_bps,
-                quote_url=quote_url, session=session,
-                ledger_path=ledger_path,
-            )
+    async def _simulate(candidate: TradeCandidate, session: aiohttp.ClientSession) -> PaperSnipeRecord | None:
+        return await simulate_snipe(
+            candidate=candidate,
+            entry_sol_atoms=entry_sol_atoms,
+            hold_seconds=hold_seconds,
+            slippage_bps=slippage_bps,
+            quote_url=quote_url, session=session,
+            ledger_path=ledger_path,
+        )
 
     async def _drive() -> None:
-        nonlocal queued
+        nonlocal queued, skipped_at_capacity
         async with aiohttp.ClientSession() as session:
             async for candidate in candidate_stream(http_session=session):
+                # Drop fully-completed tasks first so the count is accurate.
+                in_flight.difference_update({t for t in in_flight if t.done()})
+                if len(in_flight) >= max(1, max_concurrent):
+                    skipped_at_capacity += 1
+                    continue
                 queued += 1
-                in_flight.add(asyncio.create_task(_bounded(candidate, session)))
+                task = asyncio.create_task(_simulate(candidate, session))
+                in_flight.add(task)
+                task.add_done_callback(in_flight.discard)
                 if max_candidates is not None and queued >= max_candidates:
                     break
             if in_flight:
@@ -237,6 +243,7 @@ async def run_paper_executor(
         "started_at": datetime.fromtimestamp(started_at_ms / 1000, tz=timezone.utc).isoformat(),
         "finished_at": _utc_timestamp(),
         "candidates_queued": queued,
+        "candidates_skipped_at_capacity": skipped_at_capacity,
         "simulations_recorded": len(relevant),
         "round_trips_completed": len(completed),
         "wins": wins, "losses": losses,

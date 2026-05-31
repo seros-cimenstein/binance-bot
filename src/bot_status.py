@@ -54,6 +54,13 @@ KNOWN_BOTS: dict[str, dict[str, str]] = {
         "ledger": "listing-detector-ledger.jsonl",
         "timer": "binance-listing-detector.timer",
     },
+    "sniper_paper": {
+        "state": "",
+        "audit": "sniper-paper-ledger.jsonl",  # each row is a completed round-trip
+        "ledger": "sniper-paper-ledger.jsonl",
+        # Long-running daemon, not a timer; bot_status treats Service the same way.
+        "timer": "binance-sniper-paper.service",
+    },
     "claude_spot": {
         "state": "",  # stateless cycle
         "audit": "claude-spot-decisions.jsonl",
@@ -259,10 +266,19 @@ def _ledger_pnl(path: Path, *, hours_ago: float | None = None) -> tuple[float, i
     total = 0.0
     count = 0
     for row in _read_jsonl_iter(path):
-        ts = row.get("close_time_ms") or row.get("timestamp_ms") or 0
+        ts = (
+            row.get("close_time_ms")
+            or row.get("exit_time_ms")  # sniper paper rows
+            or row.get("timestamp_ms")
+            or 0
+        )
         if cutoff_ms is not None and float(ts) < cutoff_ms:
             continue
-        pnl = row.get("net_pnl_usdt")
+        # Each ledger uses its own field name for net realised P&L.
+        pnl = (
+            row.get("net_pnl_usdt")  # funding-arb
+            or row.get("usd_pnl")    # sniper paper
+        )
         if pnl is None:
             # Trend-filter ledger rows are individual fills; we count them but
             # report 0 P&L per row (unrealized P&L is computed elsewhere).
