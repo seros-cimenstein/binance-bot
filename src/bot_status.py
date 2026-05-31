@@ -61,6 +61,12 @@ KNOWN_BOTS: dict[str, dict[str, str]] = {
         # Long-running daemon, not a timer; bot_status treats Service the same way.
         "timer": "binance-sniper-paper.service",
     },
+    "mean_reversion_paper": {
+        "state": "mean-reversion-state.json",
+        "audit": "mean-reversion-decisions.jsonl",
+        "ledger": "mean-reversion-ledger.jsonl",
+        "timer": "binance-mean-reversion-paper.service",
+    },
     "claude_spot": {
         "state": "",  # stateless cycle
         "audit": "claude-spot-decisions.jsonl",
@@ -278,6 +284,7 @@ def _ledger_pnl(path: Path, *, hours_ago: float | None = None) -> tuple[float, i
         pnl = (
             row.get("net_pnl_usdt")  # funding-arb
             or row.get("usd_pnl")    # sniper paper
+            or row.get("pnl_usdt")   # mean-reversion (open rows have negative fee-only P&L)
         )
         if pnl is None:
             # Trend-filter ledger rows are individual fills; we count them but
