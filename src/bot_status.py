@@ -67,6 +67,12 @@ KNOWN_BOTS: dict[str, dict[str, str]] = {
         "ledger": "mean-reversion-ledger.jsonl",
         "timer": "binance-mean-reversion-paper.service",
     },
+    "listing_sniper_paper": {
+        "state": "listing-sniper-state.json",
+        "audit": "listing-sniper-events.jsonl",
+        "ledger": "listing-sniper-ledger.jsonl",
+        "timer": "binance-listing-sniper.service",
+    },
     "claude_spot": {
         "state": "",  # stateless cycle
         "audit": "claude-spot-decisions.jsonl",
