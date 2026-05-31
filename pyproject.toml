@@ -12,7 +12,8 @@ dependencies = [
     "pydantic",
     "pydantic-settings",
     "loguru",
-    "solders"
+    "solders",
+    "eth_account"
 ]
 
 [project.optional-dependencies]
