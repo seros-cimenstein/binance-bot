@@ -34,6 +34,7 @@ from dotenv import load_dotenv
 
 
 EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo"
+PUBLIC_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
 
 
 class ListingSniperError(RuntimeError):
@@ -58,13 +59,23 @@ class ListingSniperSettings:
     poll_interval_seconds: float = 5.0
     notional_usdt: float = 5.0
 
-    # Hold shape: "flat" or "trailing". See src.listing_detector for the
-    # full semantics — same model is used here.
+    # Hold shape:
+    #   "flat"     — sell at the end of hold_seconds, no thinking.
+    #   "trailing" — fixed retrace from peak triggers exit.
+    #   "momentum" — combination of velocity sign, lower-high pattern, and
+    #                short/long MA cross. Smarter exit, more false positives.
     hold_mode: str = "trailing"
-    hold_seconds: int = 60          # flat hold OR trailing initial floor
+    hold_seconds: int = 60          # flat hold OR initial-floor for trailing/momentum
     trailing_stop_pct: float = 15.0
     max_hold_seconds: int = 14_400  # 4 hours
     trailing_poll_interval_seconds: int = 10
+
+    # Momentum knobs (used when hold_mode="momentum"):
+    momentum_negative_polls_to_exit: int = 2  # consecutive negative-velocity polls
+    momentum_no_new_high_polls_to_exit: int = 5  # polls without a new peak
+    momentum_ma_short_samples: int = 3
+    momentum_ma_long_samples: int = 6
+    momentum_ma_cross_min_pullback_pct: float = 5.0  # pullback from peak required
 
     daily_spend_cap_usdt: float = 50.0
     min_balance_usdt: float = 10.0
@@ -80,8 +91,13 @@ class ListingSniperSettings:
             raise ListingSniperError("poll_interval_seconds must be >= 1.0")
         if self.notional_usdt <= 0:
             raise ListingSniperError("notional_usdt must be positive")
-        if self.hold_mode not in {"flat", "trailing"}:
-            raise ListingSniperError("hold_mode must be 'flat' or 'trailing'")
+        if self.hold_mode not in {"flat", "trailing", "momentum"}:
+            raise ListingSniperError("hold_mode must be 'flat', 'trailing', or 'momentum'")
+        if self.momentum_ma_short_samples >= self.momentum_ma_long_samples:
+            raise ListingSniperError(
+                "momentum_ma_short_samples must be strictly less than "
+                "momentum_ma_long_samples"
+            )
         if self.daily_spend_cap_usdt <= 0:
             raise ListingSniperError("daily_spend_cap_usdt must be positive")
         if self.min_balance_usdt < 0:
@@ -137,6 +153,26 @@ class ListingSniperSettings:
             trailing_poll_interval_seconds=_int(
                 "LISTING_SNIPER_TRAILING_POLL_INTERVAL_SECONDS",
                 defaults.trailing_poll_interval_seconds,
+            ),
+            momentum_negative_polls_to_exit=_int(
+                "LISTING_SNIPER_MOMENTUM_NEGATIVE_POLLS_TO_EXIT",
+                defaults.momentum_negative_polls_to_exit,
+            ),
+            momentum_no_new_high_polls_to_exit=_int(
+                "LISTING_SNIPER_MOMENTUM_NO_NEW_HIGH_POLLS_TO_EXIT",
+                defaults.momentum_no_new_high_polls_to_exit,
+            ),
+            momentum_ma_short_samples=_int(
+                "LISTING_SNIPER_MOMENTUM_MA_SHORT_SAMPLES",
+                defaults.momentum_ma_short_samples,
+            ),
+            momentum_ma_long_samples=_int(
+                "LISTING_SNIPER_MOMENTUM_MA_LONG_SAMPLES",
+                defaults.momentum_ma_long_samples,
+            ),
+            momentum_ma_cross_min_pullback_pct=_float(
+                "LISTING_SNIPER_MOMENTUM_MA_CROSS_MIN_PULLBACK_PCT",
+                defaults.momentum_ma_cross_min_pullback_pct,
             ),
             daily_spend_cap_usdt=_float(
                 "LISTING_SNIPER_DAILY_SPEND_CAP_USDT", defaults.daily_spend_cap_usdt,
@@ -371,17 +407,178 @@ def _append_ledger(path: str, payload: Mapping[str, Any]) -> None:
     _append_audit(path, payload)
 
 
+async def fetch_public_last_price(
+    *, session: aiohttp.ClientSession, rest_symbol: str,
+) -> float | None:
+    """Public no-auth /api/v3/ticker/price fetch. Used by paper-mode polling."""
+    try:
+        async with session.get(
+            PUBLIC_TICKER_URL, params={"symbol": rest_symbol}, timeout=5,
+        ) as resp:
+            if resp.status != 200:
+                return None
+            payload = await resp.json()
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    raw = payload.get("price")
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def momentum_should_exit(
+    *,
+    settings: ListingSniperSettings,
+    samples: list[tuple[float, float]],
+    peak: float,
+) -> tuple[bool, str]:
+    """Return ``(should_exit, reason)`` for the momentum exit logic.
+
+    Three independent triggers (any one fires):
+      1. velocity negative for ``momentum_negative_polls_to_exit`` consecutive polls
+      2. no new high in ``momentum_no_new_high_polls_to_exit`` polls
+      3. short MA crosses below long MA AND price has pulled back at
+         least ``momentum_ma_cross_min_pullback_pct`` from peak
+    """
+    if len(samples) < 2:
+        return False, ""
+
+    # 1) Velocity-sign run length.
+    k = settings.momentum_negative_polls_to_exit
+    if len(samples) > k:
+        # Compute velocity between consecutive pairs over the last k+1 samples.
+        velocities: list[float] = []
+        for i in range(-(k + 1), -1):
+            dt = samples[i + 1][0] - samples[i][0]
+            if dt <= 0:
+                continue
+            velocities.append((samples[i + 1][1] - samples[i][1]) / dt)
+        if len(velocities) >= k and all(v < 0 for v in velocities[-k:]):
+            return True, f"momentum_negative_for_{k}_polls"
+
+    # 2) No new high in N polls.
+    peak_idx = max(range(len(samples)), key=lambda i: samples[i][1])
+    polls_since_peak = len(samples) - 1 - peak_idx
+    if polls_since_peak >= settings.momentum_no_new_high_polls_to_exit:
+        return True, f"no_new_high_for_{polls_since_peak}_polls"
+
+    # 3) Short MA crosses below long MA with confirming pullback.
+    if len(samples) >= settings.momentum_ma_long_samples:
+        short_window = samples[-settings.momentum_ma_short_samples:]
+        long_window = samples[-settings.momentum_ma_long_samples:]
+        short_ma = sum(p for _, p in short_window) / len(short_window)
+        long_ma = sum(p for _, p in long_window) / len(long_window)
+        if short_ma < long_ma and peak > 0:
+            pullback_pct = (peak - samples[-1][1]) / peak * 100.0
+            if pullback_pct >= settings.momentum_ma_cross_min_pullback_pct:
+                return True, (
+                    f"ma_cross_with_pullback: short_ma={short_ma:.8f} < "
+                    f"long_ma={long_ma:.8f}, pullback_pct={pullback_pct:.2f}"
+                )
+    return False, ""
+
+
+async def _hold_paper(
+    *,
+    settings: ListingSniperSettings,
+    session: aiohttp.ClientSession,
+    rest_symbol: str,
+    entry_price: float,
+) -> tuple[float, str, float]:
+    """Polling loop that simulates the hold and returns (exit_price, reason, elapsed)."""
+    await asyncio.sleep(settings.hold_seconds)
+    elapsed = float(settings.hold_seconds)
+    samples: list[tuple[float, float]] = [(0.0, entry_price)]
+    peak = entry_price
+    stop_factor = 1.0 - settings.trailing_stop_pct / 100.0
+    while elapsed < settings.max_hold_seconds:
+        await asyncio.sleep(settings.trailing_poll_interval_seconds)
+        elapsed += settings.trailing_poll_interval_seconds
+        last = await fetch_public_last_price(session=session, rest_symbol=rest_symbol)
+        if last is None:
+            continue
+        samples.append((elapsed, last))
+        if last > peak:
+            peak = last
+
+        if settings.hold_mode == "flat":
+            # Paper-mode "flat" exits at the initial floor only — we never enter
+            # the while loop because hold_seconds == max_hold_seconds is unusual.
+            # Keep the branch for completeness.
+            continue
+        if settings.hold_mode == "trailing":
+            if last <= peak * stop_factor:
+                return last, (
+                    f"trailing_stop_hit: last={last:.8f} <= "
+                    f"peak*{stop_factor:.4f}={peak * stop_factor:.8f}"
+                ), elapsed
+        elif settings.hold_mode == "momentum":
+            should_exit, reason = momentum_should_exit(
+                settings=settings, samples=samples, peak=peak,
+            )
+            if should_exit:
+                return last, reason, elapsed
+
+    last = samples[-1][1] if samples else entry_price
+    return last, "max_hold_seconds_reached", elapsed
+
+
 async def fire_paper(
-    *, symbol: str, settings: ListingSniperSettings,
+    *,
+    symbol: str,                # exchangeInfo-style, e.g. "FOOUSDT"
+    settings: ListingSniperSettings,
+    session: aiohttp.ClientSession,
 ) -> dict[str, Any]:
-    """Paper-mode execution: record the would-be snipe without trading."""
+    """Paper-mode execution: simulate the trade end-to-end via public ticker.
+
+    Entry price = current public ticker at detection.
+    Exit price  = ticker at the moment the chosen ``hold_mode`` triggers.
+    Net P&L     = (exit - entry) / entry minus 2x taker fees (~20 bps).
+    """
+    rest_symbol = symbol
+    entry_price = await fetch_public_last_price(session=session, rest_symbol=rest_symbol)
+    if entry_price is None or entry_price <= 0:
+        return {
+            "mode": "paper", "action": "buy_skipped_no_price",
+            "symbol": symbol, "hold_mode": settings.hold_mode,
+        }
+
+    # "Flat" paper mode: just sleep and read again — no polling loop needed.
+    if settings.hold_mode == "flat":
+        await asyncio.sleep(settings.hold_seconds)
+        exit_price = await fetch_public_last_price(session=session, rest_symbol=rest_symbol)
+        exit_price = exit_price if exit_price and exit_price > 0 else entry_price
+        elapsed = float(settings.hold_seconds)
+        exit_reason = "flat_hold_elapsed"
+    else:
+        exit_price, exit_reason, elapsed = await _hold_paper(
+            settings=settings, session=session,
+            rest_symbol=rest_symbol, entry_price=entry_price,
+        )
+
+    gross_pct = (exit_price / entry_price - 1.0) * 100.0
+    # Approximate round-trip fees: 10 bps taker each side = 20 bps total.
+    fee_drag_pct = 0.2
+    net_pct = gross_pct - fee_drag_pct
+    notional = settings.notional_usdt
+    pnl_usdt = notional * net_pct / 100.0
+
     return {
         "mode": "paper",
-        "action": "would_buy",
+        "action": "round_trip_complete",
         "symbol": symbol,
-        "notional_usdt": settings.notional_usdt,
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "gross_pnl_pct": gross_pct,
+        "net_pnl_pct": net_pct,
+        "pnl_usdt": pnl_usdt,
+        "notional_usdt": notional,
         "hold_mode": settings.hold_mode,
-        "note": "real-execution P&L requires live mode",
+        "exit_reason": exit_reason,
+        "elapsed_seconds": elapsed,
     }
 
 
@@ -407,7 +604,7 @@ async def fire_live(
         return {"mode": "live", "action": "buy_zero_fill", "symbol": pair,
                 "buy_order": buy_order}
 
-    # Hold logic — same shape as listing_detector._hold_then_sell_price.
+    # Hold logic — flat, trailing, or momentum.
     elapsed = 0.0
     exit_reason = ""
     await asyncio.sleep(settings.hold_seconds)
@@ -416,6 +613,7 @@ async def fire_live(
         exit_reason = "flat_hold_elapsed"
     else:
         from src.listing_detector import _ticker_last_price
+        samples: list[tuple[float, float]] = [(0.0, avg_buy)]
         peak = max(avg_buy, await _ticker_last_price(spot_client, pair) or avg_buy)
         stop_factor = 1.0 - settings.trailing_stop_pct / 100.0
         while elapsed < settings.max_hold_seconds:
@@ -424,15 +622,23 @@ async def fire_live(
             last = await _ticker_last_price(spot_client, pair)
             if last is None:
                 continue
+            samples.append((elapsed, last))
             if last > peak:
                 peak = last
-                continue
-            if last <= peak * stop_factor:
-                exit_reason = (
-                    f"trailing_stop_hit: last={last:.8f} <= peak*{stop_factor:.4f}"
-                    f"={peak * stop_factor:.8f}"
+            if settings.hold_mode == "trailing":
+                if last <= peak * stop_factor:
+                    exit_reason = (
+                        f"trailing_stop_hit: last={last:.8f} <= peak*{stop_factor:.4f}"
+                        f"={peak * stop_factor:.8f}"
+                    )
+                    break
+            elif settings.hold_mode == "momentum":
+                should_exit, reason = momentum_should_exit(
+                    settings=settings, samples=samples, peak=peak,
                 )
-                break
+                if should_exit:
+                    exit_reason = reason
+                    break
         else:
             exit_reason = "max_hold_seconds_reached"
 
@@ -512,7 +718,9 @@ async def run_cycle(
                 "timestamp": _utc_timestamp(), "symbol": symbol, **result,
             })
         elif mode == "paper":
-            result = await fire_paper(symbol=symbol, settings=settings)
+            result = await fire_paper(
+                symbol=symbol, settings=settings, session=session,
+            )
             actions.append(result)
             state.daily_spend.add(settings.notional_usdt)
             state.sniped_symbols.add(symbol)

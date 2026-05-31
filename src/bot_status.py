@@ -67,11 +67,23 @@ KNOWN_BOTS: dict[str, dict[str, str]] = {
         "ledger": "mean-reversion-ledger.jsonl",
         "timer": "binance-mean-reversion-paper.service",
     },
-    "listing_sniper_paper": {
-        "state": "listing-sniper-state.json",
-        "audit": "listing-sniper-events.jsonl",
-        "ledger": "listing-sniper-ledger.jsonl",
-        "timer": "binance-listing-sniper.service",
+    "listing_sniper_flat": {
+        "state": "listing-sniper-flat-state.json",
+        "audit": "listing-sniper-flat-events.jsonl",
+        "ledger": "listing-sniper-flat-ledger.jsonl",
+        "timer": "binance-listing-sniper-flat.service",
+    },
+    "listing_sniper_trailing": {
+        "state": "listing-sniper-trailing-state.json",
+        "audit": "listing-sniper-trailing-events.jsonl",
+        "ledger": "listing-sniper-trailing-ledger.jsonl",
+        "timer": "binance-listing-sniper-trailing.service",
+    },
+    "listing_sniper_momentum": {
+        "state": "listing-sniper-momentum-state.json",
+        "audit": "listing-sniper-momentum-events.jsonl",
+        "ledger": "listing-sniper-momentum-ledger.jsonl",
+        "timer": "binance-listing-sniper-momentum.service",
     },
     "claude_spot": {
         "state": "",  # stateless cycle

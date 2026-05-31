@@ -17,6 +17,7 @@ from src.listing_sniper import (
     fetch_trading_symbols_for_quote,
     fire_paper,
     load_state,
+    momentum_should_exit,
     save_state,
 )
 
@@ -248,11 +249,147 @@ async def test_fetch_trading_symbols_raises_on_http_error() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _ScriptedPriceSession:
+    """Mock aiohttp.ClientSession that returns scripted prices via /ticker/price."""
+
+    def __init__(self, prices: list[float]) -> None:
+        self._prices = list(prices)
+        self.requests: list[dict] = []
+
+    def get(self, url, *, params=None, timeout=None):
+        self.requests.append({"url": url, "params": params})
+
+        class _Resp:
+            def __init__(inner, status, payload):
+                inner.status = status
+                inner._payload = payload
+            async def __aenter__(inner): return inner
+            async def __aexit__(inner, *a): return None
+            async def json(inner): return inner._payload
+
+        if self._prices:
+            price = self._prices.pop(0)
+            return _Resp(200, {"price": str(price)})
+        return _Resp(503, None)
+
+
 @pytest.mark.asyncio
-async def test_fire_paper_returns_would_buy_record(tmp_path: Path) -> None:
-    s = _settings(tmp_path, notional_usdt=7.5)
-    result = await fire_paper(symbol="FOOUSDT", settings=s)
+async def test_fire_paper_flat_mode_records_entry_and_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    s = _settings(tmp_path, notional_usdt=10.0, hold_mode="flat", hold_seconds=0)
+    # Two prices: first call = entry, second call after sleep = exit.
+    session = _ScriptedPriceSession([1.0, 1.10])
+    result = await fire_paper(symbol="FOOUSDT", settings=s, session=session)
     assert result["mode"] == "paper"
-    assert result["action"] == "would_buy"
-    assert result["symbol"] == "FOOUSDT"
-    assert result["notional_usdt"] == 7.5
+    assert result["action"] == "round_trip_complete"
+    assert result["entry_price"] == pytest.approx(1.0)
+    assert result["exit_price"] == pytest.approx(1.10)
+    # Gross +10%, minus 0.2% fee drag = 9.8%. On $10 notional → $0.98.
+    assert result["gross_pnl_pct"] == pytest.approx(10.0)
+    assert result["pnl_usdt"] == pytest.approx(0.98, abs=0.01)
+    assert result["hold_mode"] == "flat"
+    assert result["exit_reason"] == "flat_hold_elapsed"
+
+
+@pytest.mark.asyncio
+async def test_fire_paper_returns_skipped_when_entry_price_unavailable(
+    tmp_path: Path,
+) -> None:
+    s = _settings(tmp_path, hold_mode="flat", hold_seconds=0)
+    session = _ScriptedPriceSession([])  # No prices available
+    result = await fire_paper(symbol="FOOUSDT", settings=s, session=session)
+    assert result["action"] == "buy_skipped_no_price"
+
+
+# ---------------------------------------------------------------------------
+# Momentum exit logic
+# ---------------------------------------------------------------------------
+
+
+def _mom_settings(tmp_path: Path, **overrides) -> ListingSniperSettings:
+    base = dict(hold_mode="momentum", momentum_negative_polls_to_exit=2,
+                momentum_no_new_high_polls_to_exit=5,
+                momentum_ma_short_samples=3, momentum_ma_long_samples=6,
+                momentum_ma_cross_min_pullback_pct=5.0)
+    base.update(overrides)
+    return _settings(tmp_path, **base)
+
+
+def test_momentum_does_not_exit_with_too_few_samples(tmp_path: Path) -> None:
+    s = _mom_settings(tmp_path)
+    samples = [(0.0, 1.0)]
+    should, reason = momentum_should_exit(settings=s, samples=samples, peak=1.0)
+    assert should is False
+
+
+def test_momentum_exits_on_consecutive_negative_velocity(tmp_path: Path) -> None:
+    s = _mom_settings(tmp_path, momentum_negative_polls_to_exit=2)
+    # Climb, then two strictly-decreasing samples.
+    samples = [(0.0, 1.0), (10.0, 1.20), (20.0, 1.10), (30.0, 1.05)]
+    should, reason = momentum_should_exit(settings=s, samples=samples, peak=1.20)
+    assert should is True
+    assert "momentum_negative_for_2_polls" in reason
+
+
+def test_momentum_no_exit_when_single_dip_then_recovery(tmp_path: Path) -> None:
+    s = _mom_settings(tmp_path, momentum_negative_polls_to_exit=2)
+    samples = [(0.0, 1.0), (10.0, 1.20), (20.0, 1.10), (30.0, 1.30)]
+    should, _ = momentum_should_exit(settings=s, samples=samples, peak=1.30)
+    assert should is False
+
+
+def test_momentum_exits_when_no_new_high_for_n_polls(tmp_path: Path) -> None:
+    s = _mom_settings(tmp_path, momentum_no_new_high_polls_to_exit=3,
+                       momentum_negative_polls_to_exit=999,
+                       momentum_ma_short_samples=2, momentum_ma_long_samples=99)
+    # Peak at sample idx 1, then 3 polls at lower values without new high.
+    samples = [(0.0, 1.0), (10.0, 2.0), (20.0, 1.5), (30.0, 1.6), (40.0, 1.7)]
+    should, reason = momentum_should_exit(settings=s, samples=samples, peak=2.0)
+    assert should is True
+    assert "no_new_high" in reason
+
+
+def test_momentum_ma_cross_requires_pullback(tmp_path: Path) -> None:
+    s = _mom_settings(tmp_path, momentum_ma_cross_min_pullback_pct=10.0,
+                       momentum_negative_polls_to_exit=999,
+                       momentum_no_new_high_polls_to_exit=999)
+    # Short MA below long MA, but only 1% pullback from peak.
+    samples = [(0.0, 1.0), (1.0, 1.05), (2.0, 1.10), (3.0, 1.15),
+                (4.0, 1.18), (5.0, 1.16)]
+    should, reason = momentum_should_exit(settings=s, samples=samples, peak=1.18)
+    # short_ma (last 3): (1.15+1.18+1.16)/3 = 1.163
+    # long_ma  (last 6): (1.0+1.05+1.10+1.15+1.18+1.16)/6 = 1.107
+    # short_ma > long_ma; no MA cross → no exit.
+    assert should is False
+
+
+def test_momentum_ma_cross_fires_with_sufficient_pullback(tmp_path: Path) -> None:
+    s = _mom_settings(tmp_path, momentum_ma_cross_min_pullback_pct=5.0,
+                       momentum_negative_polls_to_exit=999,
+                       momentum_no_new_high_polls_to_exit=999)
+    # Peak then sustained decline so short_ma < long_ma AND pullback > 5%.
+    samples = [(0.0, 1.0), (1.0, 1.10), (2.0, 1.20), (3.0, 1.15),
+                (4.0, 1.05), (5.0, 1.00)]
+    # short_ma last 3: (1.15+1.05+1.00)/3 = 1.067
+    # long_ma  last 6: (1+1.1+1.2+1.15+1.05+1.00)/6 = 1.083
+    # short_ma < long_ma. Pullback: (1.20-1.00)/1.20 = 16.7% > 5%.
+    should, reason = momentum_should_exit(settings=s, samples=samples, peak=1.20)
+    assert should is True
+    assert "ma_cross_with_pullback" in reason
+
+
+# ---------------------------------------------------------------------------
+# Settings: momentum validation
+# ---------------------------------------------------------------------------
+
+
+def test_settings_rejects_short_ma_geq_long_ma(tmp_path: Path) -> None:
+    with pytest.raises(ListingSniperError, match="momentum_ma_short_samples"):
+        _settings(tmp_path, hold_mode="momentum",
+                  momentum_ma_short_samples=6, momentum_ma_long_samples=6)
+
+
+def test_settings_accepts_momentum_mode(tmp_path: Path) -> None:
+    s = _settings(tmp_path, hold_mode="momentum")
+    assert s.hold_mode == "momentum"
