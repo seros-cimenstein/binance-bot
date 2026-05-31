@@ -70,6 +70,12 @@ class ListingSniperSettings:
     max_hold_seconds: int = 14_400  # 4 hours
     trailing_poll_interval_seconds: int = 10
 
+    # Universal hard stop loss — active from tick 1 in ALL hold modes,
+    # before the noise-filter floor (hold_seconds) finishes. Catches rug
+    # pulls and immediate-dump scenarios where the configured smart-exit
+    # logic would be sleeping. Set to 0 (or positive) to disable.
+    hard_stop_loss_pct: float = -25.0
+
     # Momentum knobs (used when hold_mode="momentum"):
     momentum_negative_polls_to_exit: int = 2  # consecutive negative-velocity polls
     momentum_no_new_high_polls_to_exit: int = 5  # polls without a new peak
@@ -173,6 +179,9 @@ class ListingSniperSettings:
             momentum_ma_cross_min_pullback_pct=_float(
                 "LISTING_SNIPER_MOMENTUM_MA_CROSS_MIN_PULLBACK_PCT",
                 defaults.momentum_ma_cross_min_pullback_pct,
+            ),
+            hard_stop_loss_pct=_float(
+                "LISTING_SNIPER_HARD_STOP_LOSS_PCT", defaults.hard_stop_loss_pct,
             ),
             daily_spend_cap_usdt=_float(
                 "LISTING_SNIPER_DAILY_SPEND_CAP_USDT", defaults.daily_spend_cap_usdt,
@@ -488,12 +497,33 @@ async def _hold_paper(
     rest_symbol: str,
     entry_price: float,
 ) -> tuple[float, str, float]:
-    """Polling loop that simulates the hold and returns (exit_price, reason, elapsed)."""
-    await asyncio.sleep(settings.hold_seconds)
-    elapsed = float(settings.hold_seconds)
+    """Unified polling hold loop. Returns (exit_price, reason, elapsed).
+
+    Polls every ``trailing_poll_interval_seconds`` from tick 1. At each poll:
+
+      1. Hard stop loss: if ``hard_stop_loss_pct`` is negative AND the last
+         price is at or below the stop level, exit immediately — regardless
+         of which hold_mode or whether we're still inside the noise-filter
+         floor. This is the rug-pull catch.
+
+      2. Floor period (elapsed < hold_seconds): only the hard stop applies;
+         smart-exit logic is silent because the orderbook is too noisy to
+         read reliably right after listing open.
+
+      3. Post-floor: mode-specific exit checks fire (flat / trailing /
+         momentum). The hard stop still applies in addition.
+
+      4. Max hold cap (elapsed >= max_hold_seconds): force exit.
+    """
     samples: list[tuple[float, float]] = [(0.0, entry_price)]
     peak = entry_price
-    stop_factor = 1.0 - settings.trailing_stop_pct / 100.0
+    elapsed = 0.0
+    stop_price = (
+        entry_price * (1.0 + settings.hard_stop_loss_pct / 100.0)
+        if settings.hard_stop_loss_pct < 0 else 0.0
+    )
+    trailing_stop_factor = 1.0 - settings.trailing_stop_pct / 100.0
+
     while elapsed < settings.max_hold_seconds:
         await asyncio.sleep(settings.trailing_poll_interval_seconds)
         elapsed += settings.trailing_poll_interval_seconds
@@ -504,16 +534,25 @@ async def _hold_paper(
         if last > peak:
             peak = last
 
-        if settings.hold_mode == "flat":
-            # Paper-mode "flat" exits at the initial floor only — we never enter
-            # the while loop because hold_seconds == max_hold_seconds is unusual.
-            # Keep the branch for completeness.
+        # 1. Universal hard stop — active from tick 1.
+        if stop_price > 0 and last <= stop_price:
+            return last, (
+                f"hard_stop_loss_hit: last={last:.8f} <= stop_price="
+                f"{stop_price:.8f} ({settings.hard_stop_loss_pct:.1f}% from entry)"
+            ), elapsed
+
+        # 2. Inside noise-filter floor: skip smart-exit logic.
+        if elapsed < settings.hold_seconds:
             continue
+
+        # 3. Post-floor mode-specific exit.
+        if settings.hold_mode == "flat":
+            return last, "flat_hold_elapsed", elapsed
         if settings.hold_mode == "trailing":
-            if last <= peak * stop_factor:
+            if last <= peak * trailing_stop_factor:
                 return last, (
                     f"trailing_stop_hit: last={last:.8f} <= "
-                    f"peak*{stop_factor:.4f}={peak * stop_factor:.8f}"
+                    f"peak*{trailing_stop_factor:.4f}={peak * trailing_stop_factor:.8f}"
                 ), elapsed
         elif settings.hold_mode == "momentum":
             should_exit, reason = momentum_should_exit(
@@ -522,8 +561,8 @@ async def _hold_paper(
             if should_exit:
                 return last, reason, elapsed
 
-    last = samples[-1][1] if samples else entry_price
-    return last, "max_hold_seconds_reached", elapsed
+    last_price = samples[-1][1] if samples else entry_price
+    return last_price, "max_hold_seconds_reached", elapsed
 
 
 async def fire_paper(
@@ -546,18 +585,10 @@ async def fire_paper(
             "symbol": symbol, "hold_mode": settings.hold_mode,
         }
 
-    # "Flat" paper mode: just sleep and read again — no polling loop needed.
-    if settings.hold_mode == "flat":
-        await asyncio.sleep(settings.hold_seconds)
-        exit_price = await fetch_public_last_price(session=session, rest_symbol=rest_symbol)
-        exit_price = exit_price if exit_price and exit_price > 0 else entry_price
-        elapsed = float(settings.hold_seconds)
-        exit_reason = "flat_hold_elapsed"
-    else:
-        exit_price, exit_reason, elapsed = await _hold_paper(
-            settings=settings, session=session,
-            rest_symbol=rest_symbol, entry_price=entry_price,
-        )
+    exit_price, exit_reason, elapsed = await _hold_paper(
+        settings=settings, session=session,
+        rest_symbol=rest_symbol, entry_price=entry_price,
+    )
 
     gross_pct = (exit_price / entry_price - 1.0) * 100.0
     # Approximate round-trip fees: 10 bps taker each side = 20 bps total.
@@ -604,43 +635,55 @@ async def fire_live(
         return {"mode": "live", "action": "buy_zero_fill", "symbol": pair,
                 "buy_order": buy_order}
 
-    # Hold logic — flat, trailing, or momentum.
+    # Unified hold loop with hard stop loss active from tick 1 —
+    # exactly mirrors _hold_paper. See its docstring for the rules.
+    from src.listing_detector import _ticker_last_price
+    samples: list[tuple[float, float]] = [(0.0, avg_buy)]
+    peak = avg_buy
     elapsed = 0.0
     exit_reason = ""
-    await asyncio.sleep(settings.hold_seconds)
-    elapsed = float(settings.hold_seconds)
-    if settings.hold_mode == "flat":
-        exit_reason = "flat_hold_elapsed"
-    else:
-        from src.listing_detector import _ticker_last_price
-        samples: list[tuple[float, float]] = [(0.0, avg_buy)]
-        peak = max(avg_buy, await _ticker_last_price(spot_client, pair) or avg_buy)
-        stop_factor = 1.0 - settings.trailing_stop_pct / 100.0
-        while elapsed < settings.max_hold_seconds:
-            await asyncio.sleep(settings.trailing_poll_interval_seconds)
-            elapsed += settings.trailing_poll_interval_seconds
-            last = await _ticker_last_price(spot_client, pair)
-            if last is None:
-                continue
-            samples.append((elapsed, last))
-            if last > peak:
-                peak = last
-            if settings.hold_mode == "trailing":
-                if last <= peak * stop_factor:
-                    exit_reason = (
-                        f"trailing_stop_hit: last={last:.8f} <= peak*{stop_factor:.4f}"
-                        f"={peak * stop_factor:.8f}"
-                    )
-                    break
-            elif settings.hold_mode == "momentum":
-                should_exit, reason = momentum_should_exit(
-                    settings=settings, samples=samples, peak=peak,
+    stop_price = (
+        avg_buy * (1.0 + settings.hard_stop_loss_pct / 100.0)
+        if settings.hard_stop_loss_pct < 0 else 0.0
+    )
+    trailing_stop_factor = 1.0 - settings.trailing_stop_pct / 100.0
+    while elapsed < settings.max_hold_seconds:
+        await asyncio.sleep(settings.trailing_poll_interval_seconds)
+        elapsed += settings.trailing_poll_interval_seconds
+        last = await _ticker_last_price(spot_client, pair)
+        if last is None:
+            continue
+        samples.append((elapsed, last))
+        if last > peak:
+            peak = last
+
+        if stop_price > 0 and last <= stop_price:
+            exit_reason = (
+                f"hard_stop_loss_hit: last={last:.8f} <= stop_price="
+                f"{stop_price:.8f} ({settings.hard_stop_loss_pct:.1f}% from entry)"
+            )
+            break
+        if elapsed < settings.hold_seconds:
+            continue
+        if settings.hold_mode == "flat":
+            exit_reason = "flat_hold_elapsed"
+            break
+        if settings.hold_mode == "trailing":
+            if last <= peak * trailing_stop_factor:
+                exit_reason = (
+                    f"trailing_stop_hit: last={last:.8f} <= peak*"
+                    f"{trailing_stop_factor:.4f}={peak * trailing_stop_factor:.8f}"
                 )
-                if should_exit:
-                    exit_reason = reason
-                    break
-        else:
-            exit_reason = "max_hold_seconds_reached"
+                break
+        elif settings.hold_mode == "momentum":
+            should_exit, reason = momentum_should_exit(
+                settings=settings, samples=samples, peak=peak,
+            )
+            if should_exit:
+                exit_reason = reason
+                break
+    else:
+        exit_reason = "max_hold_seconds_reached"
 
     try:
         sell_order = await spot_client.create_order(

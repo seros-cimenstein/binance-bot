@@ -393,3 +393,75 @@ def test_settings_rejects_short_ma_geq_long_ma(tmp_path: Path) -> None:
 def test_settings_accepts_momentum_mode(tmp_path: Path) -> None:
     s = _settings(tmp_path, hold_mode="momentum")
     assert s.hold_mode == "momentum"
+
+
+# ---------------------------------------------------------------------------
+# Hard stop loss (universal, active from tick 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_fires_inside_floor_for_flat_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rug-pull scenario: price craters during the floor period.
+
+    Hold mode is "flat" with a 30s floor. We set the floor and poll
+    interval to zero so the test runs in milliseconds, but conceptually:
+    even though flat mode would normally sit through the whole hold
+    without an exit check, the hard stop fires the moment price drops
+    25% from entry.
+    """
+    s = _settings(tmp_path, hold_mode="flat", hold_seconds=30,
+                  trailing_poll_interval_seconds=0, max_hold_seconds=600,
+                  hard_stop_loss_pct=-25.0)
+    # Entry 1.0, then a -30% dump on the very next poll → triggers hard stop.
+    session = _ScriptedPriceSession([1.0, 0.70])
+    result = await fire_paper(symbol="RUGUSDT", settings=s, session=session)
+    assert result["action"] == "round_trip_complete"
+    assert "hard_stop_loss_hit" in result["exit_reason"]
+    # Net P&L: gross -30% minus 0.2% fee = -30.2%.
+    assert result["gross_pnl_pct"] == pytest.approx(-30.0)
+    assert result["net_pnl_pct"] == pytest.approx(-30.2)
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_fires_inside_floor_for_momentum_mode(
+    tmp_path: Path,
+) -> None:
+    s = _settings(tmp_path, hold_mode="momentum", hold_seconds=30,
+                  trailing_poll_interval_seconds=0, max_hold_seconds=600,
+                  hard_stop_loss_pct=-25.0)
+    session = _ScriptedPriceSession([1.0, 0.50])  # -50% dump
+    result = await fire_paper(symbol="RUGUSDT", settings=s, session=session)
+    assert "hard_stop_loss_hit" in result["exit_reason"]
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_inactive_when_pct_zero(tmp_path: Path) -> None:
+    """Setting hard_stop_loss_pct=0 disables the hard stop entirely."""
+    s = _settings(tmp_path, hold_mode="flat", hold_seconds=0,
+                  trailing_poll_interval_seconds=0, max_hold_seconds=600,
+                  hard_stop_loss_pct=0.0)
+    session = _ScriptedPriceSession([1.0, 0.30])  # -70% dump
+    result = await fire_paper(symbol="RUGUSDT", settings=s, session=session)
+    # Even though price cratered 70%, hard stop was disabled, so flat mode
+    # falls through to the post-floor flat_hold_elapsed exit.
+    assert result["exit_reason"] == "flat_hold_elapsed"
+    assert result["gross_pnl_pct"] == pytest.approx(-70.0)
+
+
+@pytest.mark.asyncio
+async def test_normal_dip_inside_floor_does_not_fire_hard_stop(
+    tmp_path: Path,
+) -> None:
+    """A 10% dip inside the floor should NOT trigger the -25% hard stop."""
+    s = _settings(tmp_path, hold_mode="flat", hold_seconds=0,
+                  trailing_poll_interval_seconds=0, max_hold_seconds=600,
+                  hard_stop_loss_pct=-25.0)
+    # Entry 1.0, small 10% dip, then recover to 0.95 (the exit price).
+    session = _ScriptedPriceSession([1.0, 0.90, 0.95])
+    result = await fire_paper(symbol="DIPUSDT", settings=s, session=session)
+    assert "hard_stop" not in result["exit_reason"]
+    # Falls through to flat_hold_elapsed at the first post-floor poll.
+    assert result["exit_reason"] == "flat_hold_elapsed"
