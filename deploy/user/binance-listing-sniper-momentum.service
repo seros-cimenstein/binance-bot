@@ -1,5 +1,5 @@
 [Unit]
-Description=Binance Listing Sniper (paper, momentum hold)
+Description=Binance Listing Sniper (LIVE, momentum hold)
 After=network-online.target
 Wants=network-online.target
 
@@ -12,7 +12,7 @@ Environment=LISTING_SNIPER_STATE_PATH=%h/.local/share/binance-bot/data/listing-s
 Environment=LISTING_SNIPER_AUDIT_PATH=%h/.local/share/binance-bot/data/listing-sniper-momentum-events.jsonl
 Environment=LISTING_SNIPER_LEDGER_PATH=%h/.local/share/binance-bot/data/listing-sniper-momentum-ledger.jsonl
 Environment=LISTING_SNIPER_EMERGENCY_STOP_PATH=%h/.local/share/binance-bot/data/listing-sniper-momentum.stop
-ExecStart=%h/.local/share/binance-bot/venv/bin/python -m src.listing_sniper --paper --daemon
+ExecStart=%h/.local/share/binance-bot/venv/bin/python -m src.listing_sniper --submit-live --daemon
 Restart=always
 RestartSec=10
 StandardOutput=journal
