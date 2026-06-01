@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily trigger for binance-airdrop-reminder.service
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+Unit=binance-airdrop-reminder.service
+
+[Install]
+WantedBy=timers.target

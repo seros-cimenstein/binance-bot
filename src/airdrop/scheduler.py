@@ -242,6 +242,18 @@ def run(argv: list[str] | None = None) -> int:
     p_undone.add_argument("wallet_name")
     p_undone.add_argument("opportunity_name")
 
+    p_remind = sub.add_parser(
+        "remind",
+        help="snapshot wallet activity, auto-mark active wallets done, "
+             "and push the pending digest to Telegram",
+    )
+    p_remind.add_argument(
+        "--activity-path",
+        default=os.path.expanduser(
+            "~/.local/share/binance-bot/data/airdrop-activity.json"
+        ),
+    )
+
     args = parser.parse_args(argv)
 
     try:
@@ -298,6 +310,27 @@ def run(argv: list[str] | None = None) -> int:
         save_state(state, args.state_path)
         print(json.dumps({"task": key.as_str(), "command": args.command,
                            "iso_week": iso}, indent=2))
+        return 0
+
+    if args.command == "remind":
+        import asyncio
+
+        from src.airdrop.reminder import ReminderSettings, run_reminder
+
+        settings = ReminderSettings.from_env()
+        result = asyncio.run(run_reminder(
+            settings=settings,
+            store_path=Path(args.store_path),
+            state_path=Path(args.state_path),
+            activity_path=Path(args.activity_path),
+        ))
+        print(json.dumps({
+            "iso_week": result.iso_week,
+            "active_wallets": result.active_wallets,
+            "auto_marked": result.auto_marked,
+            "pending_rows": result.pending_rows,
+            "telegram_pushed": result.telegram_pushed,
+        }, indent=2))
         return 0
 
     return 0
