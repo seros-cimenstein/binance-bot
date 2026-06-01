@@ -81,6 +81,9 @@ class ListingDetectorSettings:
     audit_path: str = "data/listing-detector-events.jsonl"
     ledger_path: str = "data/listing-detector-ledger.jsonl"
     emergency_stop_path: str = "data/listing-detector.stop"
+    # Shared watchlist consumed by listing_sniper. Defaults to the same path
+    # the sniper reads from. Per-sniper overrides go via env on the sniper.
+    watchlist_path: str = "data/listing-watchlist.json"
 
     api_key: str = ""
     api_secret: str = ""
@@ -128,6 +131,7 @@ class ListingDetectorSettings:
             audit_path=os.getenv("LISTING_DETECTOR_AUDIT_PATH", "data/listing-detector-events.jsonl"),
             ledger_path=os.getenv("LISTING_DETECTOR_LEDGER_PATH", "data/listing-detector-ledger.jsonl"),
             emergency_stop_path=os.getenv("LISTING_DETECTOR_EMERGENCY_STOP_PATH", "data/listing-detector.stop"),
+            watchlist_path=os.getenv("LISTING_WATCHLIST_PATH", "data/listing-watchlist.json"),
             api_key=api_key, api_secret=api_secret,
         )
 
@@ -452,6 +456,36 @@ async def run_once(
 
     enriched: list[ListingEvent] = []
     actions: list[dict[str, Any]] = []
+
+    # Append fresh spot_list announcements to the shared watchlist so the
+    # listing_sniper can pre-arm the corresponding {token}{quote_asset} pair
+    # — that way the sniper fires the moment the symbol transitions to
+    # TRADING on exchangeInfo, even if it had been bootstrapped as "known."
+    if new_events:
+        from src.listing_watchlist import (
+            WatchlistError, build_watch_entry, load_watchlist, save_watchlist,
+        )
+        try:
+            wl = load_watchlist(settings.watchlist_path)
+            watchlist_added: list[str] = []
+            for event in new_events:
+                if event.listing_type != "spot_list" or not event.detected_tokens:
+                    continue
+                for token in event.detected_tokens:
+                    if wl.add(build_watch_entry(
+                        token=token, article_id=event.article_id,
+                        announced_at_ms=event.release_time_ms or _utc_now_ms(),
+                    )):
+                        watchlist_added.append(token)
+            if watchlist_added:
+                save_watchlist(wl, settings.watchlist_path)
+                actions.append({
+                    "action": "watchlist_armed", "tokens": watchlist_added,
+                })
+        except WatchlistError as exc:
+            actions.append({"action": "watchlist_error",
+                             "reason": f"{type(exc).__name__}: {str(exc)[:200]}"})
+
     for event in new_events:
         # Resolve all tradeable pairs for this announcement's tokens.
         if (event.listing_type == "spot_list" and event.detected_tokens

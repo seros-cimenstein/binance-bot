@@ -31,6 +31,7 @@ from typing import Any, Iterable, Mapping
 
 import aiohttp
 from dotenv import load_dotenv
+from loguru import logger
 
 
 EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo"
@@ -91,6 +92,10 @@ class ListingSniperSettings:
     audit_path: str = "data/listing-sniper-events.jsonl"
     ledger_path: str = "data/listing-sniper-ledger.jsonl"
     emergency_stop_path: str = "data/listing-sniper.stop"
+    # Shared watchlist written by listing_detector. Each entry pre-arms a
+    # token/pair so the sniper fires the moment exchangeInfo shows it
+    # TRADING — even if the symbol is in known_trading_symbols.
+    watchlist_path: str = "data/listing-watchlist.json"
 
     def validate(self) -> None:
         if self.poll_interval_seconds < 1.0:
@@ -196,6 +201,7 @@ class ListingSniperSettings:
             emergency_stop_path=os.getenv(
                 "LISTING_SNIPER_EMERGENCY_STOP_PATH", defaults.emergency_stop_path,
             ),
+            watchlist_path=os.getenv("LISTING_WATCHLIST_PATH", defaults.watchlist_path),
         )
         settings.validate()
         return settings
@@ -254,6 +260,13 @@ class ListingSniperState:
     daily_spend: DailySpend = field(default_factory=lambda: DailySpend(
         date_utc=datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
     ))
+    # Pre-armed pairs from the shared watchlist. When one of these appears
+    # in current exchangeInfo as TRADING we fire on it even if the symbol
+    # is already in known_trading_symbols (i.e. it was captured at bootstrap).
+    watched_pending: set[str] = field(default_factory=set)
+    # Article IDs already pulled from the watchlist into watched_pending —
+    # prevents re-arming the same announcement after we've fired and cleaned up.
+    processed_article_ids: set[int] = field(default_factory=set)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -262,6 +275,8 @@ class ListingSniperState:
             "sniped_symbols": sorted(self.sniped_symbols),
             "daily_spend": {"date_utc": self.daily_spend.date_utc,
                              "spent_usdt": self.daily_spend.spent_usdt},
+            "watched_pending": sorted(self.watched_pending),
+            "processed_article_ids": sorted(self.processed_article_ids),
         }
 
     @classmethod
@@ -275,6 +290,10 @@ class ListingSniperState:
                 date_utc=str(ds.get("date_utc")
                               or datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")),
                 spent_usdt=float(ds.get("spent_usdt") or 0.0),
+            ),
+            watched_pending=set(payload.get("watched_pending") or ()),
+            processed_article_ids=set(
+                int(a) for a in (payload.get("processed_article_ids") or ())
             ),
         )
 
@@ -379,16 +398,67 @@ def compute_new_listings(
 ) -> list[str]:
     """Return symbols freshly entering TRADING status this cycle.
 
-    The first cycle after process start populates ``known_trading_symbols``
-    without firing — we don't want to "snipe" the entire existing universe.
-    Subsequent cycles return the set difference, excluding anything we've
-    already sniped this run.
+    Two sources:
+
+    1. **Symbol diff.** The first cycle after process start populates
+       ``known_trading_symbols`` without firing — we don't want to "snipe"
+       the entire existing universe. Subsequent cycles fire on pairs that
+       weren't there last cycle.
+
+    2. **Pre-armed watchlist.** Any pair in ``state.watched_pending`` that
+       is currently TRADING fires regardless of bootstrap state — this is
+       the detector→sniper handoff that lets us catch announcements we'd
+       otherwise miss because the symbol was already in our known set.
+
+    ``sniped_symbols`` filters both paths so we don't double-fire across
+    daemon restarts.
     """
     current = set(current_symbols)
-    if not state.bootstrapped:
+    diff_fresh: set[str] = set()
+    if state.bootstrapped:
+        diff_fresh = current - state.known_trading_symbols
+    watched_now_trading = state.watched_pending & current
+    fresh = (diff_fresh | watched_now_trading) - state.sniped_symbols
+    return sorted(fresh)
+
+
+def arm_from_watchlist(
+    *,
+    state: ListingSniperState,
+    watchlist_path: str,
+    quote_asset: str,
+) -> list[str]:
+    """Read the shared watchlist and add any not-yet-processed entries to
+    ``state.watched_pending``. Returns the list of symbols newly armed.
+
+    Tokens are converted to the sniper-configured quote pair (e.g.
+    ``AIGENSYN`` + ``USDT`` -> ``AIGENSYNUSDT``). Watchlist read failures
+    are logged via caller exception path; here a missing file is just
+    "no new entries."
+    """
+    from src.listing_watchlist import WatchlistError, load_watchlist
+
+    try:
+        wl = load_watchlist(watchlist_path)
+    except WatchlistError as exc:
+        logger.warning(f"listing sniper: watchlist read failed: {exc}")
         return []
-    fresh = sorted(current - state.known_trading_symbols - state.sniped_symbols)
-    return fresh
+
+    newly_armed: list[str] = []
+    for entry in wl.entries:
+        if entry.article_id in state.processed_article_ids:
+            continue
+        symbol = f"{entry.token}{quote_asset}".upper()
+        state.processed_article_ids.add(entry.article_id)
+        if symbol in state.sniped_symbols:
+            # Already sniped — don't re-arm. (Daemon may have fired before
+            # the announcement landed in the watchlist; harmless.)
+            continue
+        if symbol in state.watched_pending:
+            continue
+        state.watched_pending.add(symbol)
+        newly_armed.append(symbol)
+    return newly_armed
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +801,16 @@ async def run_cycle(
         raise ListingSniperError(f"unknown mode: {mode}")
     _preflight(settings, submit_order=(mode == "live"))
 
+    # Pull any fresh detector announcements into watched_pending. These
+    # arm the sniper to fire on specific pairs regardless of the bootstrap
+    # diff (i.e. catches "Binance Will List X" announcements that landed
+    # while the daemon was already aware of XUSDT as a known-trading
+    # symbol).
+    newly_armed = arm_from_watchlist(
+        state=state, watchlist_path=settings.watchlist_path,
+        quote_asset=settings.quote_asset,
+    )
+
     current = await fetch_trading_symbols_for_quote(
         session=session, quote_asset=settings.quote_asset,
     )
@@ -757,6 +837,7 @@ async def run_cycle(
             actions.append(result)
             state.daily_spend.add(settings.notional_usdt)
             state.sniped_symbols.add(symbol)
+            state.watched_pending.discard(symbol)
             _append_ledger(settings.ledger_path, {
                 "timestamp": _utc_timestamp(), "symbol": symbol, **result,
             })
@@ -767,6 +848,7 @@ async def run_cycle(
             actions.append(result)
             state.daily_spend.add(settings.notional_usdt)
             state.sniped_symbols.add(symbol)
+            state.watched_pending.discard(symbol)
             _append_ledger(settings.ledger_path, {
                 "timestamp": _utc_timestamp(), "symbol": symbol, **result,
             })
@@ -785,6 +867,8 @@ async def run_cycle(
         "daily_spent_usdt": state.daily_spend.spent_usdt,
         "daily_cap_usdt": settings.daily_spend_cap_usdt,
         "sniped_lifetime": len(state.sniped_symbols),
+        "watched_pending": sorted(state.watched_pending),
+        "newly_armed_this_cycle": newly_armed,
     }
     _append_audit(settings.audit_path, payload)
     save_state(state, settings.state_path)
