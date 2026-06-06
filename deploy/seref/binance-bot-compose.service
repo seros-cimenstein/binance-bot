@@ -1,0 +1,25 @@
+[Unit]
+Description=Bring up Binance bot docker-compose fleet on boot
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=seref
+Group=docker
+WorkingDirectory=/home/seref/binance-bot
+# Idempotent: brings up missing containers, no-op for already-running ones.
+# Recreates only if config changed (e.g. compose file edit).
+ExecStart=/usr/bin/docker compose --profile all up -d
+# On shutdown, leave containers running so restart=unless-stopped policy
+# handles them. We do NOT run "compose down" here — that would defeat
+# the policy and prevent auto-recovery after the next boot.
+ExecStop=/bin/true
+TimeoutStartSec=180
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
