@@ -29,6 +29,11 @@ x-base: &base
   volumes:
     - ${BOT_DATA_DIR:-./docker-data}:/app/data
     - ${BOT_BACKUP_DIR:-./docker-backups}:/app/backups
+  # Pin DNS to public resolvers — bypasses host router which times out
+  # under aiodns load (sniper-paper hammers Solana/Jupiter endpoints).
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
   environment:
     TZ: UTC
     BINANCE_BOT_BACKUP_DIR: /app/backups
