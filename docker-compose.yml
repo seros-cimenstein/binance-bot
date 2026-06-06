@@ -1,0 +1,143 @@
+# docker-compose.yml — Binance bot fleet
+#
+# Each long-running systemd unit in deploy/user/ becomes a container here.
+# Periodic units (funding-arb, listing-detector, trend-filter, airdrop, backups)
+# are consolidated into the `scheduler` container via supercronic.
+#
+# Layout:
+#   - Code is baked into the image.
+#   - /app/data     <- bind-mounted host state dir (was ~/.local/share/binance-bot/data)
+#                     mounted at /app/data so relative paths in .env (e.g. DB_PATH=data/live.db) just work
+#   - /app/backups  <- bind-mounted backups dir
+#   - env_file      <- BOT_ENV_FILE, defaults to ./.env.docker
+#
+# Profiles:
+#   paper         -> all paper/research workloads + scheduler
+#   live          -> live momentum sniper + scheduler
+#   all           -> paper + live + scheduler
+#   claude-spot   -> opt-in Claude autonomous router (currently inert)
+#   main-bot      -> legacy SMA bot (disabled in production)
+
+x-base: &base
+  image: binance-bot:latest
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  env_file:
+    - ${BOT_ENV_FILE:-./.env.docker}
+  volumes:
+    - ${BOT_DATA_DIR:-./docker-data}:/app/data
+    - ${BOT_BACKUP_DIR:-./docker-backups}:/app/backups
+  environment:
+    TZ: UTC
+    BINANCE_BOT_BACKUP_DIR: /app/backups
+    BINANCE_BOT_PROJECT_DIR: /app
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+
+  # ---------- LIVE ----------
+
+  listing-sniper-momentum:
+    <<: *base
+    container_name: listing-sniper-momentum
+    profiles: ["live", "all"]
+    environment:
+      TZ: UTC
+      LISTING_SNIPER_HOLD_MODE: momentum
+      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-momentum-state.json
+      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-momentum-events.jsonl
+      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-momentum-ledger.jsonl
+      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-momentum.stop
+    command: ["python", "-m", "src.listing_sniper", "--submit-live", "--daemon"]
+
+  # ---------- PAPER ----------
+
+  listing-sniper-flat:
+    <<: *base
+    container_name: listing-sniper-flat
+    profiles: ["paper", "all"]
+    environment:
+      TZ: UTC
+      LISTING_SNIPER_HOLD_MODE: flat
+      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-flat-state.json
+      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-flat-events.jsonl
+      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-flat-ledger.jsonl
+      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-flat.stop
+    command: ["python", "-m", "src.listing_sniper", "--paper", "--daemon"]
+
+  listing-sniper-trailing:
+    <<: *base
+    container_name: listing-sniper-trailing
+    profiles: ["paper", "all"]
+    environment:
+      TZ: UTC
+      LISTING_SNIPER_HOLD_MODE: trailing
+      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-trailing-state.json
+      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-trailing-events.jsonl
+      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-trailing-ledger.jsonl
+      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-trailing.stop
+    command: ["python", "-m", "src.listing_sniper", "--paper", "--daemon"]
+
+  mean-reversion-paper:
+    <<: *base
+    container_name: mean-reversion-paper
+    profiles: ["paper", "all"]
+    command: ["python", "-m", "src.mean_reversion", "--paper", "--daemon"]
+
+  pool-paper:
+    <<: *base
+    container_name: pool-paper
+    profiles: ["paper", "all"]
+    environment:
+      TZ: UTC
+      POOL_MODE: paper
+    command: ["python", "-m", "src.pool"]
+
+  sniper-paper:
+    <<: *base
+    container_name: sniper-paper
+    profiles: ["paper", "all"]
+    command:
+      - "python"
+      - "-m"
+      - "src.sniper.paper"
+      - "--entry-sol"
+      - "0.005"
+      - "--hold-seconds"
+      - "300"
+      - "--slippage-bps"
+      - "500"
+      - "--max-concurrent"
+      - "5"
+      - "--ledger-path"
+      - "/app/data/sniper-paper-ledger.jsonl"
+      - "--summary-path"
+      - "/app/data/sniper-paper-summary.json"
+
+  # ---------- DISABLED / OPT-IN ----------
+
+  claude-spot:
+    <<: *base
+    container_name: claude-spot
+    profiles: ["claude-spot"]
+    command: ["python", "-m", "src.claude_spot", "--submit-live"]
+
+  main-bot:
+    <<: *base
+    container_name: main-bot
+    profiles: ["main-bot"]
+    command: ["python", "-m", "src.main"]
+
+  # ---------- SCHEDULER (periodic jobs) ----------
+
+  scheduler:
+    <<: *base
+    container_name: scheduler
+    profiles: ["paper", "live", "all"]
+    command: ["/usr/local/bin/supercronic", "-passthrough-logs", "/app/docker/crontab"]
