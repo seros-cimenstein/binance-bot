@@ -12,9 +12,12 @@ from src.listing_sniper import (
     ListingSniperError,
     ListingSniperSettings,
     ListingSniperState,
+    _format_live_fire_alert,
+    _is_unknown_symbol_error,
     _preflight,
     compute_new_listings,
     fetch_trading_symbols_for_quote,
+    fire_live,
     fire_paper,
     load_state,
     momentum_should_exit,
@@ -465,3 +468,143 @@ async def test_normal_dip_inside_floor_does_not_fire_hard_stop(
     assert "hard_stop" not in result["exit_reason"]
     # Falls through to flat_hold_elapsed at the first post-floor poll.
     assert result["exit_reason"] == "flat_hold_elapsed"
+
+
+# ---------------------------------------------------------------------------
+# fire_live: stale-market-cache retry on ccxt BadSymbol
+#
+# On 2026-06-11 four live fires (CRCLB, NVDAB, SNDKB, TSLAB) failed with
+# "BadSymbol: binance does not have market symbol X/USDT" — ccxt's market
+# cache was populated at daemon startup and didn't include the brand-new
+# listings. fix: catch BadSymbol, reload markets, retry once.
+# ---------------------------------------------------------------------------
+
+
+class BadSymbol(Exception):
+    """Stand-in for ccxt.BadSymbol — class name matches what _is_unknown_symbol_error checks."""
+
+
+class _MockSpotClient:
+    """Minimal async ccxt-shaped client for fire_live tests."""
+
+    def __init__(self, buy_outcomes):
+        # buy_outcomes: list of either Exception instances to raise, or dict
+        # to return — popped in order on each create_order(buy) call.
+        self._buy_outcomes = list(buy_outcomes)
+        self.create_order_calls = 0
+        self.load_markets_calls = []  # list of reload-flag values
+
+    async def create_order(self, **kwargs):
+        if kwargs.get("side") == "buy":
+            self.create_order_calls += 1
+            outcome = self._buy_outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        # sell or anything else — return a benign closed order
+        return {"id": "x", "filled": 1.0, "average": 1.0, "status": "closed"}
+
+    async def load_markets(self, reload=False):
+        self.load_markets_calls.append(reload)
+        return {}
+
+
+def test_is_unknown_symbol_error_detects_bad_symbol():
+    assert _is_unknown_symbol_error(BadSymbol("anything"))
+
+
+def test_is_unknown_symbol_error_detects_message_pattern():
+    assert _is_unknown_symbol_error(
+        RuntimeError("binance does not have market symbol TSLAB/USDT")
+    )
+
+
+def test_is_unknown_symbol_error_ignores_other_failures():
+    assert not _is_unknown_symbol_error(RuntimeError("insufficient balance"))
+    assert not _is_unknown_symbol_error(ValueError("filter failure: notional"))
+
+
+@pytest.mark.asyncio
+async def test_fire_live_reloads_markets_and_retries_on_bad_symbol(tmp_path: Path):
+    """Stale market cache → reload + retry → buy succeeds (returns zero_fill is fine).
+
+    We don't care about the post-buy path here; the regression we're protecting
+    against is that create_order is called twice with a load_markets(reload=True)
+    in between.
+    """
+    s = _settings(tmp_path, hold_mode="flat", hold_seconds=0,
+                  trailing_poll_interval_seconds=0, max_hold_seconds=0)
+    # First attempt raises BadSymbol; second attempt returns a 0-fill order
+    # (which makes fire_live return early without entering the hold loop).
+    client = _MockSpotClient([
+        BadSymbol("binance does not have market symbol TSLAB/USDT"),
+        {"id": "1", "filled": 0.0, "average": 0.0, "status": "closed"},
+    ])
+    result = await fire_live(symbol="TSLABUSDT", settings=s, spot_client=client)
+    assert client.create_order_calls == 2
+    assert client.load_markets_calls == [True]  # called once with reload=True
+    assert result["action"] == "buy_zero_fill"
+    assert result["symbol"] == "TSLAB/USDT"
+
+
+@pytest.mark.asyncio
+async def test_fire_live_does_not_retry_on_non_symbol_error(tmp_path: Path):
+    """Non-stale-cache errors (e.g. NOTIONAL filter) should NOT trigger reload."""
+    s = _settings(tmp_path, hold_mode="flat", hold_seconds=0)
+    client = _MockSpotClient([
+        RuntimeError('binance {"code":-1013,"msg":"Filter failure: NOTIONAL"}'),
+    ])
+    result = await fire_live(symbol="MUBUSDT", settings=s, spot_client=client)
+    assert client.create_order_calls == 1   # no retry
+    assert client.load_markets_calls == []  # no reload
+    assert result["action"] == "buy_failed"
+    assert "NOTIONAL" in result["reason"]
+
+
+def test_format_live_fire_alert_round_trip_win(tmp_path: Path):
+    s = _settings(tmp_path, hold_mode="momentum")
+    msg = _format_live_fire_alert({
+        "action": "round_trip_complete", "symbol": "FOO/USDT",
+        "avg_buy": 1.0, "avg_sell": 1.10, "pnl_quote": 0.50,
+        "exit_reason": "trailing_stop_hit",
+    }, s)
+    assert "💰" in msg
+    assert "FOO/USDT" in msg
+    assert "+10.00%" in msg
+    assert "trailing_stop_hit" in msg
+
+
+def test_format_live_fire_alert_buy_failed(tmp_path: Path):
+    s = _settings(tmp_path, hold_mode="momentum")
+    msg = _format_live_fire_alert({
+        "action": "buy_failed", "symbol": "TSLAB/USDT",
+        "reason": "BadSymbol: market not found",
+    }, s)
+    assert "❌" in msg
+    assert "TSLAB/USDT" in msg
+    assert "BadSymbol" in msg
+
+
+def test_format_live_fire_alert_sell_stranded(tmp_path: Path):
+    s = _settings(tmp_path)
+    msg = _format_live_fire_alert({
+        "action": "sell_failed", "symbol": "X/USDT",
+        "reason": "network timeout",
+    }, s)
+    assert "⚠️" in msg
+    assert "STRANDED" in msg
+
+
+@pytest.mark.asyncio
+async def test_fire_live_reports_post_reload_failure_distinctly(tmp_path: Path):
+    """If buy still fails after a market reload, the reason is tagged so we know."""
+    s = _settings(tmp_path, hold_mode="flat", hold_seconds=0)
+    client = _MockSpotClient([
+        BadSymbol("binance does not have market symbol GHOSTUSDT"),
+        BadSymbol("binance does not have market symbol GHOSTUSDT"),
+    ])
+    result = await fire_live(symbol="GHOSTUSDT", settings=s, spot_client=client)
+    assert client.create_order_calls == 2
+    assert client.load_markets_calls == [True]
+    assert result["action"] == "buy_failed"
+    assert result["reason"].startswith("after_market_reload:")

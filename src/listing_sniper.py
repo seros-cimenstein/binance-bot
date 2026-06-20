@@ -33,6 +33,8 @@ import aiohttp
 from dotenv import load_dotenv
 from loguru import logger
 
+from src.alerts import maybe_telegram
+
 
 EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo"
 PUBLIC_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
@@ -683,6 +685,54 @@ async def fire_paper(
     }
 
 
+def _format_live_fire_alert(result: dict[str, Any], settings: ListingSniperSettings) -> str:
+    """Render a Telegram-friendly one-liner for a fire_live() outcome.
+
+    Three outcomes worth alerting on:
+      * round_trip_complete — closed position with realized P&L
+      * buy_failed / buy_zero_fill — we tried but didn't take a position
+      * sell_failed — we bought but couldn't exit (position stranded)
+    """
+    action = result.get("action", "?")
+    symbol = result.get("symbol", "?")
+    if action == "round_trip_complete":
+        pnl = float(result.get("pnl_quote") or 0.0)
+        avg_buy = float(result.get("avg_buy") or 0.0)
+        avg_sell = float(result.get("avg_sell") or 0.0)
+        pct = ((avg_sell / avg_buy - 1.0) * 100.0) if avg_buy > 0 else 0.0
+        emoji = "💰" if pnl > 0 else "📉" if pnl < 0 else "➖"
+        return (
+            f"{emoji} [LIVE {settings.hold_mode}] {symbol} closed: "
+            f"${avg_buy:.6f} → ${avg_sell:.6f} "
+            f"({pct:+.2f}% / {pnl:+.4f} USDT) — {result.get('exit_reason', '?')}"
+        )
+    if action == "sell_failed":
+        return (
+            f"⚠️ [LIVE {settings.hold_mode}] {symbol} STRANDED — "
+            f"bought but sell failed: {result.get('reason', '?')}"
+        )
+    if action in {"buy_failed", "buy_zero_fill"}:
+        return (
+            f"❌ [LIVE {settings.hold_mode}] {symbol} {action}: "
+            f"{result.get('reason', '(zero fill)')}"
+        )
+    return f"[LIVE {settings.hold_mode}] {symbol} → {action}"
+
+
+def _is_unknown_symbol_error(exc: Exception) -> bool:
+    """Detect ccxt's stale-market-cache error for a freshly-listed symbol.
+
+    ccxt loads markets once and caches them for the lifetime of the client.
+    When Binance lists a new pair after that cache is populated, the next
+    ``create_order`` call raises ``BadSymbol`` even though the pair is live
+    on the exchange. The fix is to reload markets and retry — but we want
+    to do that only for this specific failure mode, not e.g. real API errors.
+    """
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    return name == "BadSymbol" or "does not have market symbol" in msg
+
+
 async def fire_live(
     *,
     symbol: str,
@@ -691,14 +741,28 @@ async def fire_live(
 ) -> dict[str, Any]:
     """Live execution: market BUY → flat or trailing hold → market SELL."""
     pair = f"{symbol[:-len(settings.quote_asset)]}/{settings.quote_asset}"
-    try:
-        buy_order = await spot_client.create_order(
+
+    async def _submit_buy() -> dict[str, Any]:
+        return await spot_client.create_order(
             symbol=pair, type="market", side="buy", amount=None, price=None,
             params={"quoteOrderQty": settings.notional_usdt},
         )
+
+    try:
+        buy_order = await _submit_buy()
     except Exception as exc:  # noqa: BLE001 — log + skip
-        return {"mode": "live", "action": "buy_failed", "symbol": pair,
-                "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        if _is_unknown_symbol_error(exc):
+            # Stale market cache — likeliest cause for a brand-new listing.
+            # Reload and retry once. If it still fails, real problem; log + skip.
+            try:
+                await spot_client.load_markets(reload=True)
+                buy_order = await _submit_buy()
+            except Exception as exc2:  # noqa: BLE001
+                return {"mode": "live", "action": "buy_failed", "symbol": pair,
+                        "reason": f"after_market_reload: {type(exc2).__name__}: {str(exc2)[:200]}"}
+        else:
+            return {"mode": "live", "action": "buy_failed", "symbol": pair,
+                    "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
     filled_qty = float(buy_order.get("filled") or 0.0)
     avg_buy = float(buy_order.get("average") or 0.0)
     if filled_qty <= 0:
@@ -818,7 +882,6 @@ async def run_cycle(
 
     actions: list[dict[str, Any]] = []
     for symbol in new_symbols:
-        from src.alerts import maybe_telegram
         await maybe_telegram(
             f"Listing sniper: new {settings.quote_asset} pair detected → {symbol}"
         )
@@ -841,6 +904,7 @@ async def run_cycle(
             _append_ledger(settings.ledger_path, {
                 "timestamp": _utc_timestamp(), "symbol": symbol, **result,
             })
+            await maybe_telegram(_format_live_fire_alert(result, settings))
         elif mode == "paper":
             result = await fire_paper(
                 symbol=symbol, settings=settings, session=session,
