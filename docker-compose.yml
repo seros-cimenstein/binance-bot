@@ -84,6 +84,12 @@ services:
       - "--summary-path"
       - "/app/data/sniper-paper-summary.json"
 
+  signals-dexscreener:
+    <<: *base
+    container_name: signals-dexscreener
+    profiles: ["paper", "all"]
+    command: ["python", "-m", "src.signals.dexscreener", "--daemon"]
+
   # ---------- DISABLED / OPT-IN ----------
 
   claude-spot:
