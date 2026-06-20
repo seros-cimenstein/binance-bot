@@ -96,6 +96,12 @@ services:
     profiles: ["paper", "all"]
     command: ["python", "-m", "src.signals.telegram_ingester", "--daemon"]
 
+  signals-smart-money:
+    <<: *base
+    container_name: signals-smart-money
+    profiles: ["paper", "all"]
+    command: ["python", "-m", "src.signals.smart_money", "--daemon"]
+
   # ---------- DISABLED / OPT-IN ----------
 
   claude-spot:
