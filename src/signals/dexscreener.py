@@ -9,7 +9,7 @@ import math
 import os
 import signal
 import sys
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,6 +22,7 @@ from loguru import logger
 from src.alerts import maybe_telegram
 from src.signals.candidate import SignalCandidate
 from src.signals.common import (
+    AlertRateLimiter,
     append_ledger,
     atomic_write_json,
     dedupe_seen_addresses,
@@ -45,23 +46,6 @@ class DexScreenerSettings:
     watchlist_ttl_hours: float = 12.0
     max_alerts_per_hour: int = 20
     stop_path: str = "data/signals-dexscreener.stop"
-
-
-class AlertRateLimiter:
-    """Rolling one-hour limiter for detector-local Telegram alerts."""
-
-    def __init__(self, max_per_hour: int) -> None:
-        self.max_per_hour = max(0, int(max_per_hour))
-        self.sent_at_ms: deque[int] = deque()
-
-    def allow(self, now_ms: int) -> bool:
-        cutoff = now_ms - 3_600_000
-        while self.sent_at_ms and self.sent_at_ms[0] < cutoff:
-            self.sent_at_ms.popleft()
-        if len(self.sent_at_ms) >= self.max_per_hour:
-            return False
-        self.sent_at_ms.append(now_ms)
-        return True
 
 
 def settings_from_env() -> DexScreenerSettings:

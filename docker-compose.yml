@@ -90,6 +90,12 @@ services:
     profiles: ["paper", "all"]
     command: ["python", "-m", "src.signals.dexscreener", "--daemon"]
 
+  signals-telegram:
+    <<: *base
+    container_name: signals-telegram
+    profiles: ["paper", "all"]
+    command: ["python", "-m", "src.signals.telegram_ingester", "--daemon"]
+
   # ---------- DISABLED / OPT-IN ----------
 
   claude-spot:

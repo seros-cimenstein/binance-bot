@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,3 +47,20 @@ def dedupe_seen_addresses(
         while len(seen) > 10_000:
             seen.popitem(last=False)
     return fresh
+
+
+class AlertRateLimiter:
+    """Rolling one-hour limiter for detector-local Telegram alerts."""
+
+    def __init__(self, max_per_hour: int) -> None:
+        self.max_per_hour = max(0, int(max_per_hour))
+        self.sent_at_ms: deque[int] = deque()
+
+    def allow(self, now_ms: int) -> bool:
+        cutoff = now_ms - 3_600_000
+        while self.sent_at_ms and self.sent_at_ms[0] < cutoff:
+            self.sent_at_ms.popleft()
+        if len(self.sent_at_ms) >= self.max_per_hour:
+            return False
+        self.sent_at_ms.append(now_ms)
+        return True
