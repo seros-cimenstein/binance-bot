@@ -11,7 +11,7 @@ from __future__ import annotations
 import html as html_lib
 import os
 
-from src.telegram_alerts import TelegramAlerter
+from src.telegram_alerts import TelegramAlerter, is_cooled_down
 
 
 async def maybe_telegram(message: str, *, monospace: bool = False) -> bool:
@@ -24,6 +24,8 @@ async def maybe_telegram(message: str, *, monospace: bool = False) -> bool:
         token = os.getenv("TELEGRAM_BOT_TOKEN", "")
         chat = os.getenv("TELEGRAM_CHAT_ID", "")
         if not token or not chat:
+            return False
+        if is_cooled_down():
             return False
         if monospace:
             payload = "<pre>" + html_lib.escape(message) + "</pre>"

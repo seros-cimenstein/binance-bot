@@ -2,12 +2,60 @@
 
 from __future__ import annotations
 
+import json
+import os
+import time
+from pathlib import Path
+
 import aiohttp
 from loguru import logger
 
 
 _API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 _TIMEOUT = aiohttp.ClientTimeout(total=5)
+
+# Persistent 429 cooldown state. Survives container restarts so the bot can't
+# resume the retry storm after a crash-loop (see RestartCount 3,977 on Pi).
+_COOLDOWN_PATH = Path("data/telegram-cooldown.json")
+_DEFAULT_COOLDOWN_S = 60
+_COOLDOWN_CAP_S = 24 * 60 * 60
+
+
+def _read_cooldown_until_ms() -> int:
+    try:
+        data = json.loads(_COOLDOWN_PATH.read_text())
+        return int(data.get("cooldown_until_ms", 0))
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+        return 0
+
+
+def _write_cooldown(retry_after_s: int) -> None:
+    retry_after_s = min(max(int(retry_after_s), 0), _COOLDOWN_CAP_S)
+    now_ms = int(time.time() * 1000)
+    payload = {
+        "cooldown_until_ms": now_ms + retry_after_s * 1000,
+        "last_429_at_ms": now_ms,
+        "retry_after_observed_s": retry_after_s,
+    }
+    _COOLDOWN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _COOLDOWN_PATH.with_suffix(_COOLDOWN_PATH.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload))
+    os.replace(tmp, _COOLDOWN_PATH)
+
+
+def is_cooled_down() -> bool:
+    return int(time.time() * 1000) < _read_cooldown_until_ms()
+
+
+def _parse_retry_after(body: str) -> int:
+    try:
+        data = json.loads(body)
+        ra = data.get("parameters", {}).get("retry_after")
+        if isinstance(ra, int) and ra > 0:
+            return ra
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return _DEFAULT_COOLDOWN_S
 
 
 class TelegramAlerter:
@@ -25,6 +73,9 @@ class TelegramAlerter:
     async def send(self, message: str) -> bool:
         if not self._enabled:
             return False
+        if is_cooled_down():
+            logger.debug("Telegram alert suppressed (429 cooldown active)")
+            return False
         try:
             url = _API_URL.format(token=self._token)
             payload = {"chat_id": self._chat_id, "text": message, "parse_mode": "HTML"}
@@ -32,7 +83,17 @@ class TelegramAlerter:
                 async with session.post(url, json=payload) as resp:
                     if not resp.ok:
                         body = await resp.text()
-                        logger.warning(f"Telegram alert failed ({resp.status}): {body[:200]}")
+                        if resp.status == 429:
+                            retry_after_s = _parse_retry_after(body)
+                            _write_cooldown(retry_after_s)
+                            logger.warning(
+                                f"Telegram 429 — cooling down {retry_after_s}s "
+                                f"(persisted to {_COOLDOWN_PATH})"
+                            )
+                        else:
+                            logger.warning(
+                                f"Telegram alert failed ({resp.status}): {body[:200]}"
+                            )
                         return False
             return True
         except Exception as exc:
