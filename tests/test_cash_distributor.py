@@ -119,6 +119,37 @@ def test_render_plan_includes_action_column() -> None:
     assert "TOP UP" in output
 
 
+def test_untested_bot_excluded_from_pool_when_others_have_traded() -> None:
+    # Mix: one bot has traded (winner), one has never traded (untested).
+    # Untested should get 0% even though it has a configured floor.
+    snaps = (
+        BotSnapshot(name="active", lifetime_pnl_usdt=0.0, trades_lifetime=5,
+                    current_value_usdt=0.0, min_share_pct=30.0, max_share_pct=80.0),
+        BotSnapshot(name="untested", lifetime_pnl_usdt=0.0, trades_lifetime=0,
+                    current_value_usdt=0.0, min_share_pct=30.0, max_share_pct=80.0),
+    )
+    plan = compute_plan(snaps, total_treasury_usdt=100.0, free_usdt=100.0)
+    shares = {a.bot: a.final_share_pct for a in plan.allocations}
+    assert shares["untested"] == pytest.approx(0.0)
+    assert shares["active"] == pytest.approx(80.0)  # capped at max
+    assert any("untested bots excluded" in n for n in plan.notes)
+
+
+def test_bootstrap_when_no_bot_has_traded_keeps_equal_floors() -> None:
+    # All bots zero-trade → fall back to original floor + equal-split pool,
+    # so the very first allocation isn't empty.
+    snaps = (
+        BotSnapshot(name="a", lifetime_pnl_usdt=0.0, trades_lifetime=0,
+                    current_value_usdt=0.0, min_share_pct=20.0, max_share_pct=60.0),
+        BotSnapshot(name="b", lifetime_pnl_usdt=0.0, trades_lifetime=0,
+                    current_value_usdt=0.0, min_share_pct=20.0, max_share_pct=60.0),
+    )
+    plan = compute_plan(snaps, total_treasury_usdt=100.0, free_usdt=100.0)
+    shares = {a.bot: a.final_share_pct for a in plan.allocations}
+    assert shares["a"] == pytest.approx(50.0)
+    assert shares["b"] == pytest.approx(50.0)
+
+
 def test_sum_ledger_pnl_returns_zero_on_missing_file(tmp_path: Path) -> None:
     total, count = _sum_ledger_pnl(tmp_path / "nope.jsonl", fields=("net_pnl_usdt",))
     assert total == 0.0 and count == 0

@@ -89,17 +89,22 @@ class DistributorConfig:
     """Policy knobs."""
 
     # Per-bot allocation bounds (must sum to <= 100% for max, >= 0 for min).
+    # Defaults reflect the actual Binance USDT live fleet:
+    #   - trend_filter and listing_sniper_momentum are the live Binance bots.
+    #   - funding_arb earns its share only via realised P&L (floor 0) — it
+    #     stays inert below its $50 min-balance gate, so giving it a floor
+    #     share would just freeze idle USDT.
+    #   - sniper_paper / mean_reversion / listing_sniper_{flat,trailing} are
+    #     paper-only and intentionally not in this map.
     bot_min_share_pct: Mapping[str, float] = field(default_factory=lambda: {
-        "trend_filter": 20.0,
-        "funding_arb": 15.0,
-        "sniper_live": 5.0,
-        "mean_reversion": 10.0,
+        "trend_filter": 30.0,
+        "listing_sniper_momentum": 30.0,
+        "funding_arb": 0.0,
     })
     bot_max_share_pct: Mapping[str, float] = field(default_factory=lambda: {
-        "trend_filter": 50.0,
+        "trend_filter": 60.0,
+        "listing_sniper_momentum": 60.0,
         "funding_arb": 60.0,
-        "sniper_live": 25.0,
-        "mean_reversion": 50.0,
     })
     rebalance_threshold_usdt: float = 5.0  # ignore tiny delta suggestions
 
@@ -142,60 +147,95 @@ def compute_plan(
             notes=("no bots configured",),
         )
 
-    # Step 1: floor each bot at min_share_pct. The sum of the mins is the
-    # baseline; performance pool = 100% - sum(mins).
-    sum_min = sum(s.min_share_pct for s in snapshots)
     notes: list[str] = []
+
+    # Untested-bot rule: a bot with zero lifetime trades gets zero share
+    # (floor and ceiling forced to 0) so capital can't pool in a strategy
+    # that has never run. Exception: if *every* bot is at zero trades,
+    # fall back to equal floors so the bootstrap allocation isn't empty.
+    active = [s for s in snapshots if s.trades_lifetime > 0]
+    bootstrap = len(active) == 0
+
+    def eff_min(s: BotSnapshot) -> float:
+        return s.min_share_pct if (bootstrap or s.trades_lifetime > 0) else 0.0
+
+    def eff_max(s: BotSnapshot) -> float:
+        return s.max_share_pct if (bootstrap or s.trades_lifetime > 0) else 0.0
+
+    excluded = [s.name for s in snapshots if not bootstrap and s.trades_lifetime == 0]
+    if excluded:
+        notes.append(
+            "untested bots excluded (0 lifetime trades): " + ", ".join(excluded)
+        )
+
+    # Step 1: floor each bot at its effective min. Sum of mins is the
+    # baseline; performance pool = 100% - sum(mins).
+    sum_min = sum(eff_min(s) for s in snapshots)
     if sum_min > 100.0:
-        # Mins over-subscribed → renormalise pro-rata to fit 100%.
         scale = 100.0 / sum_min
-        renormalised_mins = {s.name: s.min_share_pct * scale for s in snapshots}
+        renormalised_mins = {s.name: eff_min(s) * scale for s in snapshots}
         performance_pool_pct = 0.0
         notes.append(
             f"configured min shares sum to {sum_min:.1f}% > 100; "
             f"min shares renormalised by {scale:.3f} and performance pool removed"
         )
     else:
-        renormalised_mins = {s.name: s.min_share_pct for s in snapshots}
+        renormalised_mins = {s.name: eff_min(s) for s in snapshots}
         performance_pool_pct = 100.0 - sum_min
 
-    # Step 2: score-weight the performance pool.
-    scores = {s.name: _normalize_score(s.lifetime_pnl_usdt) for s in snapshots}
+    # Step 2: score-weight the performance pool. Untested bots score 0.
+    scores: dict[str, float] = {}
+    for s in snapshots:
+        if not bootstrap and s.trades_lifetime == 0:
+            scores[s.name] = 0.0
+        else:
+            scores[s.name] = _normalize_score(s.lifetime_pnl_usdt)
     total_score = sum(scores.values())
+
+    # Bonus eligibility: in non-bootstrap mode, only bots that have actually
+    # traded compete for the performance pool; in bootstrap mode every bot
+    # gets an equal kickstart share.
+    eligible_for_pool = snapshots if bootstrap else tuple(active)
+    n_eligible = len(eligible_for_pool) or n_bots
 
     raw_shares: dict[str, float] = {}
     for s in snapshots:
         base = renormalised_mins[s.name]
-        if total_score <= 0 or performance_pool_pct <= 0:
-            bonus = performance_pool_pct / n_bots  # share equally if nothing performs
+        if performance_pool_pct <= 0:
+            bonus = 0.0
+        elif not bootstrap and s.trades_lifetime == 0:
+            bonus = 0.0
+        elif total_score <= 0:
+            bonus = performance_pool_pct / n_eligible  # equal split among eligible
         else:
             bonus = performance_pool_pct * (scores[s.name] / total_score)
         raw_shares[s.name] = base + bonus
 
-    # Step 3: cap at max_share_pct and redistribute the overflow.
+    # Step 3: cap at effective max and redistribute the overflow. Untested
+    # bots have eff_max=0, so they cannot absorb overflow either.
     final_shares = dict(raw_shares)
     for _ in range(10):  # bounded loops for safety
         overflow = 0.0
         capped: list[str] = []
         for s in snapshots:
-            if final_shares[s.name] > s.max_share_pct:
-                overflow += final_shares[s.name] - s.max_share_pct
-                final_shares[s.name] = s.max_share_pct
+            cap = eff_max(s)
+            if final_shares[s.name] > cap:
+                overflow += final_shares[s.name] - cap
+                final_shares[s.name] = cap
                 capped.append(s.name)
         if overflow < 1e-9:
             break
         eligible = [s for s in snapshots if s.name not in capped
-                     and final_shares[s.name] < s.max_share_pct]
+                     and final_shares[s.name] < eff_max(s)]
         if not eligible:
             notes.append(
                 f"overflow {overflow:.2f}% could not be redistributed; "
                 f"all eligible bots already at max"
             )
             break
-        # Spread overflow proportionally to remaining headroom.
-        total_room = sum(s.max_share_pct - final_shares[s.name] for s in eligible)
+        total_room = sum(eff_max(s) - final_shares[s.name] for s in eligible)
         for s in eligible:
-            room = s.max_share_pct - final_shares[s.name]
+            room = eff_max(s) - final_shares[s.name]
             final_shares[s.name] += overflow * (room / total_room) if total_room else 0.0
 
     # Step 4: build allocation rows.
@@ -298,23 +338,18 @@ def build_default_snapshots(
                        pnl_fields=("net_pnl_usdt",),  # trend-filter rows have no realised P&L
                        current_value_usdt=current_values.get("trend_filter", 0.0),
                        config=config),
+        build_snapshot("listing_sniper_momentum", data_dir=data_dir,
+                       ledger_filename="listing-sniper-momentum-ledger.jsonl",
+                       state_filename="listing-sniper-momentum-state.json",
+                       pnl_fields=("net_pnl_usdt", "pnl_usdt", "usd_pnl"),
+                       current_value_usdt=current_values.get(
+                           "listing_sniper_momentum", 0.0),
+                       config=config),
         build_snapshot("funding_arb", data_dir=data_dir,
                        ledger_filename="funding-arb-ledger.jsonl",
                        state_filename="funding-arb-state.json",
                        pnl_fields=("net_pnl_usdt",),
                        current_value_usdt=current_values.get("funding_arb", 0.0),
-                       config=config),
-        build_snapshot("sniper_live", data_dir=data_dir,
-                       ledger_filename="sniper-paper-ledger.jsonl",
-                       state_filename=None,
-                       pnl_fields=("usd_pnl",),
-                       current_value_usdt=current_values.get("sniper_live", 0.0),
-                       config=config),
-        build_snapshot("mean_reversion", data_dir=data_dir,
-                       ledger_filename="mean-reversion-ledger.jsonl",
-                       state_filename=None,
-                       pnl_fields=("net_pnl_usdt", "pnl_quote"),
-                       current_value_usdt=current_values.get("mean_reversion", 0.0),
                        config=config),
     )
 
