@@ -48,12 +48,6 @@ KNOWN_BOTS: dict[str, dict[str, str]] = {
         "ledger": "funding-arb-ledger.jsonl",
         "timer": "binance-funding-arb.timer",
     },
-    "listing_detector": {
-        "state": "listing-detector-state.json",
-        "audit": "listing-detector-events.jsonl",
-        "ledger": "listing-detector-ledger.jsonl",
-        "timer": "binance-listing-detector.timer",
-    },
     "sniper_paper": {
         "state": "",
         "audit": "sniper-paper-ledger.jsonl",  # each row is a completed round-trip
@@ -66,24 +60,6 @@ KNOWN_BOTS: dict[str, dict[str, str]] = {
         "audit": "mean-reversion-decisions.jsonl",
         "ledger": "mean-reversion-ledger.jsonl",
         "timer": "binance-mean-reversion-paper.service",
-    },
-    "listing_sniper_flat": {
-        "state": "listing-sniper-flat-state.json",
-        "audit": "listing-sniper-flat-events.jsonl",
-        "ledger": "listing-sniper-flat-ledger.jsonl",
-        "timer": "binance-listing-sniper-flat.service",
-    },
-    "listing_sniper_trailing": {
-        "state": "listing-sniper-trailing-state.json",
-        "audit": "listing-sniper-trailing-events.jsonl",
-        "ledger": "listing-sniper-trailing-ledger.jsonl",
-        "timer": "binance-listing-sniper-trailing.service",
-    },
-    "listing_sniper_momentum": {
-        "state": "listing-sniper-momentum-state.json",
-        "audit": "listing-sniper-momentum-events.jsonl",
-        "ledger": "listing-sniper-momentum-ledger.jsonl",
-        "timer": "binance-listing-sniper-momentum.service",
     },
     "claude_spot": {
         "state": "",  # stateless cycle
@@ -372,9 +348,6 @@ def _summarize_state(name: str, state: Mapping[str, Any], wallet: WalletSnapshot
         if not positions:
             return "no open positions"
         return f"{len(positions)} open: " + ", ".join(p.get("symbol", "") for p in positions)
-    if name == "listing_detector":
-        cursor = state.get("last_seen_article_id", 0)
-        return f"cursor article #{cursor}"
     return ""
 
 

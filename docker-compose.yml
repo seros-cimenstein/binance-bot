@@ -13,8 +13,8 @@
 #
 # Profiles:
 #   paper         -> all paper/research workloads + scheduler
-#   live          -> live momentum sniper + scheduler
-#   all           -> paper + live + scheduler
+#   all           -> paper + scheduler  (no standalone live container today;
+#                    live work runs as cron jobs inside scheduler)
 #   claude-spot   -> opt-in Claude autonomous router (currently inert)
 #   main-bot      -> legacy SMA bot (disabled in production)
 
@@ -46,48 +46,7 @@ x-base: &base
 
 services:
 
-  # ---------- LIVE ----------
-
-  listing-sniper-momentum:
-    <<: *base
-    container_name: listing-sniper-momentum
-    profiles: ["live", "all"]
-    environment:
-      TZ: UTC
-      LISTING_SNIPER_HOLD_MODE: momentum
-      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-momentum-state.json
-      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-momentum-events.jsonl
-      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-momentum-ledger.jsonl
-      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-momentum.stop
-    command: ["python", "-m", "src.listing_sniper", "--submit-live", "--daemon"]
-
   # ---------- PAPER ----------
-
-  listing-sniper-flat:
-    <<: *base
-    container_name: listing-sniper-flat
-    profiles: ["paper", "all"]
-    environment:
-      TZ: UTC
-      LISTING_SNIPER_HOLD_MODE: flat
-      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-flat-state.json
-      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-flat-events.jsonl
-      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-flat-ledger.jsonl
-      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-flat.stop
-    command: ["python", "-m", "src.listing_sniper", "--paper", "--daemon"]
-
-  listing-sniper-trailing:
-    <<: *base
-    container_name: listing-sniper-trailing
-    profiles: ["paper", "all"]
-    environment:
-      TZ: UTC
-      LISTING_SNIPER_HOLD_MODE: trailing
-      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-trailing-state.json
-      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-trailing-events.jsonl
-      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-trailing-ledger.jsonl
-      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-trailing.stop
-    command: ["python", "-m", "src.listing_sniper", "--paper", "--daemon"]
 
   mean-reversion-paper:
     <<: *base

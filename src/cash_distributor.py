@@ -90,20 +90,18 @@ class DistributorConfig:
 
     # Per-bot allocation bounds (must sum to <= 100% for max, >= 0 for min).
     # Defaults reflect the actual Binance USDT live fleet:
-    #   - trend_filter and listing_sniper_momentum are the live Binance bots.
+    #   - trend_filter is the only standalone live Binance bot today.
     #   - funding_arb earns its share only via realised P&L (floor 0) — it
     #     stays inert below its $50 min-balance gate, so giving it a floor
     #     share would just freeze idle USDT.
-    #   - sniper_paper / mean_reversion / listing_sniper_{flat,trailing} are
-    #     paper-only and intentionally not in this map.
+    #   - sniper_paper / mean_reversion are paper-only and intentionally
+    #     not in this map.
     bot_min_share_pct: Mapping[str, float] = field(default_factory=lambda: {
-        "trend_filter": 30.0,
-        "listing_sniper_momentum": 30.0,
+        "trend_filter": 40.0,
         "funding_arb": 0.0,
     })
     bot_max_share_pct: Mapping[str, float] = field(default_factory=lambda: {
-        "trend_filter": 60.0,
-        "listing_sniper_momentum": 60.0,
+        "trend_filter": 100.0,
         "funding_arb": 60.0,
     })
     rebalance_threshold_usdt: float = 5.0  # ignore tiny delta suggestions
@@ -337,13 +335,6 @@ def build_default_snapshots(
                        state_filename="trend-filter-state.json",
                        pnl_fields=("net_pnl_usdt",),  # trend-filter rows have no realised P&L
                        current_value_usdt=current_values.get("trend_filter", 0.0),
-                       config=config),
-        build_snapshot("listing_sniper_momentum", data_dir=data_dir,
-                       ledger_filename="listing-sniper-momentum-ledger.jsonl",
-                       state_filename="listing-sniper-momentum-state.json",
-                       pnl_fields=("net_pnl_usdt", "pnl_usdt", "usd_pnl"),
-                       current_value_usdt=current_values.get(
-                           "listing_sniper_momentum", 0.0),
                        config=config),
         build_snapshot("funding_arb", data_dir=data_dir,
                        ledger_filename="funding-arb-ledger.jsonl",

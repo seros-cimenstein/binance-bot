@@ -8,9 +8,6 @@
 # so this stays inert until the wallet is actually funded past $50.
 1  0,8,16  *  *  *   cd /app && python -m src.funding_arb --submit-live
 
-# Listing-announcement detector — every 2 minutes
-*/2  *  *  *  *      cd /app && python -m src.listing_detector --detect-only
-
 # Long-horizon trend filter — daily 00:30 UTC (runtime enforces real cadence)
 30  0  *  *  *       cd /app && python -m src.trend_filter --submit-live
 
