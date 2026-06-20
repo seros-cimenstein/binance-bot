@@ -4,7 +4,9 @@
 # Format: minute hour day month dow  command
 
 # Funding arb — one minute after each Binance USD-M funding window (00,08,16 UTC)
-1  0,8,16  *  *  *   cd /app && python -m src.funding_arb --paper
+# Live: bot's own min_balance_usdt=$50 floor blocks trades below that threshold,
+# so this stays inert until the wallet is actually funded past $50.
+1  0,8,16  *  *  *   cd /app && python -m src.funding_arb --submit-live
 
 # Listing-announcement detector — every 2 minutes
 */2  *  *  *  *      cd /app && python -m src.listing_detector --detect-only
