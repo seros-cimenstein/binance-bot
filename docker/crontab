@@ -14,6 +14,12 @@
 # Daily airdrop digest — 06:00 UTC (~ 09:00 Europe/Istanbul)
 0  6  *  *  *        cd /app && python -m src.airdrop.scheduler remind
 
+# TODO Phase 2 enable on Pi: V2 signal snapshotter — every minute.
+# *  *  *  *  *       cd /app && python -m src.signals.snapshotter --once
+
+# TODO Phase 2 enable on Pi: V2 weekly evaluation report — Sundays 00:45 UTC.
+# 45  0  *  *  0      cd /app && python -m src.signals.v2_report
+
 # Daily SQLite backups — 23:15 / 23:30 UTC (~ 02:15 / 02:30 Europe/Istanbul next day)
 15  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=14 bash scripts/backup_db.sh
 30  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=35 BINANCE_BOT_DB_SETTING_KEY=POOL_DB_PATH BINANCE_BOT_DB_DEFAULT_PATH=data/pool-paper.db bash scripts/backup_db.sh

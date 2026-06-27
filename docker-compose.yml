@@ -90,6 +90,12 @@ services:
     profiles: ["paper", "all"]
     command: ["python", "-m", "src.signals.dexscreener", "--daemon"]
 
+  signals-dexscreener-launches:
+    <<: *base
+    container_name: signals-dexscreener-launches
+    profiles: ["v2"]
+    command: ["python", "-m", "src.signals.dexscreener_launches", "--daemon"]
+
   signals-telegram:
     <<: *base
     container_name: signals-telegram
