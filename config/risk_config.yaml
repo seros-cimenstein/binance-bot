@@ -1,5 +1,0 @@
-# Risk Parameters Defaults
-max_drawdown: 0.1  # 10%
-max_position_size: 0.05  # 5% of balance
-stop_loss: 0.02  # 2%
-take_profit: 0.04  # 4%

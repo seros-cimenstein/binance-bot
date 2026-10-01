@@ -37,14 +37,13 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /data /app/backups /app/logs
+RUN mkdir -p /app/backups /app/logs
 
 RUN useradd --create-home --uid 1000 --shell /bin/bash bot \
- && chown -R bot:bot /app /data
+ && chown -R bot:bot /app
 USER bot
 
-ENV DATA_DIR=/data \
-    BINANCE_BOT_BACKUP_DIR=/app/backups
+ENV BINANCE_BOT_BACKUP_DIR=/app/backups
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "-m", "src.main"]

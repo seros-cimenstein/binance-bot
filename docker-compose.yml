@@ -1,7 +1,7 @@
 # docker-compose.yml — Binance bot fleet
 #
 # Each long-running systemd unit in deploy/user/ becomes a container here.
-# Periodic units (funding-arb, listing-detector, trend-filter, airdrop, backups)
+# Periodic units (funding-arb, trend-filter, airdrop reminder, backups)
 # are consolidated into the `scheduler` container via supercronic.
 #
 # Layout:
@@ -15,6 +15,8 @@
 #   paper         -> all paper/research workloads + scheduler
 #   all           -> paper + scheduler  (no standalone live container today;
 #                    live work runs as cron jobs inside scheduler)
+#   live          -> scheduler only (runs the live cron jobs)
+#   v2            -> signals-dexscreener-launches (V2 launch snapshotter)
 #   claude-spot   -> opt-in Claude autonomous router (currently inert)
 #   main-bot      -> legacy SMA bot (disabled in production)
 

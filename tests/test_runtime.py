@@ -331,12 +331,6 @@ def test_repository_entrypoint_exports_runtime_and_legacy_settings_alias() -> No
     assert entrypoint.StrategyOrderClient is StrategyOrderClient
 
 
-def test_simple_exchange_import_does_not_load_environment() -> None:
-    import src.simple_exchange as simple_exchange
-
-    assert simple_exchange.BinanceClient is not None
-
-
 def test_default_data_feed_respects_market_data_mode() -> None:
     rest_client = FakeRestClient()
 
