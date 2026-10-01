@@ -9,6 +9,7 @@ import pytest
 
 from src.airdrop.catalog import filter_by
 from src.airdrop.scheduler import (
+    CEX_WALLET_NAME,
     ChecklistRow,
     CompletionState,
     TaskKey,
@@ -187,6 +188,23 @@ def test_auto_mark_only_touches_opportunities_on_matching_chain() -> None:
         assert state.is_completed_this_week(key, current_iso_week="2026-W22") is False
 
 
+def test_auto_mark_never_marks_cex_programs() -> None:
+    store = WalletStore()
+    evm_wallet = add_wallet(store, name="evm-1", chain=CHAIN_EVM, passphrase="pp")
+    state = CompletionState()
+    auto_mark_completed_from_activity(
+        completion_state=state, wallets_with_activity=[evm_wallet],
+        iso_week="2026-W22",
+    )
+    cex_active = filter_by(chain="cex", status="active")
+    assert cex_active, "catalog must carry active cex programs"
+    for opp in cex_active:
+        key = TaskKey(wallet_name=CEX_WALLET_NAME, opportunity_name=opp.name)
+        assert state.is_completed_this_week(
+            key, current_iso_week="2026-W22"
+        ) is False
+
+
 # ---------------------------------------------------------------------------
 # Digest rendering
 # ---------------------------------------------------------------------------
@@ -228,6 +246,13 @@ def test_digest_handles_empty_pending_with_no_activity() -> None:
     msg = render_telegram_digest(iso_week="2026-W22", pending_rows=[],
                                   active_wallet_names=[])
     assert "Nothing pending" in msg
+
+
+def test_digest_labels_cex_group_as_binance_account() -> None:
+    rows = [_row(CEX_WALLET_NAME, "cex", "Binance Alpha Points & airdrops")]
+    msg = render_telegram_digest(iso_week="2026-W22", pending_rows=rows,
+                                  active_wallet_names=[])
+    assert f"<b>{CEX_WALLET_NAME}</b> (Binance account) — 1 pending" in msg
 
 
 # ---------------------------------------------------------------------------

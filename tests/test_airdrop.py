@@ -12,6 +12,8 @@ from solders.keypair import Keypair as SolKeypair
 
 from src.airdrop.catalog import filter_by, opportunities
 from src.airdrop.scheduler import (
+    CEX_CHAIN,
+    CEX_WALLET_NAME,
     ChecklistRow,
     CompletionState,
     TaskKey,
@@ -148,6 +150,12 @@ def test_catalog_has_solana_and_evm_entries() -> None:
     assert "solana" in chains and "evm" in chains
 
 
+def test_catalog_has_exchange_account_entries() -> None:
+    cex = filter_by(chain="cex")
+    assert cex, "catalog must carry Binance-account programs"
+    assert all(o.url.startswith("https://") for o in cex)
+
+
 def test_filter_by_chain() -> None:
     sol = filter_by(chain="solana")
     assert all(o.chain == "solana" for o in sol)
@@ -201,10 +209,42 @@ def test_build_checklist_emits_one_row_per_wallet_opp_pair() -> None:
     add_wallet(store, name="evm-1", chain=CHAIN_EVM, passphrase="pp")
     rows = build_checklist(store=store, state=CompletionState(),
                             iso_week="2026-W22", status_filter="active")
-    # Each wallet × opportunities-for-its-chain.
+    # Each wallet × opportunities-for-its-chain, plus the wallet-less cex rows.
     sol_active = filter_by(chain="solana", status="active")
     evm_active = filter_by(chain="evm", status="active")
-    assert len(rows) == len(sol_active) + len(evm_active)
+    cex_active = filter_by(chain="cex", status="active")
+    assert len(rows) == len(sol_active) + len(evm_active) + len(cex_active)
+
+
+def test_build_checklist_emits_walletless_cex_rows() -> None:
+    rows = build_checklist(store=WalletStore(), state=CompletionState(),
+                            iso_week="2026-W22", status_filter="active")
+    cex_rows = [r for r in rows if r.chain == CEX_CHAIN]
+    assert cex_rows, "catalog must carry active cex programs"
+    assert all(r.wallet_name == CEX_WALLET_NAME for r in cex_rows)
+    assert all(r.wallet_address == "" for r in cex_rows)
+    # An empty wallet store yields exactly the cex rows.
+    assert len(rows) == len(cex_rows)
+
+
+def test_render_checklist_labels_cex_account_without_address() -> None:
+    rows = build_checklist(store=WalletStore(), state=CompletionState(),
+                            iso_week="2026-W22", status_filter="active")
+    text = render_checklist(rows, iso_week="2026-W22")
+    assert "ACCOUNT: Binance" in text
+    assert "ADDRESS:" not in text
+
+
+def test_cli_can_mark_cex_task_done(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AIRDROP_DATA_DIR", str(tmp_path))
+    cex_name = filter_by(chain="cex", status="active")[0].name
+    rc = run(["done", CEX_WALLET_NAME, cex_name])
+    assert rc == 0
+    state = load_state(tmp_path / "airdrop-scheduler.json")
+    assert state.is_completed_this_week(
+        TaskKey(CEX_WALLET_NAME, cex_name),
+        current_iso_week=current_iso_week(),
+    )
 
 
 def test_build_checklist_marks_completed_rows() -> None:

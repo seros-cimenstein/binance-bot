@@ -50,6 +50,12 @@ from src.airdrop.wallet import (
     save_store,
 )
 
+# Exchange-account programs (e.g. Binance HODLer Airdrops) have no keypair in
+# the wallet store but still belong on the checklist. They are cataloged under
+# the pseudo-chain ``cex`` and rendered under this pseudo-wallet name.
+CEX_CHAIN = "cex"
+CEX_WALLET_NAME = "binance"
+
 
 @dataclass(frozen=True, slots=True)
 class TaskKey:
@@ -121,6 +127,30 @@ def current_iso_week(now: datetime | None = None) -> str:
     return f"{iso.year}-W{iso.week:02d}"
 
 
+def _checklist_row(
+    *,
+    wallet_name: str,
+    wallet_address: str,
+    chain: str,
+    opp: AirdropOpportunity,
+    state: CompletionState,
+    iso_week: str,
+) -> ChecklistRow:
+    key = TaskKey(wallet_name=wallet_name, opportunity_name=opp.name)
+    status = ("completed"
+              if state.is_completed_this_week(key, current_iso_week=iso_week)
+              else "pending")
+    return ChecklistRow(
+        wallet_name=wallet_name, wallet_address=wallet_address,
+        chain=chain, opportunity=opp.name, url=opp.url,
+        activity_kind=opp.activity_kind,
+        min_actions_per_week=opp.min_actions_per_week,
+        min_size_usd=opp.min_size_usd,
+        confidence=opp.confidence,
+        status=status, notes=opp.notes,
+    )
+
+
 def build_checklist(
     *,
     store: WalletStore,
@@ -131,22 +161,20 @@ def build_checklist(
 ) -> list[ChecklistRow]:
     rows: list[ChecklistRow] = []
     for wallet in store.wallets:
-        opps = filter_by(chain=wallet.chain, status=status_filter,
-                          min_confidence=min_confidence)
-        for opp in opps:
-            key = TaskKey(wallet_name=wallet.name, opportunity_name=opp.name)
-            status = ("completed"
-                      if state.is_completed_this_week(key, current_iso_week=iso_week)
-                      else "pending")
-            rows.append(ChecklistRow(
+        for opp in filter_by(chain=wallet.chain, status=status_filter,
+                              min_confidence=min_confidence):
+            rows.append(_checklist_row(
                 wallet_name=wallet.name, wallet_address=wallet.address,
-                chain=wallet.chain, opportunity=opp.name, url=opp.url,
-                activity_kind=opp.activity_kind,
-                min_actions_per_week=opp.min_actions_per_week,
-                min_size_usd=opp.min_size_usd,
-                confidence=opp.confidence,
-                status=status, notes=opp.notes,
+                chain=wallet.chain, opp=opp, state=state, iso_week=iso_week,
             ))
+    # Exchange-account programs need no keypair, so they cannot hang off a
+    # stored wallet. Surface them once under the pseudo-wallet instead.
+    for opp in filter_by(chain=CEX_CHAIN, status=status_filter,
+                          min_confidence=min_confidence):
+        rows.append(_checklist_row(
+            wallet_name=CEX_WALLET_NAME, wallet_address="",
+            chain=CEX_CHAIN, opp=opp, state=state, iso_week=iso_week,
+        ))
     return rows
 
 
@@ -189,7 +217,10 @@ def render_checklist(rows: Sequence[ChecklistRow], *, iso_week: str) -> str:
         address = wallet_rows[0].wallet_address
         lines.append("")
         lines.append(f"  WALLET: {wallet}  ({chain})")
-        lines.append(f"  ADDRESS: {address}")
+        if chain == CEX_CHAIN:
+            lines.append("  ACCOUNT: Binance (exchange program — no wallet needed)")
+        else:
+            lines.append(f"  ADDRESS: {address}")
         for row in wallet_rows:
             mark = "[x]" if row.status == "completed" else "[ ]"
             lines.append(

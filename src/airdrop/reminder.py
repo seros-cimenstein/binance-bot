@@ -32,6 +32,7 @@ from loguru import logger
 
 from src.airdrop.catalog import AirdropOpportunity, filter_by
 from src.airdrop.scheduler import (
+    CEX_CHAIN,
     ChecklistRow,
     CompletionState,
     TaskKey,
@@ -360,7 +361,8 @@ def render_telegram_digest(
 
     for wallet_name, rows in sorted(by_wallet.items()):
         chain = rows[0].chain
-        lines.append(f"<b>{wallet_name}</b> ({chain}) — {len(rows)} pending:")
+        label = "Binance account" if chain == CEX_CHAIN else chain
+        lines.append(f"<b>{wallet_name}</b> ({label}) — {len(rows)} pending:")
         for row in rows:
             lines.append(
                 f"  • <a href=\"{row.url}\">{row.opportunity}</a>: "
