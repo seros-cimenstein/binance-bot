@@ -17,8 +17,12 @@ from src.airdrop.scheduler import (
     TaskKey,
     build_checklist,
     current_iso_week,
+    default_activity_path,
+    default_state_path,
+    default_store_path,
     load_state,
     render_checklist,
+    run,
     save_state,
 )
 from src.airdrop.wallet import (
@@ -239,3 +243,46 @@ def test_render_checklist_includes_address_and_status_marks() -> None:
     assert "AIRDROP CHECKLIST" in text
     assert "WALLET: sol-1" in text
     assert "[ ]" in text  # pending mark
+
+
+# ---------------------------------------------------------------------------
+# default data dir + CLI path precedence
+# ---------------------------------------------------------------------------
+
+
+def test_default_paths_use_legacy_home_dir_without_env(monkeypatch) -> None:
+    monkeypatch.delenv("AIRDROP_DATA_DIR", raising=False)
+    legacy = Path("~/.local/share/binance-bot/data").expanduser()
+    assert default_store_path() == legacy / "airdrop-wallets.json"
+    assert default_state_path() == legacy / "airdrop-scheduler.json"
+    assert default_activity_path() == legacy / "airdrop-activity.json"
+
+
+def test_default_paths_follow_airdrop_data_dir(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AIRDROP_DATA_DIR", str(tmp_path))
+    assert default_store_path() == tmp_path / "airdrop-wallets.json"
+    assert default_state_path() == tmp_path / "airdrop-scheduler.json"
+    assert default_activity_path() == tmp_path / "airdrop-activity.json"
+
+
+def test_default_paths_ignore_blank_airdrop_data_dir(monkeypatch) -> None:
+    monkeypatch.setenv("AIRDROP_DATA_DIR", "   ")
+    legacy = Path("~/.local/share/binance-bot/data").expanduser()
+    assert default_store_path() == legacy / "airdrop-wallets.json"
+
+
+def test_cli_state_written_under_env_dir(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AIRDROP_DATA_DIR", str(tmp_path))
+    rc = run(["undone", "w1", "Kamino Finance"])
+    assert rc == 0
+    assert (tmp_path / "airdrop-scheduler.json").exists()
+
+
+def test_cli_flag_beats_env_dir(monkeypatch, tmp_path: Path) -> None:
+    env_dir = tmp_path / "env"
+    flag_path = tmp_path / "flag" / "state.json"
+    monkeypatch.setenv("AIRDROP_DATA_DIR", str(env_dir))
+    rc = run(["--state-path", str(flag_path), "undone", "w1", "Kamino Finance"])
+    assert rc == 0
+    assert flag_path.exists()
+    assert not (env_dir / "airdrop-scheduler.json").exists()

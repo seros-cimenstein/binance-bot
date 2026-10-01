@@ -40,6 +40,10 @@ x-base: &base
     TZ: UTC
     BINANCE_BOT_BACKUP_DIR: /app/backups
     BINANCE_BOT_PROJECT_DIR: /app
+    # Airdrop scheduler state must sit on the persistent volume; without this
+    # it defaults to ~/.local/share/binance-bot/data inside the container and
+    # is lost on recreate.
+    AIRDROP_DATA_DIR: /app/data
   logging:
     driver: json-file
     options:

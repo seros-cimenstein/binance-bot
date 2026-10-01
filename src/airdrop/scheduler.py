@@ -18,6 +18,12 @@ as completed (read from a small persistent state file). When a row's
 This is intentionally low-tech: the operator marks rows as done via
 ``mark_done`` which updates the state file. The output of the scheduler
 is a Telegram-friendly checklist.
+
+All three state files (wallet store, completion state, activity snapshots)
+default to ``~/.local/share/binance-bot/data``. Set ``AIRDROP_DATA_DIR`` to
+relocate them in one shot; the docker image points it at the ``/app/data``
+volume so state survives container recreates. Explicit ``--store-path`` /
+``--state-path`` / ``--activity-path`` flags still win over the env var.
 """
 
 from __future__ import annotations
@@ -200,6 +206,38 @@ def render_checklist(rows: Sequence[ChecklistRow], *, iso_week: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Default paths
+# ---------------------------------------------------------------------------
+
+DATA_DIR_ENV = "AIRDROP_DATA_DIR"
+_DEFAULT_DATA_DIR = "~/.local/share/binance-bot/data"
+
+
+def default_data_dir() -> Path:
+    """Base directory for airdrop state.
+
+    ``AIRDROP_DATA_DIR`` overrides the systemd-era default. The docker image
+    sets it to ``/app/data`` (the mounted volume) so scheduler state survives
+    container recreates. Unset, behavior is unchanged: state lives under
+    ``~/.local/share/binance-bot/data``.
+    """
+    raw = os.environ.get(DATA_DIR_ENV, "").strip()
+    return Path(raw or _DEFAULT_DATA_DIR).expanduser()
+
+
+def default_store_path() -> Path:
+    return default_data_dir() / "airdrop-wallets.json"
+
+
+def default_state_path() -> Path:
+    return default_data_dir() / "airdrop-scheduler.json"
+
+
+def default_activity_path() -> Path:
+    return default_data_dir() / "airdrop-activity.json"
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -215,10 +253,8 @@ def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Manage the airdrop wallet store and produce a weekly checklist."
     )
-    parser.add_argument("--store-path",
-                        default=os.path.expanduser("~/.local/share/binance-bot/data/airdrop-wallets.json"))
-    parser.add_argument("--state-path",
-                        default=os.path.expanduser("~/.local/share/binance-bot/data/airdrop-scheduler.json"))
+    parser.add_argument("--store-path", default=str(default_store_path()))
+    parser.add_argument("--state-path", default=str(default_state_path()))
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_add = sub.add_parser("add", help="generate + add a new wallet")
@@ -249,9 +285,7 @@ def run(argv: list[str] | None = None) -> int:
     )
     p_remind.add_argument(
         "--activity-path",
-        default=os.path.expanduser(
-            "~/.local/share/binance-bot/data/airdrop-activity.json"
-        ),
+        default=str(default_activity_path()),
     )
 
     args = parser.parse_args(argv)
