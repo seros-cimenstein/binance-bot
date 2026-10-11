@@ -10,7 +10,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/.local/share/binance-bot
 EnvironmentFile=%h/.local/share/binance-bot/.env
-ExecStart=%h/.local/share/binance-bot/venv/bin/python -m src.sniper.paper \
+ExecStart=%h/.local/share/binance-bot/bin/bb sniper-paper \
   --entry-sol 0.005 \
   --hold-seconds 300 \
   --slippage-bps 500 \

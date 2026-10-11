@@ -1,0 +1,33 @@
+[package]
+name = "bb-products"
+description = "Binance product modules: API permission diagnostics, scope audit, margin/futures/transfer/withdrawal/prediction planning, spot canaries and the guarded live spot allocator."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bb-core.workspace = true
+bb-binance.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rust_decimal.workspace = true
+rust_decimal_macros.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+clap.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock.workspace = true
+pretty_assertions.workspace = true
+
+parking_lot = "0.12"

@@ -1,313 +1,177 @@
 # Binance Trading Bot
 
-A Binance trading bot implemented in Python using `ccxt` and `asyncio`.
+A Binance trading fleet written in Rust: a native Binance REST/WebSocket client,
+a Claude-driven agentic Spot trader, systematic strategies (funding arb, trend
+filter, mean reversion), a capital pool with a Claude allocator, a listing
+sniper, Solana launch sniping, signal collectors, and research backtests. All
+of it ships as one binary, `bb`.
 
-The current development runtime is a paper-only modular asset pool. It
-discovers eligible Binance spot routes, models current fees and market
-constraints, and records virtual allocations against configurable benchmarks.
-Automatic live trading is disabled by default. Phase 32 adds a separate
-Claude-controlled Spot runtime that can be explicitly enabled outside the
-paper pool.
+## Layout
 
-## Setup
+| Crate | Purpose |
+|---|---|
+| `bb-core` | env config, `Decimal` money helpers, fsync'd JSONL audit, Telegram alerts (persisted 429 cooldown), run locks, stop files |
+| `bb-binance` | native Binance client: HMAC/Ed25519 signing, time sync, rate-limit tracking, exchange rules, spot/wallet/convert/margin/USD-M futures, fills, klines history, WebSocket streams, feeds |
+| `bb-omp` | omp RPC client (Claude sessions with persistent context + host tools) |
+| `bb-trader` | `claude-spot`: the Claude agentic Spot trader |
+| `bb-pool` | paper asset pool, market catalog, multi-leg route engine, commissions, replays, reports |
+| `bb-strategies` | funding arb, trend filter, mean reversion, all backtests, `spec-snapshot` |
+| `bb-capital` | capital pool + Claude allocator, auto-convert, fleet status, cash distributor |
+| `bb-listing` | listing-announcement detector + listing sniper (flat / trailing / momentum) |
+| `bb-products` | API permissions, scope audit, margin/futures/transfer/withdrawal/prediction modelling, canaries, live probe |
+| `bb-runtime` | legacy strategy runtime (`main`, demo SMA, risk guard, order manager), `ops-check` |
+| `bb-signals`, `bb-sniper`, `bb-social`, `bb-polymarket`, `bb-airdrop` | DexScreener/Telegram/smart-money signals, Solana pump.fun sniper, social evidence, Polymarket scanner, airdrop scheduler |
+| `bb-cli` | the `bb` binary |
 
-1. Copy `.env.example` to `.env` and fill in your API keys. Keep `.env` and
-   `.env.*` backup copies out of commits because they may contain credentials.
-2. Install dependencies: `pip install .`
+Money (prices, quantities, balances, fees, PnL) is `rust_decimal::Decimal`
+end to end; `f64` is used only for statistics.
 
-For deployed paper-service operation, backup/restore, and verification
-procedures, see `OPERATIONS.md`.
-
-Run one paper evaluation cycle locally:
-
-```bash
-python -m src.pool --once
-```
-
-Run a fast deterministic replay without touching the live paper ledger:
-
-```bash
-scripts/pool_replay.sh
-```
-
-Explain current paper decisions and available candidate evidence without
-writing to the running ledger:
+## Build and test
 
 ```bash
-python -m src.pool.report --db-path ~/.local/share/binance-bot/data/pool-paper.db
+cargo build --release -p bb-cli          # -> target/release/bb
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+scripts/pool_replay.sh                   # deterministic paper-pool fixture replay
 ```
 
-Evaluate selected direct-`USDT` Spot assets quickly using historical public
-candles in an isolated research database:
+Copy `.env.example` to `.env` and fill in your keys. Never commit `.env` or
+`.env.*` files. `bb` loads `.env` from the working directory; process
+variables win. Logs go to stderr (`LOG_LEVEL`, `RUST_LOG`, `LOG_FORMAT=json`);
+stdout is reserved for command output.
+
+## Commands
+
+Run `bb --help` or `bb <command> --help`. Every former `python -m src.<module>`
+entry point is now `bb <module-in-kebab-case>` with the same flags, env vars,
+defaults and data files.
+
+| Area | Commands |
+|---|---|
+| Claude trader | `claude-spot` |
+| Live / scheduled strategies | `funding-arb`, `trend-filter`, `mean-reversion`, `listing-detector`, `listing-sniper` |
+| Capital | `capital-pool`, `auto-convert`, `bot-status`, `cash-distributor` |
+| Paper pool | `pool`, `pool-report`, `pool-replay`, `pool-history-replay`, `pool-unified` |
+| Products / diagnostics | `api-permissions`, `scope-audit`, `product-modules`, `advanced-readiness`, `margin`, `margin-canary`, `futures`, `futures-canary`, `transfers`, `transfer-canary`, `withdrawals`, `prediction`, `spot-canary`, `live-spot-allocator`, `live-probe`, `ops-check` |
+| Legacy runtime | `main` |
+| Signals / Solana / misc | `signals-*`, `sniper-*`, `social-signal`, `polymarket-scanner`, `airdrop-scheduler` |
+| Research | `*-backtest`, `spec-snapshot` |
+
+## Claude agentic Spot trader (`bb claude-spot`)
+
+Claude trades the Spot wallet through omp (the oh-my-pi coding agent, npm
+`@oh-my-pi/pi-coding-agent`) in RPC mode:
+
+- **Persistent context.** One long-lived omp session per trader, stored in
+  `CLAUDE_SPOT_SESSION_DIR`, resumed after restarts and crashes. omp
+  auto-compaction stays on, and the bot also compacts at
+  `CLAUDE_SPOT_COMPACT_AT_PERCENT`. A durable journal
+  (`CLAUDE_SPOT_JOURNAL_PATH`) holds Claude's theses across compactions.
+- **Tools, not text.** omp runs with every built-in tool disabled except
+  `web_search` (`CLAUDE_SPOT_WEB_SEARCH=true`, the default), so Claude has live
+  web search plus the bot's host tools: `get_portfolio`, `list_routes`,
+  `get_market_evidence`, `get_klines`, `get_social_evidence`, `get_trade_history`,
+  `execute_route`, `journal_read` / `journal_write`, and `end_cycle`. No shell or
+  filesystem access. `execute_route` is the only order path. Web results are
+  treated as untrusted data in the system prompt.
+- **No trading guardrails.** Fees, spread, slippage, momentum, evidence, social
+  data and trade memory are information for Claude to weigh. None of them blocks
+  a trade. The old edge, friction, speculative, loss-streak, cooldown,
+  daily-cap, proven-edge and rules-engine gates are gone. Their env vars are
+  ignored, with one warning listing them.
+- **Hard safety (always on, fail closed):**
+  - live arming: `CLAUDE_SPOT_ENABLED=true`, `CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
+  - the emergency stop file (`CLAUDE_SPOT_STOP_PATH`), checked at cycle start, before every route, before every leg and before every order;
+  - an exclusive run lock;
+  - account READING plus canTrade;
+  - Binance `order/test` before every leg;
+  - exchange filters, with orders sized from live balances net of a fee, slippage and rounding reserve;
+  - per-leg fill reconciliation, halting on anything ambiguous;
+  - a failed-route halt, cleared only by `bb claude-spot --mark-failed-route-reviewed`;
+  - operator scope (allow/block lists, blocked quotes, fiat blocking);
+  - Spot MARKET orders only, at most `CLAUDE_SPOT_MAX_ROUTE_LEGS` legs.
+- **Audit.** Each route or cycle is one fsync'd row in `CLAUDE_SPOT_AUDIT_PATH`,
+  written before any Telegram alert. It uses the Python schema plus agent
+  fields: tool calls, tokens and cost.
 
 ```bash
-python -m src.pool.history_replay --balance BNB=0.0169745 \
-  --symbol ETH/USDT --symbol SOL/USDT \
-  --start 2026-05-20T00:00:00Z --end 2026-05-26T00:00:00Z \
-  --db-path /tmp/binance-bot-history-replay.db
-python -m src.pool.report --db-path /tmp/binance-bot-history-replay.db
+bb claude-spot --evidence-only                 # decision context, no Claude, no orders
+bb claude-spot --plan-only                     # Claude decides; execute_route only records plans
+bb claude-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
+bb claude-spot --mark-failed-route-reviewed    # clear the failed-route halt after review
 ```
 
-Historical replay is for strategy research only. It uses public candles and
-modeled costs, so it does not replace current-market paper warm-up, dynamic
-exchange-rule checks, permission diagnostics, or a tiny live-canary review.
-For a small account, a valid Binance minimum order may exceed a permitted
-allocation percentage; that is a risk decision to review, not a limit to
-silently bypass.
+Cost control (not a trading gate): `CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD` (0 = unlimited).
+Choose the model and thinking level with `CLAUDE_SPOT_MODEL` (default
+`anthropic/claude-haiku-5-5`; always use provider-qualified ids) and
+`CLAUDE_SPOT_THINKING` (default `high`).
 
-Check API-key capabilities before any live-order probe:
+omp needs Claude credentials: either `ANTHROPIC_API_KEY`, or a one-time
+interactive `omp` login (stored under `PI_CODING_AGENT_DIR`).
+
+## Capital pool, Claude allocator, auto-convert
+
+`bb capital-pool` shows the plan: a reserve (`CAPITAL_RESERVE_PCT`), per-module
+min/max (`CAPITAL_MIN/MAX_MODULE_ALLOCATION_USD`), and score-weighted splits
+from ledger scorecards or lifetime PnL. `--advise` asks the Claude allocator,
+an omp session with fleet/scorecard/balance tools. Its proposal can only clamp
+within the deterministic bounds; any failure falls back to the deterministic
+plan.
+
+With `CAPITAL_POOL_ENABLED=true` the `main` runtime requests a lease before
+every buy. With `AUTO_CONVERT_TO_QUOTE=true` it market-sells
+`AUTO_CONVERT_ASSETS` to cover a quote shortfall, after an `order/test`.
+`bb auto-convert --plan-only` previews that conversion. `bb bot-status` and
+`bb cash-distributor` report fleet health and an advisory distribution.
+
+## Listing sniper
+
+`bb listing-detector --detect-only` polls Binance listing announcements and
+arms a shared watchlist (`LISTING_WATCHLIST_PATH`). `bb listing-sniper` diffs
+exchangeInfo against known symbols plus the watchlist and fires flat, trailing
+or momentum round trips, in paper (`--paper`) or live (`--submit-live`) mode. A
+live fire needs `LISTING_SNIPER_ENABLED=true`, `CONFIRM_LIVE_LISTING_SNIPER=yes`
+and `LISTING_SNIPER_PROVEN_EDGE=yes`, and is bounded by
+`LISTING_SNIPER_NOTIONAL_USDT` and `LISTING_SNIPER_DAILY_SPEND_CAP_USDT`.
+
+## Research and diagnostics
 
 ```bash
-python -m src.api_permissions --feature manual_live_probe
-python -m src.api_permissions --feature spot_live_canary
-python -m src.api_permissions --feature claude_spot_autonomous
-python -m src.api_permissions --feature margin_dry_run
-python -m src.api_permissions --feature margin_canary_plan
-python -m src.api_permissions --feature futures_dry_run
-python -m src.api_permissions --feature futures_canary_plan
-python -m src.api_permissions --feature transfer_dry_run
-python -m src.api_permissions --feature transfer_canary_plan
-python -m src.api_permissions --feature unified_pool_dry_run
-python -m src.api_permissions --feature symbol_scope_audit
-python -m src.api_permissions --feature withdrawal_dry_run
-python -m src.api_permissions --feature prediction_dry_run
+bb pool --once
+bb pool-report --db-path ~/.local/share/binance-bot/data/pool-paper.db
+bb pool-history-replay --balance BNB=0.0169745 --symbol ETH/USDT --symbol SOL/USDT \
+  --start 2026-05-20T00:00:00Z --end 2026-05-26T00:00:00Z --db-path /tmp/history-replay.db
+bb spec-snapshot                      # data/speculation/<UTC date>/ CSVs + SUMMARY.md
+bb api-permissions --feature claude_spot_autonomous
+bb scope-audit --symbol BNB/USDT --asset BNB
+bb funding-arb                        # plan-only by default
+bb claude-spot-backtest --help
 ```
 
-Inspect disabled-by-default advanced product module gates:
+Historical replay is for strategy research only: it uses public candles and
+modelled costs. The margin, futures, transfer, withdrawal and prediction
+modules model and plan only; their live writes are not implemented.
+
+## Deployment
+
+Docker is the primary target (Raspberry Pi 5 / ARM64 and x86_64). The image
+contains `bb`, `omp` (on Bun), supercronic and sqlite3.
 
 ```bash
-python -m src.product_modules
+docker compose build
+docker compose run --rm -it claude-spot omp             # one-time Claude login (or set ANTHROPIC_API_KEY)
+docker compose run --rm -it signals-telegram bb signals-telegram-setup   # one-time Telegram user login
+docker compose --profile all up -d
+touch docker-data/claude-spot.stop                      # emergency stop for the Claude trader
 ```
 
-Audit local API symbol/asset scope before live-capable planning:
+Profiles:
+- `live`: the Claude trader, the live momentum listing sniper and the scheduler.
+- `paper`: paper and signal workloads plus the scheduler.
+- `all`: both of the above.
+- `v2`: the launch detector.
+- `main-bot`: the legacy SMA runtime.
 
-```bash
-python -m src.scope_audit --symbol BNB/USDT --asset BNB
-```
-
-Create a plan-only spot live canary audit without submitting an order:
-
-```bash
-python -m src.spot_canary --plan-only
-```
-
-Create a plan-only guarded live spot allocation audit without submitting an
-order:
-
-```bash
-python -m src.live_spot_allocator --plan-only
-```
-
-Create a plan-only Claude autonomous Spot decision audit without submitting an
-order:
-
-```bash
-python -m src.claude_spot --plan-only
-```
-
-Claude Spot uses headless Claude Code with schema-validated decisions and the
-stored money-maker mission prompt. When live submission is enabled, it may use
-the whole available Spot wallet and execute one dynamically routed Spot action
-of up to three serial order legs per 5-minute timer cycle. The default live
-mode is `small_market_aggressive`: it uses looser small-market volume/spread
-gates, ranks tiny-account-fit opportunities ahead of top-volume assets, and
-sends up to `10` scored candidates with one route quote per candidate so the
-cycle stays within Binance request-weight limits and avoids overspending Claude
-calls on a small account. `CLAUDE_SPOT_MARKET_PICK_MODE=liquid_top_value`
-restores the older top-liquid behavior. Submit mode requires
-`CLAUDE_SPOT_ENABLED=true`,
-`CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
-`DRY_RUN=false`, and `CONFIRM_LIVE_TRADING=yes`.
-`CLAUDE_SPOT_BLOCK_FIAT_ASSETS=true` is the default, so the route builder avoids
-fiat rails such as `TRY`, `JPY`, `EUR`, `GBP`, `AUD`, `BRL`, and `IDR` that may
-be visible in market data but rejected by some accounts for Spot API orders.
-Stablecoin assets such as `USDT`, `USDC`, `FDUSD`, `DAI`, `BUSD`, and `USD1`
-are not treated as fiat by this guard. `CLAUDE_SPOT_ALLOWED_SYMBOLS` and
-`CLAUDE_SPOT_ALLOWED_ASSETS` can be set for a stricter local scope; when set,
-every live route leg must stay inside those lists.
-
-The runtime still enforces Binance market rules, available balances, fee
-handling, Spot permission/order-test preflight, emergency stop, audit,
-reconciliation, and halt-on-ambiguous-leg behavior. Aggressive mode lets Claude
-accept upfront fee/slippage friction for a stated small-market thesis, but it
-does not add Margin, Futures, transfer, withdrawal, or prediction write access.
-If Claude does not return a decision before `CLAUDE_SPOT_TIMEOUT_SECONDS`, the
-cycle records a held/no-order audit row instead of submitting an order.
-To avoid churn on a small account, live submit mode feeds Claude the modeled
-fee, spread, slippage, route friction, break-even, market evidence, and recent
-trade memory before any decision. `CLAUDE_SPOT_MIN_TRADE_INTERVAL_SECONDS=0`
-and `CLAUDE_SPOT_MAX_SUBMITTED_TRADES_PER_DAY=0` disable the older fixed
-cooldown/day cap so Claude can think and trade on each 5-minute cycle when the
-hard gates pass. `CLAUDE_SPOT_HALT_AFTER_FAILED_SUBMISSION=true` still holds
-after a partial failed route until operator review, and
-`CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS` is a hard maximum immediate
-fee/slippage/spread loss for routes offered to Claude.
-The small-market live profile uses `300` bps by default so tiny-account routes
-are not starved by shallow spread/friction ceilings, while still filtering
-obviously expensive routes.
-Live buy-leg execution now sizes from a dynamic quote reserve before order-test
-and submission: authenticated buy-side taker fee, the configured slippage
-buffer, and `CLAUDE_SPOT_LEG_ROUNDING_RESERVE_BPS`, with
-`CLAUDE_SPOT_MIN_LEG_QUOTE_RESERVE_BPS` as the floor. This reserve prevents a
-multi-leg route from spending the exact post-sell quote balance and failing the
-next buy from fees, rounding, or price movement.
-Before any live submission, Claude Spot also builds a compact evidence packet
-when `CLAUDE_SPOT_MARKET_EVIDENCE_ENABLED=true`: `5m`, `15m`, `1h`, `4h`,
-`24h`, and `7d` returns, volatility, volume change, break-even move, and recent
-Claude trade memory from the audit log. The `5m` and `15m` windows come from
-minute candles and are fed as `short_returns_bps` so Claude can see the current
-tape instead of leaning only on slower momentum. With
-`CLAUDE_SPOT_REQUIRE_MARKET_EVIDENCE_FOR_LIVE=true`,
-live routes fail closed unless the selected route clears
-`CLAUDE_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS` after route friction and the recent
-loss-streak gate is not active. The current default minimum is `50` bps, which
-is more aggressive than the earlier `200` bps gate. Use
-`python -m src.claude_spot --evidence-only` to inspect the context without
-asking Claude or submitting orders.
-`CLAUDE_SPOT_SPECULATIVE_MODE_ENABLED=true` is an explicit live-risk profile:
-it lets a selected route miss the normal evidence minimum only when evidence is
-ready, expected edge remains above `CLAUDE_SPOT_SPECULATIVE_MIN_EDGE_BPS`, and
-Claude gives a concrete speculative thesis. It does not bypass route scope,
-fiat blocking, balances, dynamic fees/reserves, order-test, emergency stop,
-failed-route halt, audit, or reconciliation.
-Telegram alerts include a deterministic ELI5 explanation for every Claude Spot
-cycle when `CLAUDE_SPOT_TELEGRAM_EXPLAIN=true`: held, planned, submitted,
-failed, and blocked. `CLAUDE_SPOT_TELEGRAM_REASON_CHARS=0` sends the full Why
-text; messages are split into Telegram-safe chunks when needed, while the full
-decision context remains in the audit JSONL.
-
-Collect and inspect optional read-only social signal evidence:
-
-```bash
-python -m src.social_signal --asset BONK --asset EDEN --evidence-only
-```
-
-When `SOCIAL_SIGNAL_ENABLED=true`, Claude Spot adds stored social evidence to
-candidate routes. Telegram collection uses only Bot API updates visible to the
-configured bot, and X collection uses official API search. Social evidence is
-additive; it cannot bypass Binance market rules, fee/friction gates, evidence
-gates, or emergency stops. If manipulation risk is high and
-`SOCIAL_SIGNAL_BLOCK_MANIPULATION_RISK=true`, the affected route is withheld
-before Claude can choose it.
-
-Run read-only margin discovery and local borrow/repay modeling:
-
-```bash
-python -m src.margin --dry-run --asset USDT --borrow-amount 10
-```
-
-Create a plan-only margin canary with a repayment intent:
-
-```bash
-python -m src.margin_canary --plan-only --margin-symbol BNB/USDT \
-  --asset USDT --borrow-amount 1 --repay-amount 1
-```
-
-Run read-only USD-M futures discovery and local order-risk modeling:
-
-```bash
-python -m src.futures --dry-run --symbol BTC/USDT --side BUY --quantity 0.001
-```
-
-Create a plan-only USD-M futures canary with a reduce-only exit intent:
-
-```bash
-python -m src.futures_canary --plan-only --symbol BTC/USDT \
-  --side BUY --quantity 0.001 --exit-side SELL --exit-reduce-only \
-  --exit-trigger "operator approved close"
-```
-
-Plan a dry-run internal transfer and audit the proposal:
-
-```bash
-python -m src.transfers --dry-run --source-wallet spot --destination-wallet funding --asset USDT --amount 5
-```
-
-Create a plan-only universal-transfer canary audit:
-
-```bash
-python -m src.transfer_canary --plan-only --source-wallet spot \
-  --destination-wallet funding --asset USDT --amount 1
-```
-
-Value a local unified dry-run asset pool from JSON inputs:
-
-```bash
-python -m src.pool.unified --dry-run --holdings-json holdings.json --prices-json prices.json
-```
-
-Build a local withdrawal safety plan without submitting a withdrawal:
-
-```bash
-python -m src.withdrawals --dry-run --asset USDT --amount 1 \
-  --address TAllowlistedAddress --network TRX \
-  --allow-address TAllowlistedAddress --allow-network TRX \
-  --operator-id local-review --allowed-operator local-review \
-  --approval risk --approval ops
-```
-
-Model a prediction position from a local market-data fixture without placing a
-stake:
-
-```bash
-python -m src.prediction --dry-run --market-data-file prediction-markets.json \
-  --symbol BTC/USDT --direction UP --stake-usdt 1 --bankroll-usdt 100
-```
-
-Run the manual real-order probe only when explicitly testing one live order:
-
-```bash
-python -m src.live_probe --confirm-real-order
-```
-
-The probe is separate from the paper pool and submits at most one direct
-USDT-market sell.
-
-The spot canary is also separate from the paper pool. Its first version is a
-foreground-only direct sell into `USDT` with replay/warm-up confirmation flags,
-hard daily limits, safe Binance order-test preflight, audit logging, and
-Telegram alerting.
-
-The live spot allocator is foreground-only as well. Its first version handles
-one direct spot market order per invocation with risk limits, benchmark
-valuation, balance reconciliation, safe order-test preflight, audit logging,
-and Telegram alerting.
-
-The margin module is dry-run only. It can read margin account, max-borrow, and
-interest data for local modeling, but live margin borrow, repay, order, and
-transfer actions are not implemented.
-
-The USD-M futures module is also dry-run only. It can read futures account,
-position, market-rule, funding, symbol-config, and leverage-bracket data for
-local risk modeling, but live futures order and account-mode writes are not
-implemented.
-
-The transfer module is dry-run only. It can read wallet balances and transfer
-history for local planning/audit, but live universal-transfer submission is not
-implemented.
-
-The margin, USD-M futures, and universal-transfer canary commands are
-foreground plan-only readiness checks. They add scope, emergency-stop, risk,
-and audit gates around the dry-run models; all submission flags fail closed.
-
-The unified pool module is local valuation only. It combines account-type
-holdings, debt, PnL, reserves, transfer availability, and benchmark prices into
-a dry-run allocation report without live writes.
-
-Advanced Binance product modules are tracked through a local Phase 23 registry.
-Withdrawal safety and prediction risk now have dry-run/local modeling modules.
-Live prediction trading, live withdrawals, future products, and live
-margin/futures/transfer activation remain disabled unless a future
-module-specific activation phase adds risk controls, tests, audit, and explicit
-approval.
-
-The scope audit is local/operator-owned. Binance does not expose the full
-API-key symbol whitelist safely, so foreground live-capable spot features fail closed
-unless `API_SYMBOL_WHITELIST` and, where assets are involved,
-`API_ASSET_WHITELIST` cover the requested scope.
-
-Review cross-product readiness evidence and serial canary policy locally:
-
-```bash
-python -m src.advanced_readiness
-```
+Periodic jobs live in `docker/crontab`. systemd user units for non-Docker
+hosts are in `deploy/user/`, installed by `scripts/setup_user_deploy.sh`. See
+`OPERATIONS.md` for backup, restore and verification procedures.

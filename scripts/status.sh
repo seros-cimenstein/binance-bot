@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROCESS_PATTERN="${BINANCE_BOT_PROCESS_PATTERN:-python.*-m src.main}"
+PROCESS_PATTERN="${BINANCE_BOT_PROCESS_PATTERN:-bb main}"
 SERVICE_NAME="${BINANCE_BOT_SERVICE_NAME:-binance-bot.service}"
 SCRIPT_PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_DIR="${BINANCE_BOT_PROJECT_DIR:-$SCRIPT_PROJECT_DIR}"

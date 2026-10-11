@@ -36,12 +36,13 @@ driven project.
 
 ## Live-Money Safety Rules
 
-- The legacy strategy runtime must not run fixed-size orders on a real-money
-  account. Keep `binance-bot.service` disabled unless a reviewed
-  balance-aware live mode is deliberately approved.
-- The modular asset-pool runtime in `src.pool` is paper-only. It may read
-  balances, markets, and authenticated commission schedules, but it must not
-  acquire a live order-submission path.
+- The legacy strategy runtime (`bb main`) must not run fixed-size orders on a
+  real-money account. Keep the `binance-bot.service` user unit and the
+  `main-bot` compose service disabled unless a reviewed balance-aware live mode
+  is deliberately approved.
+- The modular asset-pool runtime (`bb pool`, crate `bb-pool`) is paper-only. It
+  may read balances, markets, and authenticated commission schedules, but it
+  must not acquire a live order-submission path.
 - Paper decision reports must open the paper ledger read-only. Historical-candle
   research replay must write only to an isolated replay database, use no live
   order path, and must not replace the Phase 13 live-market warm-up gate.
@@ -65,73 +66,64 @@ driven project.
   preflight, risk limits, reconciliation, audit logging, and Telegram alerting.
   It must not be installed as a background service without a separate reviewed
   phase.
-- Phase 32 adds a separate Claude autonomous Spot runtime in `src.claude_spot`.
-  It is the only approved exception to the Phase 13/31 live-paper warm-up gate
-  and the foreground-only Spot allocator rule. Claude mode may override scorer
-  holds, paper warm-up, canary caps, allocation percentages, turnover limits,
-  drawdown limits, and daily notional/order limits for Spot only. It may control
-  the whole available Spot wallet when `CLAUDE_SPOT_ENABLED=true`,
+- Phase 32 added a separate Claude agentic Spot runtime (`bb claude-spot`,
+  crate `bb-trader`). It is the only approved exception to the Phase 13/31
+  live-paper warm-up gate and the foreground-only Spot allocator rule. It may
+  control the whole available Spot wallet when `CLAUDE_SPOT_ENABLED=true`,
   `CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
-  `DRY_RUN=false`, and `CONFIRM_LIVE_TRADING=yes` are all set. It may use
-  aggressive small-market discovery for tiny-account Spot fishing and may let
-  Claude accept upfront fee/slippage friction for a stated thesis. It still must
-  enforce Binance market rules including lot-size step sizing, available
-  balances, fee handling, Spot permission/order-test preflight, dynamic-scope
-  configuration, local route scope, default fiat-asset route blocking,
-  configured fixed trade cooldown/daily cap when enabled, hard friction cap,
-  halt-after-failed-submission behavior, market evidence/break-even/trade-memory
-  live gates, emergency stop, audit logging, reconciliation, and
-  halt-on-ambiguous-leg behavior. The Phase 34 live profile may set cooldown
-  and daily cap to `0` so Claude can think and potentially trade every
-  5-minute cycle, but it must still receive dynamic fee/friction evidence and
-  the hard evidence/failed-route gates must remain active. Claude mode must not
-  call margin, futures, universal-transfer, withdrawal, or prediction write
+  `DRY_RUN=false`, and `CONFIRM_LIVE_TRADING=yes` are all set, and it runs as a
+  long-lived daemon (`bb claude-spot --submit-live --daemon`, systemd
+  `binance-claude-spot.service`, compose service `claude-spot`). Claude runs
+  through omp in RPC mode with one persistent session (resumed across restarts,
+  compacted, backed by a durable journal) and acts only through the bot's host
+  tools; `execute_route` is the only order path. Claude Spot must not call
+  margin, futures, universal-transfer, withdrawal, or prediction write
   endpoints.
+- Claude Spot has no trading guardrails, by operator decision. The edge /
+  market-evidence minimum, friction cap, speculative mode, loss-streak limit,
+  trade cooldown, daily trade cap, proven-edge gate, rules-engine decision mode,
+  and the LLM `go_off` decision flag are removed; their env vars are ignored
+  with one warning. Fees, spread, slippage, short-window (`5m`/`15m`) and
+  longer momentum, market evidence, social data, and trade memory are
+  information in tool output for Claude to weigh, never blocking gates. Do not
+  reintroduce any of them as a blocking gate without explicit operator
+  approval. `CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD` is LLM cost control, not a
+  trading gate.
+- Claude Spot hard safety stays always on and fails closed: the live arming
+  flags, the emergency stop file checked at cycle start and before every route,
+  leg, and order, the exclusive run lock, account READING plus canTrade,
+  Binance `order/test` before every leg, exchange filters with orders sized
+  from live balances net of authenticated per-symbol taker fees plus slippage
+  and rounding reserve, per-leg fill reconciliation that halts on anything
+  ambiguous, operator scope (allow/block lists, blocked quotes, default fiat
+  blocking), Spot MARKET orders only with at most `CLAUDE_SPOT_MAX_ROUTE_LEGS`
+  legs, and the failed-route halt. A route that submitted an order and then
+  failed, or whose submission was ambiguous, halts live trading until the
+  operator reviews it and runs `bb claude-spot --mark-failed-route-reviewed`;
+  nothing else may clear it. Never weaken or bypass any hard-safety item.
+- Claude Spot audit is one fsync'd JSONL row per route or cycle, written before
+  any Telegram alert, preserving submitted-leg truth after any partial route
+  failure. Signed Binance request details must stay out of logs.
 - Phase 35 social-signal intelligence is read-only evidence collection and
   context enrichment only. It may ingest Telegram Bot API updates visible to a
   configured bot and official X API search results, normalize/hash records, and
-  feed per-asset evidence to Claude Spot. It must not bypass platform terms,
-  scrape private chats, use browser automation for X, store unnecessary raw
-  personal data, or create an order-submission path. Social evidence is
-  additive and manipulation-risk blocks may remove candidate routes, but social
-  hype must never bypass exchange, fee/friction, evidence, emergency-stop, or
-  reconciliation gates.
+  feed per-asset evidence to Claude Spot through `get_social_evidence`. It must
+  not bypass platform terms, scrape private chats, use browser automation for
+  X, store unnecessary raw personal data, or create an order-submission path.
+  Social evidence is information for Claude only and must never bypass
+  exchange rules, order-test, emergency-stop, or reconciliation.
 - Phase 36 Claude Spot Telegram decision explanations are observability-only.
-  They must be derived from the completed cycle result/audit data, must not make
-  a second LLM call, and must not change live routing, prompt, risk, evidence,
-  fee/friction, order-test, emergency-stop, audit, or reconciliation behavior.
-- Phase 37 Claude Spot friction-cap tuning may widen the hard immediate
-  fee/spread/slippage ceiling for small-market discovery, but it must remain a
-  finite configured cap and must not bypass market evidence, trade memory,
-  Binance market rules, order-test, local scope, fiat blocking, emergency-stop,
-  audit, or reconciliation behavior.
-- Phase 38 Claude Spot bps retuning may adjust both the candidate friction cap
-  and the strict evidence minimum. Increasing the evidence minimum is a
-  stricter live-submission gate, not a risk loosening; it must still be
-  documented and tested as a deliberate live profile change.
-- Phase 39 Claude Spot evidence-minimum lowering is a live-risk increase. It
-  may make live Spot submissions more likely, but it must keep the finite
-  candidate friction cap, Binance market rules, balance checks, order-test,
-  local scope, fiat blocking, trade memory, emergency stop, audit, and
-  reconciliation behavior active.
-- Phase 40 Claude Spot route-execution hardening keeps live buy sizing dynamic:
-  use authenticated per-symbol taker fees plus slippage and rounding reserve
-  before order-test/submission, preserve submitted-leg audit truth after any
-  partial route failure, sanitize signed Binance request details from logs, and
-  allow full Telegram Why text through safe message splitting. Keep the timer
-  stopped after a partial failed route until operator review explicitly
-  re-enables it.
-- Phase 41 Claude Spot speculative entry mode is an explicit live-risk profile:
-  it may relax only the normal market-evidence edge minimum when evidence is
-  ready, expected edge stays above the configured speculative floor, and Claude
-  provides a concrete speculative thesis. It must not bypass Binance market
-  rules, balances, dynamic fees/reserves, order-test, local scope, fiat
-  blocking, trade memory, emergency stop, failed-route halt, audit, or
-  reconciliation.
-- Phase 42 Claude Spot short-window evidence adds `5m` and `15m` minute-candle
-  returns to the candidate context and relative-momentum edge. Keep the normal
-  live gates active, and do not let 24h/7d language override clearly adverse
-  short-window tape without an explicit after-fee thesis.
+  They must be derived from the completed cycle result/audit data, must not
+  make a separate LLM call, and must not change live routing, prompt, order-test,
+  emergency-stop, audit, or reconciliation behavior. Long explanations are
+  delivered through safe message splitting.
+- The capital pool (`bb capital-pool`, crate `bb-capital`) keeps a
+  deterministic reserve and per-module min/max plan. The Claude allocator
+  (`--advise`) may only clamp within those deterministic bounds, and any
+  allocator failure must fall back to the deterministic plan. Auto-convert
+  (`AUTO_CONVERT_TO_QUOTE=true`) may only market-sell `AUTO_CONVERT_ASSETS` to
+  cover a quote shortfall after a Binance `order/test`, and must never sell the
+  target symbol's base asset.
 - The margin module is dry-run/read-only only. It may query margin account,
   max-borrow, and interest data for local modeling, but it must not call margin
   borrow, repay, order, or transfer write endpoints. Live margin permissions
@@ -182,8 +174,8 @@ driven project.
 ## Current Verification Commands
 
 ```bash
-.venv/bin/python -m pytest -q
-scripts/pool_replay.sh
-.venv/bin/python test_pipeline.py
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 scripts/smoke.sh
+scripts/pool_replay.sh
 ```

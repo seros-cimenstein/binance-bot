@@ -8,26 +8,15 @@ SOURCE_ENV="${BINANCE_BOT_SOURCE_ENV_FILE:-/opt/binance-bot/.env}"
 SOURCE_DB="${BINANCE_BOT_SOURCE_DB:-/opt/binance-bot/data/live.db}"
 
 echo "Staging user-owned Binance Bot in $PROJECT_DIR..."
-mkdir -p "$PROJECT_DIR" "$PROJECT_DIR/data" "$PROJECT_DIR/logs" "$PROJECT_DIR/backups" "$UNIT_DIR"
+mkdir -p "$PROJECT_DIR" "$PROJECT_DIR/bin" "$PROJECT_DIR/data" "$PROJECT_DIR/logs" "$PROJECT_DIR/backups" "$UNIT_DIR"
 
-rsync -a --delete \
-    --exclude "/.env" \
-    --exclude "/.env.*" \
-    --exclude "/.git/" \
-    --exclude "/.backtest_cache/" \
-    --exclude "/.venv/" \
-    --exclude "/venv/" \
-    --exclude "__pycache__/" \
-    --exclude ".pytest_cache/" \
-    --exclude "build/" \
-    --exclude "dist/" \
-    --exclude "*.egg-info/" \
-    --exclude "*.log" \
-    --exclude "*.db" \
-    --exclude "/data/" \
-    --exclude "/logs/" \
-    --exclude "/backups/" \
-    "$SOURCE_DIR/" "$PROJECT_DIR/"
+echo "Building the bb release binary..."
+cargo build --release --locked -p bb-cli --manifest-path "$SOURCE_DIR/Cargo.toml"
+install -m 0755 "$SOURCE_DIR/target/release/bb" "$PROJECT_DIR/bin/bb.new"
+mv -f -- "$PROJECT_DIR/bin/bb.new" "$PROJECT_DIR/bin/bb"
+
+# Runtime only needs the binary plus operator scripts; source stays in the checkout.
+rsync -a --delete "$SOURCE_DIR/scripts/" "$PROJECT_DIR/scripts/"
 
 if [ ! -f "$PROJECT_DIR/.env" ]; then
     if [ ! -r "$SOURCE_ENV" ]; then
@@ -52,8 +41,9 @@ else
     echo "Preserving existing user database at $PROJECT_DIR/data/live.db."
 fi
 
-python3 -m venv "$PROJECT_DIR/venv"
-"$PROJECT_DIR/venv/bin/pip" install "$PROJECT_DIR"
+if ! command -v omp >/dev/null 2>&1; then
+    echo "Warning: omp is not on PATH; claude-spot and capital-pool --advise need it (CLAUDE_SPOT_COMMAND)." >&2
+fi
 
 install -m 0644 "$SOURCE_DIR"/deploy/user/*.service "$SOURCE_DIR"/deploy/user/*.timer "$UNIT_DIR/"
 systemctl --user daemon-reload

@@ -6,8 +6,8 @@ been reviewed. Paths below assume the local checkout at
 `/home/seref/binance-bot` — substitute accordingly.
 
 ```bash
-cd /home/user/projects/binance-bot   # or ~/binance-bot on the Pi
-.venv/bin/python -m pytest -x tests/signals/
+cd ~/binance-bot   # repo checkout (on the Pi: ~/binance-bot)
+cargo test -p bb-signals
 git diff --check
 docker compose build
 ```
@@ -20,8 +20,8 @@ docker compose ps signals-dexscreener-launches
 docker compose logs -f signals-dexscreener-launches
 ```
 
-Enable snapshots and reports. The crontab is **baked into the image** via
-`COPY . .` in the Dockerfile, so editing `docker/crontab` requires a rebuild
+Enable snapshots and reports. The crontab is **baked into the image**
+(`COPY docker ./docker` in the Dockerfile), so editing `docker/crontab` requires a rebuild
 and force-recreate of the scheduler — restarting alone keeps the old crontab.
 
 ```bash
@@ -32,14 +32,14 @@ docker compose logs -f scheduler
 ```
 
 Uncomment only the two `TODO Phase 2 enable on Pi` lines for
-`src.signals.snapshotter` and `src.signals.v2_report`.
+`bb signals-snapshotter` and `bb signals-v2-report`.
 
 Verify V2 state is growing without touching V1 ledgers:
 
 ```bash
 docker compose exec scheduler sh -lc 'wc -l /app/data/signals-v2-ledger.jsonl /app/data/signals-v2-snapshots.jsonl || true'
 docker compose exec scheduler sh -lc 'tail -n 3 /app/data/signals-v2-ledger.jsonl || true'
-docker compose exec scheduler python -m src.signals.v2_report
+docker compose exec scheduler bb signals-v2-report
 ls -lh docker-data/signals-v2-report-*.md
 ```
 

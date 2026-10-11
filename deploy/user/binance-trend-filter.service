@@ -7,6 +7,6 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/.local/share/binance-bot
 EnvironmentFile=%h/.local/share/binance-bot/.env
-ExecStart=%h/.local/share/binance-bot/venv/bin/python -m src.trend_filter --submit-live
+ExecStart=%h/.local/share/binance-bot/bin/bb trend-filter --submit-live
 StandardOutput=journal
 StandardError=journal

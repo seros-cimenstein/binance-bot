@@ -1,15 +1,32 @@
-# Binance Pool Operations
+# Binance Bot Operations
 
-The active development runtime is the user-owned, paper-only modular asset
-pool at `~/.local/share/binance-bot`. It reads Binance balances, markets, and
+The fleet ships as one Rust binary, `bb` (see `README.md`). The active
+development runtime is the user-owned, paper-only modular asset pool at
+`~/.local/share/binance-bot`. It reads Binance balances, markets, and
 commission schedules, then records virtual allocations in
 `data/pool-paper.db`. It does not submit exchange orders.
 By default it scores every asset represented in the eligible market set;
 `POOL_MAX_SCORING_ASSETS` is an optional resource-control override.
 
+## Running `bb`
+
+`bb` loads `.env` from the working directory and resolves relative `data/...`
+paths against it, so run it from the directory that holds `.env` and `data/`.
+
+| Host | Binary | Working directory |
+|---|---|---|
+| Development checkout | `target/release/bb` (`cargo build --release -p bb-cli`) | the checkout |
+| systemd user host | `~/.local/share/binance-bot/bin/bb` | `~/.local/share/binance-bot` |
+| Docker | `docker compose run --rm <service> bb ...` | `/app` (host `docker-data/` is `/app/data`) |
+
+Commands below are written as `bb <command>`; substitute the binary or the
+`docker compose run --rm <service>` prefix for your host. Every command has
+`bb <command> --help`.
+
 ## Safety Posture
 
-The former `binance-bot.service` used fixed-size live BTC order intent. It is
+The legacy strategy runtime (`bb main`, user unit `binance-bot.service`,
+compose service `main-bot`) used fixed-size live BTC order intent. It is
 stopped and disabled, and the code refuses fixed-size real-money startup.
 Do not enable or restart that service while evaluating the pool.
 
@@ -20,50 +37,75 @@ systemctl --user show binance-bot.service -p ActiveState -p UnitFileState
 systemctl --user show binance-pool-paper.service -p ActiveState -p UnitFileState
 ```
 
-## Deploy Paper Service
+## Validate And Deploy
 
-Validate and deploy without `sudo`:
+Validate in the checkout:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m pytest -q
-.venv/bin/python test_pipeline.py
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 scripts/smoke.sh
+scripts/pool_replay.sh
 git diff --check
+```
+
+### systemd user host
+
+Deploy without `sudo`:
+
+```bash
 scripts/setup_user_deploy.sh
 systemctl --user disable --now binance-bot.service
 systemctl --user enable --now binance-pool-paper.service
 systemctl --user enable --now binance-pool-paper-backup.timer
 ```
 
-`scripts/setup_user_deploy.sh` preserves `.env`, databases, logs, and
-backups. It imports the historic live database only when that database does
-not already exist.
+`scripts/setup_user_deploy.sh` builds `bb` in release mode, installs it
+atomically to `~/.local/share/binance-bot/bin/bb`, syncs `scripts/`, installs
+every unit from `deploy/user/` and reloads the user manager. It preserves
+`.env`, databases, logs, and backups, and it starts no trading service. It
+warns when `omp` is not on `PATH` (needed by `claude-spot` and
+`capital-pool --advise`). Restart running services after a deploy to load the
+new binary.
+
+### Docker
+
+```bash
+docker compose build
+docker compose --profile all up -d
+```
+
+Profiles: `live` (Claude trader, live momentum listing sniper, scheduler),
+`paper` (paper and signal workloads, scheduler), `all` (both), `v2` (launch
+detector), `main-bot` (legacy SMA runtime). Periodic jobs (funding-arb,
+trend-filter, listing detector, airdrop digest, SQLite backups) run in the
+`scheduler` container from `docker/crontab`.
 
 ## Status And Logs
 
 ```bash
 cd ~/.local/share/binance-bot
 scripts/pool_status.sh
+bin/bb bot-status
 systemctl --user status binance-pool-paper.service --no-pager
 journalctl --user -u binance-pool-paper.service -f
 ```
+
+Docker: `docker compose ps`, `docker compose logs -f <service>`, and
+`docker compose run --rm scheduler bb bot-status`.
 
 Run one foreground read-only/paper evaluation cycle when diagnosing catalog or
 valuation behavior:
 
 ```bash
-cd ~/.local/share/binance-bot
-venv/bin/python -m src.pool --once
+bb pool --once
 ```
 
 Read the deployed paper evidence in plain language without changing its
 ledger:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.pool.report \
-  --db-path ~/.local/share/binance-bot/data/pool-paper.db
+bb pool-report --db-path ~/.local/share/binance-bot/data/pool-paper.db
 ```
 
 This report shows warm-up progress, virtual holdings, latest hold/rebalance
@@ -75,7 +117,6 @@ minimum-order gates, and scorer behavior without waiting for real-time paper
 cycles:
 
 ```bash
-cd /home/user/projects/binance-bot
 scripts/pool_replay.sh
 ```
 
@@ -87,13 +128,11 @@ Run a fast historical strategy study from public Binance candles for a small,
 explicit direct-`USDT` candidate set:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.pool.history_replay --balance BNB=0.0169745 \
+bb pool-history-replay --balance BNB=0.0169745 \
   --symbol ETH/USDT --symbol SOL/USDT \
   --start 2026-05-20T00:00:00Z --end 2026-05-26T00:00:00Z \
   --db-path /tmp/binance-bot-history-replay.db
-.venv/bin/python -m src.pool.report \
-  --db-path /tmp/binance-bot-history-replay.db
+bb pool-report --db-path /tmp/binance-bot-history-replay.db
 ```
 
 The historical command automatically includes direct-`USDT` routes for initial
@@ -105,24 +144,54 @@ If minimum-order holds dominate for a small balance, record that result for the
 live-readiness review. Do not enlarge an approved exposure limit solely to make
 a trade fit Binance minimum notional rules.
 
+## Emergency Stop Files
+
+Every live-capable runtime checks a stop file and refuses to trade while it
+exists. Create it to stop, delete it to resume. Paths are relative to the bot
+directory (`~/.local/share/binance-bot/data/...` on systemd hosts,
+`docker-data/...` on the Docker host).
+
+| Runtime | Stop file (default) | Override |
+|---|---|---|
+| `claude-spot` | `data/claude-spot.stop` | `CLAUDE_SPOT_STOP_PATH` |
+| `listing-sniper` (flat / trailing / momentum services) | `data/listing-sniper-flat.stop`, `data/listing-sniper-trailing.stop`, `data/listing-sniper-momentum.stop` (bare default `data/listing-sniper.stop`) | `LISTING_SNIPER_EMERGENCY_STOP_PATH` |
+| `listing-detector` | `data/listing-detector.stop` | `LISTING_DETECTOR_EMERGENCY_STOP_PATH` |
+| `funding-arb` | `data/funding-arb.stop` | `FUNDING_ARB_EMERGENCY_STOP_PATH` |
+| `trend-filter` | `data/trend-filter.stop` | `TREND_FILTER_EMERGENCY_STOP_PATH` |
+| `mean-reversion` | `data/mean-reversion.stop` | `MEAN_REV_EMERGENCY_STOP_PATH` |
+| `spot-canary` | `data/spot-canary.stop` | `SPOT_CANARY_STOP_PATH` |
+| `live-spot-allocator` | `data/live-spot.stop` | `LIVE_SPOT_ALLOCATOR_STOP_PATH` |
+| `margin-canary` / `futures-canary` / `transfer-canary` | `data/margin-canary.stop`, `data/futures-canary.stop`, `data/transfer-canary.stop` | `--emergency-stop-path` |
+| `signals-dexscreener` / `signals-smart-money` / `signals-telegram-ingester` | `data/signals-dexscreener.stop`, `data/signals-smart-money.stop`, `data/signals-telegram.stop` | `SIGNALS_*_STOP_PATH` |
+| `sniper-detector` | `data/sniper.stop` | `SNIPER_EMERGENCY_STOP_PATH` |
+
+```bash
+touch ~/.local/share/binance-bot/data/claude-spot.stop   # systemd host
+touch docker-data/claude-spot.stop                       # Docker host
+```
+
+The legacy `bb main` runtime has no stop file: `scripts/panic.sh` sends
+`SIGUSR1` to every `bb main` process so its rollback closes tracked positions
+before shutdown. The paper pool never submits orders.
+
 ## API Permission Diagnostics
 
 Run permission diagnostics before any live-order probe or future live canary:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.api_permissions --feature manual_live_probe
-.venv/bin/python -m src.api_permissions --feature spot_live_canary
-.venv/bin/python -m src.api_permissions --feature margin_dry_run
-.venv/bin/python -m src.api_permissions --feature margin_canary_plan
-.venv/bin/python -m src.api_permissions --feature futures_dry_run
-.venv/bin/python -m src.api_permissions --feature futures_canary_plan
-.venv/bin/python -m src.api_permissions --feature transfer_dry_run
-.venv/bin/python -m src.api_permissions --feature transfer_canary_plan
-.venv/bin/python -m src.api_permissions --feature unified_pool_dry_run
-.venv/bin/python -m src.api_permissions --feature symbol_scope_audit
-.venv/bin/python -m src.api_permissions --feature withdrawal_dry_run
-.venv/bin/python -m src.api_permissions --feature prediction_dry_run
+bb api-permissions --feature manual_live_probe
+bb api-permissions --feature spot_live_canary
+bb api-permissions --feature claude_spot_autonomous
+bb api-permissions --feature margin_dry_run
+bb api-permissions --feature margin_canary_plan
+bb api-permissions --feature futures_dry_run
+bb api-permissions --feature futures_canary_plan
+bb api-permissions --feature transfer_dry_run
+bb api-permissions --feature transfer_canary_plan
+bb api-permissions --feature unified_pool_dry_run
+bb api-permissions --feature symbol_scope_audit
+bb api-permissions --feature withdrawal_dry_run
+bb api-permissions --feature prediction_dry_run
 ```
 
 The diagnostic reads `GET /api/v3/account` and uses Binance's safe
@@ -146,8 +215,7 @@ API_ASSET_WHITELIST=BNB,USDT
 Audit requested symbols/assets without exchange writes:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.scope_audit --symbol BNB/USDT --asset BNB
+bb scope-audit --symbol BNB/USDT --asset BNB
 ```
 
 Use `--fail-on-blocked` in scripts that must stop when local scope is missing
@@ -160,8 +228,7 @@ emergency-stop state, and operator identity locally. It has no withdrawal
 submission path:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.withdrawals --dry-run --asset USDT --amount 1 \
+bb withdrawals --dry-run --asset USDT --amount 1 \
   --address TAllowlistedAddress --network TRX \
   --allow-address TAllowlistedAddress --allow-network TRX \
   --operator-id local-review --allowed-operator local-review \
@@ -176,8 +243,7 @@ Prediction modeling consumes a local or injected read-only market payload. It
 does not call a prediction stake, claim, or settlement write endpoint:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.prediction --dry-run \
+bb prediction --dry-run \
   --market-data-file prediction-markets.json --symbol BTC/USDT \
   --direction UP --stake-usdt 1 --bankroll-usdt 100
 ```
@@ -188,13 +254,12 @@ cd /home/user/projects/binance-bot
 
 The spot live canary is a foreground-only Phase 17 command. Its first version
 only supports one direct source-asset sell into `USDT`; it is not a background
-allocator and it is not wired to `src.pool`.
+allocator and it is not wired to the paper pool (`bb pool`).
 
 Plan the canary without submitting an order:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.spot_canary --plan-only
+bb spot-canary --plan-only
 ```
 
 The canary can submit a real order only when all confirmation flags are
@@ -202,8 +267,7 @@ provided and `.env` has `USE_TESTNET=false`, `DRY_RUN=false`, and
 `CONFIRM_LIVE_TRADING=yes`:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.spot_canary \
+bb spot-canary \
   --confirm-live-canary \
   --confirm-replay-passed \
   --confirm-paper-warmup-reviewed
@@ -225,16 +289,14 @@ Binance order-test preflight, audit logging, and Telegram alerting.
 Plan an allocation without submitting an order:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.live_spot_allocator --plan-only
+bb live-spot-allocator --plan-only
 ```
 
 Submit mode requires every confirmation flag, live-mode environment settings,
 passing permission diagnostics, and no emergency stop file:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.live_spot_allocator \
+bb live-spot-allocator \
   --confirm-live-allocator \
   --confirm-canary-reviewed \
   --confirm-replay-passed \
@@ -247,101 +309,236 @@ notional `12 USDT`, max daily orders `2`, direct route only, and BNB reserve
 protection. Create `data/live-spot.stop` to block allocator planning and
 submission. Audit rows default to `data/live-spot-allocations.jsonl`.
 
-## Claude Autonomous Spot Brain
+## Claude Agentic Spot Trader
 
-The Claude Spot runtime decides one Spot action per cycle (hold or one
-dynamically routed rebalance of up to three serial legs). It does not modify
+`bb claude-spot` lets Claude trade the Spot wallet through omp (the oh-my-pi
+coding agent, npm `@oh-my-pi/pi-coding-agent`) in RPC mode. It does not modify
 the paper-only pool.
 
-### Decision regime (phase 43, calibrated)
+- **Persistent session.** One long-lived omp session per trader, stored in
+  `CLAUDE_SPOT_SESSION_DIR` and resumed after restarts and crashes. omp
+  auto-compaction stays on and the bot also compacts at
+  `CLAUDE_SPOT_COMPACT_AT_PERCENT`. Claude's theses survive compaction in the
+  journal at `CLAUDE_SPOT_JOURNAL_PATH`.
+- **Host tools plus web search.** omp runs with all built-in tools disabled
+  except `web_search` (`CLAUDE_SPOT_WEB_SEARCH`, default true; set false for
+  `--no-tools`). Claude acts through the bot's host tools `get_portfolio`,
+  `list_routes`, `get_market_evidence`, `get_klines`, `get_social_evidence`,
+  `get_trade_history`, `execute_route`, `journal_read` / `journal_write`, and
+  `end_cycle`. `execute_route` is the only order path.
 
-The default decider is `RulesEngineAdvisor`: a deterministic rule that picks
-the candidate route whose `market_evidence.expected_edge_after_friction_bps`
-is the largest among those that pass the market-evidence gate and stay under
-the friction cap, otherwise holds. No LLM call.
+### Trading guardrails removed
 
-Selectable via `CLAUDE_SPOT_DECISION_MODE`:
+By operator decision Claude Spot has no trading guardrails. Fees, spread,
+slippage, momentum, market evidence, social data and trade memory are
+information Claude weighs; none of them blocks a trade. Removed: the
+edge/market-evidence minimum, the friction cap, speculative mode, the
+loss-streak limit, the trade cooldown, the daily trade cap, the proven-edge
+gate, the rules-engine decision mode, and the LLM `go_off` decision flag.
+Their variables (`CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS`,
+`CLAUDE_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS`, `CLAUDE_SPOT_SPECULATIVE_*`,
+`CLAUDE_SPOT_MAX_RECENT_LOSS_STREAK`, `CLAUDE_SPOT_MIN_TRADE_INTERVAL_SECONDS`,
+`CLAUDE_SPOT_MAX_SUBMITTED_TRADES_PER_DAY`, `CLAUDE_SPOT_PROVEN_EDGE`,
+`CLAUDE_SPOT_REQUIRE_PROVEN_EDGE`, `CLAUDE_SPOT_DECISION_MODE`, ...) are
+ignored; the trader logs one warning listing any that are still set.
 
-| Value           | Behavior                                              |
-| --------------- | ----------------------------------------------------- |
-| `rules_only`    | Deterministic only (default).                         |
-| `llm_only`      | Legacy LLM-only decider. Kept for back-compat.        |
-| `rules_first`   | Rules engine proposes; LLM can only veto or approve.  |
+Cost control (not a trading gate): `CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD`
+(0 = unlimited). Model and thinking level: `CLAUDE_SPOT_MODEL` (default
+`anthropic/claude-haiku-5-5`; use provider-qualified ids, a bare `haiku-5.5`
+can resolve to another provider), `CLAUDE_SPOT_THINKING` (default `high`).
 
-Plan one decision without submitting orders:
+### Hard safety (always on, fail closed)
+
+- Live arming: `CLAUDE_SPOT_ENABLED=true`,
+  `CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
+  `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`.
+- The emergency stop file `data/claude-spot.stop` (`CLAUDE_SPOT_STOP_PATH`),
+  checked at cycle start, before every route, before every leg and before
+  every order.
+- An exclusive run lock (`CLAUDE_SPOT_LOCK_PATH`).
+- Account READING plus canTrade.
+- Binance `order/test` before every leg.
+- Exchange filters, with orders sized from live balances net of a fee,
+  slippage and rounding reserve.
+- Per-leg fill reconciliation, halting on anything ambiguous.
+- The failed-route halt (below).
+- Operator scope: allow/block lists, blocked quotes, fiat blocking.
+- Spot MARKET orders only, at most `CLAUDE_SPOT_MAX_ROUTE_LEGS` legs.
+- Margin, futures, transfer, withdrawal, and prediction writes are unavailable.
+
+Each route or cycle is one fsync'd row in `CLAUDE_SPOT_AUDIT_PATH` (default
+`data/claude-spot-decisions.jsonl`), written before any Telegram alert, with
+tool calls, tokens and cost.
+
+### Commands
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.claude_spot --plan-only
+bb claude-spot --evidence-only                 # decision context, no Claude, no orders
+bb claude-spot --plan-only                     # Claude decides; execute_route only records plans
+bb claude-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
+bb claude-spot --mark-failed-route-reviewed --review-reason "reconciled by hand"
 ```
 
-### Live submit gates
+### Deployment
 
-`binance-claude-spot.timer` should stay disabled until live is intentionally
-configured. Live submit requires every gate below:
+Claude Spot is a long-running daemon, not a timer:
+
+- Docker: compose service `claude-spot` (profiles `live` and `all`), running
+  `bb claude-spot --submit-live --daemon --interval-seconds 240`.
+- systemd: `binance-claude-spot.service` (same command, `Restart=always`):
 
 ```bash
-CLAUDE_SPOT_ENABLED=true
-CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot
-USE_TESTNET=false
-DRY_RUN=false
-CONFIRM_LIVE_TRADING=yes
-CLAUDE_SPOT_PROVEN_EDGE=yes    # set ONLY after a positive backtest
+systemctl --user enable --now binance-claude-spot.service
+journalctl --user -u binance-claude-spot.service -f
 ```
 
-`CLAUDE_SPOT_PROVEN_EDGE=yes` is the final gate. The runtime refuses live
-submission until an operator has run the historical backtest harness and
-seen positive risk-adjusted edge net of fees. To bypass the gate entirely,
-set `CLAUDE_SPOT_REQUIRE_PROVEN_EDGE=false`, but that is **not recommended**.
+The service always passes `--submit-live`; whether it trades is decided by the
+live arming variables in `.env` and the stop file.
 
-### Cost-aware defaults
+### omp authentication
 
-The deployed code now defaults to cost-aware behavior:
-`CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS=40` (was 300) and
-`CLAUDE_SPOT_MARKET_PICK_MODE=liquid_top_value` (was small_market_aggressive).
-The `override_bps_limits` decision field has been removed; there is no
-LLM-controlled bypass of the friction or evidence gates.
-
-Binance market rules, available balances, fee handling, Spot
-permission/order-test preflight, configured dynamic scope, `data/claude-spot.stop`,
-JSONL audit, reconciliation, and halt-on-ambiguous-leg behavior remain
-enforced. Margin, futures, transfer, withdrawal, and prediction writes remain
-unavailable. The default context is capped to the top `20` dynamic
-candidates so one cycle stays inside Binance request-weight limits.
-
-### Backtesting before live
-
-Run the historical replay harness to measure edge after modeled fees, spread,
-and slippage:
+omp needs Claude credentials once per data directory: either set
+`ANTHROPIC_API_KEY` in `.env`, or log in once interactively with `omp`
+(`/login`, then exit). omp stores credentials, settings and sessions under
+`PI_CODING_AGENT_DIR`; the Docker image sets it to `/app/data/omp-agent`, on
+the persistent data volume, so the login survives container recreation.
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.claude_spot_backtest \
+docker compose run --rm -it claude-spot omp
+```
+
+### Failed-route halt
+
+A live route that submitted at least one order and then failed, or whose
+submission was ambiguous, halts live trading. An unreadable audit history also
+halts. To resume: stop the trader (stop file or service), reconcile the Spot
+wallet against the audit row by hand, then append the review marker:
+
+```bash
+bb claude-spot --mark-failed-route-reviewed --review-reason "<what you checked>"
+docker compose run --rm claude-spot bb claude-spot --mark-failed-route-reviewed
+```
+
+The halt is recomputed from the audit log, so the next cycle sees the marker.
+Remove the stop file to resume.
+
+### Backtesting
+
+`bb claude-spot-backtest` replays Claude Spot's cost-aware momentum rule
+against historical klines. It is research only; its verdict no longer gates
+live trading.
+
+```bash
+bb claude-spot-backtest \
   --symbols BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT \
   --interval 1h \
   --start 2026-01-01 --end 2026-05-01 \
   --output data/claude-spot-backtest.json
 ```
 
-The JSON output includes a `verdict`:
+The JSON output includes a `verdict`: `edge_likely` (Sharpe > 1 and total
+return > 0), `edge_marginal` (positive return, modest Sharpe), `no_edge` (did
+not clear its cost bar), or `no_trades` / `no_data` (insufficient window or
+signals; rerun with more data).
 
-- `edge_likely` — Sharpe > 1 and total return > 0. Plausibly safe to promote.
-- `edge_marginal` — positive return, modest Sharpe. Not enough.
-- `no_edge` — strategy did not clear its cost bar. Do **not** set `PROVEN_EDGE=yes`.
-- `no_trades` / `no_data` — insufficient window or signals; rerun with more data.
+## Capital Pool, Claude Allocator, Auto-Convert
+
+`bb capital-pool` shows the capital plan and persisted state
+(`CAPITAL_POOL_STATE_FILE`, default `data/capital-pool-state.json`): a reserve
+(`CAPITAL_RESERVE_PCT`), per-module min/max
+(`CAPITAL_MIN_MODULE_ALLOCATION_USD`, `CAPITAL_MAX_MODULE_ALLOCATION_USD`), and
+score-weighted splits from ledger scorecards (`--scoring scorecard`, default)
+or lifetime PnL (`--scoring lifetime-pnl`). Equity defaults to the Binance
+wallet total; override with `--equity-usdt`.
+
+```bash
+bb capital-pool
+bb capital-pool --advise          # ask the Claude allocator once
+bb capital-pool --advise --json
+```
+
+`--advise` runs the Claude allocator, an omp session
+(`CLAUDE_ALLOCATOR_MODEL`, `CLAUDE_ALLOCATOR_SESSION_DIR`) with
+fleet/scorecard/balance tools. Its proposal can only clamp within the
+deterministic bounds; any failure falls back to the deterministic plan. It
+needs the same omp authentication as Claude Spot.
+
+With `CAPITAL_POOL_ENABLED=true` the `bb main` runtime requests a lease before
+every buy. With `AUTO_CONVERT_TO_QUOTE=true` it market-sells
+`AUTO_CONVERT_ASSETS` (bounded by `AUTO_CONVERT_MIN_QUOTE_USD` /
+`AUTO_CONVERT_MAX_QUOTE_USD`, buffer `AUTO_CONVERT_BUFFER_PCT`) to cover a
+quote shortfall, after an `order/test`. Preview or run a conversion by hand:
+
+```bash
+bb auto-convert --amount 20 --symbol ETH/USDT --plan-only   # order/test only (default)
+bb auto-convert --amount 20 --symbol ETH/USDT --submit-live # needs CONFIRM_LIVE_TRADING=yes and AUTO_CONVERT_TO_QUOTE=true
+```
+
+The target symbol's base asset is never sold. Audit rows go to
+`AUTO_CONVERT_AUDIT_PATH`. `bb bot-status` and `bb cash-distributor` report
+fleet health and an advisory distribution.
+
+## Listing Detector And Snipers
+
+`bb listing-detector --detect-only` polls Binance listing announcements and
+arms the shared watchlist `LISTING_WATCHLIST_PATH`
+(`data/listing-watchlist.json`). It runs every 2 minutes from the Docker
+`scheduler` (`docker/crontab`) or from `binance-listing-detector.timer`.
+
+`bb listing-sniper` diffs exchangeInfo against known symbols plus the
+watchlist and fires flat, trailing or momentum round trips
+(`LISTING_SNIPER_HOLD_MODE`). Each mode is its own long-running service with
+its own state, audit, ledger and stop file:
+
+| Mode | Compose service / systemd unit | Command | Stop file |
+|---|---|---|---|
+| flat | `listing-sniper-flat` / `binance-listing-sniper-flat.service` | `bb listing-sniper --paper --daemon` | `data/listing-sniper-flat.stop` |
+| trailing | `listing-sniper-trailing` / `binance-listing-sniper-trailing.service` | `bb listing-sniper --paper --daemon` | `data/listing-sniper-trailing.stop` |
+| momentum | `listing-sniper-momentum` / `binance-listing-sniper-momentum.service` | `bb listing-sniper --submit-live --daemon` | `data/listing-sniper-momentum.stop` |
+
+The flat and trailing services are in the `paper`/`all` profiles; momentum is
+in `live`/`all`. A live fire needs `LISTING_SNIPER_ENABLED=true`,
+`CONFIRM_LIVE_LISTING_SNIPER=yes` and `LISTING_SNIPER_PROVEN_EDGE=yes`, and is
+bounded by `LISTING_SNIPER_NOTIONAL_USDT` and
+`LISTING_SNIPER_DAILY_SPEND_CAP_USDT`. Without those gates the momentum service
+does not fire live. Stop one sniper:
+
+```bash
+touch docker-data/listing-sniper-momentum.stop
+docker compose stop listing-sniper-momentum
+```
+
+## Telegram Signal Login
+
+The Telegram signal ingester (`bb signals-telegram-ingester`, compose service
+`signals-telegram`) reads channels as a Telegram user account. The Rust client
+uses a new session file, `data/telegram-session.grammers.json`
+(`TELEGRAM_SESSION_PATH`); the old `data/telegram-session.session` file is
+never read, so log in once again after the cutover. `TELEGRAM_API_ID` and
+`TELEGRAM_API_HASH` (from my.telegram.org/apps) must be set; the phone number
+comes from `TELEGRAM_PHONE` or a prompt, followed by the login code and, for
+2FA accounts, the cloud password.
+
+```bash
+docker compose run --rm -it signals-telegram bb signals-telegram-setup   # Docker
+bb signals-telegram-setup                                                # bot directory, interactive shell
+docker compose up -d signals-telegram
+```
+
+The ingester refuses to start until the session file exists. Its stop file is
+`data/signals-telegram.stop`.
 
 ## Delta-Neutral Funding-Rate Harvest
 
-`src/funding_arb_backtest.py` is the research harness; `src/funding_arb.py`
-is the live counterpart. Strategy: long spot + short USD-M perp 1:1, harvest
-the funding rate every 8h, close when funding falls below the exit threshold,
-basis blows out, or max-hold elapses.
+`bb funding-arb-backtest` is the research harness; `bb funding-arb` is the
+runtime (crate `bb-strategies`). Strategy: long spot + short USD-M perp 1:1,
+harvest the funding rate every 8h, close when funding falls below the exit
+threshold, basis blows out, or max-hold elapses.
 
 ### Backtest first
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.funding_arb_backtest \
+bb funding-arb-backtest \
   --universe perp_usdt_top \
   --universe-size 60 \
   --min-quote-volume-usdt 50000000 \
@@ -359,42 +556,41 @@ the edge lives.
 
 ### Runtime modes
 
-`src/funding_arb.py` has three modes selectable via mutually-exclusive flags:
+`bb funding-arb` has three modes selectable via mutually-exclusive flags:
 
 | Flag             | Behavior                                                                |
 | ---------------- | ----------------------------------------------------------------------- |
 | `--plan-only`    | Compute decisions, audit them. Do not mutate state. Default.            |
 | `--paper`        | Materialize decisions in `data/funding-arb-state.json`, accrue funding, write closed trades to `data/funding-arb-ledger.jsonl`. No real orders. |
-| `--submit-live`  | Execute dual-leg spot+perp orders via `FundingArbExecutor`. Reconciles vs on-exchange state first; halts on mismatch. Behind every preflight gate. |
+| `--submit-live`  | Execute dual-leg spot+perp orders via the funding-arb executor. Reconciles vs on-exchange state first; halts on mismatch. Behind every preflight gate. |
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.funding_arb --plan-only
-.venv/bin/python -m src.funding_arb --paper
+bb funding-arb --plan-only
+bb funding-arb --paper
 ```
 
 The paper layer accrues funding **once per cycle** at the current rate.
-Deploy on an 8h timer aligned with Binance funding windows (00, 08, 16 UTC)
+Run it on an 8h schedule aligned with Binance funding windows (00, 08, 16 UTC)
 for a fidelity match to the backtest model.
 
-### Deploy as a systemd timer
+### Scheduling
 
-User-scoped service + timer units are staged at
-`deploy/user/binance-funding-arb.{service,timer}`. The timer fires at
-00:01, 08:01, 16:01 UTC — one minute after each Binance funding event so
-the just-applied rate is captured in the cycle's signal snapshot.
-
-The service is configured to invoke `--paper` by default. **Do not edit
-ExecStart to `--submit-live` until you have at least 1-2 weeks of paper
-ledger data showing the runtime fires correctly and the realized P&L
+systemd: `deploy/user/binance-funding-arb.{service,timer}` are installed by
+`scripts/setup_user_deploy.sh`. The timer fires at 00:01, 08:01, 16:01 UTC —
+one minute after each Binance funding event so the just-applied rate is
+captured in the cycle's signal snapshot. The service invokes `--paper`.
+**Do not edit ExecStart to `--submit-live` until you have at least 1-2 weeks
+of paper ledger data showing the runtime fires correctly and the realized P&L
 roughly tracks the backtest's expectation.**
 
 ```bash
-cp deploy/user/binance-funding-arb.{service,timer} ~/.config/systemd/user/
-systemctl --user daemon-reload
 systemctl --user enable --now binance-funding-arb.timer
 journalctl --user -u binance-funding-arb.service -f
 ```
+
+Docker: the `scheduler` runs `bb funding-arb --submit-live` at the same
+times; it stays inert until the live gates below are set and the wallet clears
+`FUNDING_ARB_MIN_BALANCE_USDT` (default 50).
 
 ### Live-submit gates
 
@@ -415,21 +611,21 @@ universe.
 
 ### Live executor: dual-leg invariants
 
-`src/funding_arb_executor.py` enforces the following invariants:
+The funding-arb executor enforces the following invariants:
 
 * **Open**: spot BUY runs first, then perp SHORT. If the perp leg fails
   (network, rejection, zero fill), the executor immediately places a spot
   SELL to flatten before raising. If the rollback SELL itself fails, the
-  exception text contains `manual reconciliation required` and the
+  error text contains `manual reconciliation required` and the
   position is **not** added to local state — operator must reconcile by
   hand.
 * **Close**: perp BUY (with `reduceOnly=true`) runs first to release
   margin, then spot SELL. If the spot leg fails after the perp leg
-  succeeds, the exception text reflects this and the operator must sell
+  succeeds, the error text reflects this and the operator must sell
   the spot leg manually.
 * **Reconcile**: every live cycle compares on-exchange spot free balances
   and futures position sizes to local state *before* processing decisions.
-  Any mismatch halts the cycle and raises — no orders are sent.
+  Any mismatch halts the cycle — no orders are sent.
 * **Collateral**: USDT is transferred spot→futures before each open via
   `sapi/v1/asset/transfer` (type `MAIN_UMFUTURE`) and back after each
   close (type `UMFUTURE_MAIN`). Failed sweeps are non-fatal and logged.
@@ -440,8 +636,9 @@ universe.
    neutrality. In practice the spot leg's price may diverge from the perp
    mark by 10-50 bps even on liquid pairs.
 2. **Liquidation risk on the short perp** if basis spikes against you on
-   isolated margin. Use cross-margin or set `basis_circuit_breaker_bps`
-   tight enough that the circuit fires before liquidation does.
+   isolated margin. Use cross-margin or set
+   `FUNDING_ARB_BASIS_CIRCUIT_BREAKER_BPS` tight enough that the circuit fires
+   before liquidation does.
 3. **Survivorship bias.** The `--universe perp_usdt_top` selector ranks
    by *current* 24h volume; coins delisted during the backtest window are
    excluded, biasing the historical result upward.
@@ -459,15 +656,13 @@ no borrow, repay, margin-order, or margin-transfer submission path.
 Run discovery/modeling without live write actions:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.margin --dry-run --asset USDT --borrow-amount 10
+bb margin --dry-run --asset USDT --borrow-amount 10
 ```
 
 Isolated margin modeling requires a symbol:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.margin \
+bb margin \
   --dry-run \
   --account-type isolated \
   --isolated-symbol BNB/USDT \
@@ -486,8 +681,7 @@ symbol scope, margin risk limits, a documented repayment intent, an emergency
 stop, and JSONL audit output. It does not expose margin submission:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.margin_canary --plan-only \
+bb margin-canary --plan-only \
   --margin-symbol BNB/USDT --asset USDT \
   --borrow-amount 1 --repay-amount 1
 ```
@@ -506,8 +700,7 @@ margin-mode, position-mode, or position-margin submission path.
 Run discovery/modeling without live write actions:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.futures \
+bb futures \
   --dry-run \
   --symbol BTC/USDT \
   --side BUY \
@@ -524,8 +717,7 @@ reduce-only exit intent and audits risk/reconciliation output without exposing
 a futures order path:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.futures_canary --plan-only --symbol BTC/USDT \
+bb futures-canary --plan-only --symbol BTC/USDT \
   --side BUY --quantity 0.001 --exit-side SELL --exit-reduce-only \
   --exit-trigger "operator approved close"
 ```
@@ -544,8 +736,7 @@ submission path.
 Plan and audit an internal transfer without live write actions:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.transfers \
+bb transfers \
   --dry-run \
   --source-wallet spot \
   --destination-wallet funding \
@@ -563,8 +754,7 @@ scope, wallet/balance/debt limits, isolated symbol requirements, emergency
 stop, and audit output without exposing transfer submission:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.transfer_canary --plan-only \
+bb transfer-canary --plan-only \
   --source-wallet spot --destination-wallet funding --asset USDT --amount 1
 ```
 
@@ -581,8 +771,7 @@ or transfers.
 Value a local holdings/prices fixture:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.pool.unified \
+bb pool-unified \
   --dry-run \
   --holdings-json holdings.json \
   --prices-json prices.json
@@ -598,8 +787,7 @@ authorizes these modules.
 Inspect the registry without exchange writes:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.product_modules
+bb product-modules
 ```
 
 Every module must define its strategy interface, permission mapping, market-data
@@ -609,8 +797,7 @@ activation phase can be considered.
 Review advanced-product evidence and the serial live-canary rule locally:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.advanced_readiness
+bb advanced-readiness
 ```
 
 ## Manual Live Probe
@@ -624,8 +811,7 @@ It is not a pool allocator and must not be run as a service.
 Preflight without placing an order:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.live_probe
+bb live-probe
 ```
 
 The preflight must fail closed unless `--confirm-real-order` is present. Only
@@ -633,8 +819,7 @@ run the real probe after confirming `.env` has `USE_TESTNET=false`,
 `DRY_RUN=false`, and `CONFIRM_LIVE_TRADING=yes`:
 
 ```bash
-cd /home/user/projects/binance-bot
-.venv/bin/python -m src.live_probe --confirm-real-order
+bb live-probe --confirm-real-order
 ```
 
 The pool ledger records the latest full catalog decision set, per-cycle
@@ -648,6 +833,7 @@ not pass.
 
 The paper backup timer retains 35 verified daily SQLite snapshots, enough to
 protect recent paper evidence, canary analysis, and rollback investigations.
+On Docker the `scheduler` runs the same backups nightly (`docker/crontab`).
 
 ```bash
 systemctl --user status binance-pool-paper-backup.timer --no-pager
@@ -671,12 +857,16 @@ systemctl --user start binance-pool-paper.service
 
 ## Legacy Live State
 
-Historic live-order data and its backups are retained for audit/recovery. The
-old user and system trading units must remain inactive and disabled. The manual
-live probe, spot canary, and guarded live spot allocator are foreground-only
-tools; none may be run as a background automatic asset-conversion runtime.
+Historic live-order data (`data/live.db`) and its backups are retained for
+audit/recovery. The legacy `binance-bot.service` user unit and the `main-bot`
+compose service must remain inactive and disabled. The manual live probe,
+spot canary, and guarded live spot allocator are foreground-only tools; none
+may be run as a background automatic asset-conversion runtime.
 
 ## Live Readiness Gate
+
+This gate governs real paper-pool reallocation. It does not apply to Claude
+Spot, which is a separately approved live runtime (see above).
 
 Do not implement or activate real pool reallocations until all of these gates
 are complete and explicitly approved as a separate live-execution phase:

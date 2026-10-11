@@ -1,0 +1,15 @@
+[Unit]
+Description=Run Binance Listing Detector every 2 minutes
+
+[Timer]
+# Polls the Binance announcements API; --detect-only arms the shared watchlist
+# that the listing-sniper daemons consume. It never trades.
+OnBootSec=2min
+OnActiveSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=false
+Unit=binance-listing-detector.service
+
+[Install]
+WantedBy=timers.target

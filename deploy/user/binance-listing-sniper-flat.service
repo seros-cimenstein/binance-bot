@@ -1,0 +1,22 @@
+[Unit]
+Description=Binance Listing Sniper (paper, flat hold)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/binance-bot
+EnvironmentFile=%h/.local/share/binance-bot/.env
+Environment=LISTING_SNIPER_HOLD_MODE=flat
+Environment=LISTING_SNIPER_STATE_PATH=%h/.local/share/binance-bot/data/listing-sniper-flat-state.json
+Environment=LISTING_SNIPER_AUDIT_PATH=%h/.local/share/binance-bot/data/listing-sniper-flat-events.jsonl
+Environment=LISTING_SNIPER_LEDGER_PATH=%h/.local/share/binance-bot/data/listing-sniper-flat-ledger.jsonl
+Environment=LISTING_SNIPER_EMERGENCY_STOP_PATH=%h/.local/share/binance-bot/data/listing-sniper-flat.stop
+ExecStart=%h/.local/share/binance-bot/bin/bb listing-sniper --paper --daemon
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

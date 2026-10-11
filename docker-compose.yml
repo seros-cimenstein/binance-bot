@@ -1,24 +1,26 @@
-# docker-compose.yml — Binance bot fleet
+# docker-compose.yml — Binance bot fleet (Rust `bb` binary)
 #
-# Each long-running systemd unit in deploy/user/ becomes a container here.
-# Periodic units (funding-arb, trend-filter, airdrop reminder, backups)
-# are consolidated into the `scheduler` container via supercronic.
+# Every long-running runtime is a container running one `bb <command>`.
+# Periodic jobs (funding-arb, trend-filter, listing detector, airdrop digest,
+# backups) run in the `scheduler` container via supercronic (docker/crontab).
 #
 # Layout:
-#   - Code is baked into the image.
-#   - /app/data     <- bind-mounted host state dir (was ~/.local/share/binance-bot/data)
-#                     mounted at /app/data so relative paths in .env (e.g. DB_PATH=data/live.db) just work
+#   - The `bb` binary and `omp` (Claude agent CLI) are baked into the image.
+#   - /app/data     <- bind-mounted host state dir; relative paths in the env file
+#                      (e.g. CLAUDE_SPOT_AUDIT_PATH=data/...) resolve against /app.
+#                      Also holds omp credentials + Claude sessions (PI_CODING_AGENT_DIR).
 #   - /app/backups  <- bind-mounted backups dir
 #   - env_file      <- BOT_ENV_FILE, defaults to ./.env.docker
 #
 # Profiles:
-#   paper         -> all paper/research workloads + scheduler
-#   all           -> paper + scheduler  (no standalone live container today;
-#                    live work runs as cron jobs inside scheduler)
-#   live          -> scheduler only (runs the live cron jobs)
-#   v2            -> signals-dexscreener-launches (V2 launch snapshotter)
-#   claude-spot   -> opt-in Claude autonomous router (currently inert)
-#   main-bot      -> legacy SMA bot (disabled in production)
+#   paper   -> paper/research workloads + scheduler
+#   live    -> Claude Spot trader + live momentum listing sniper + scheduler (live cron jobs)
+#   all     -> paper + live
+#   v2      -> signals-dexscreener-launches (V2 launch snapshotter)
+#   main-bot-> legacy SMA bot (disabled in production)
+#
+# Claude (omp) auth, once per data dir: either set ANTHROPIC_API_KEY in the env file, or
+#   docker compose run --rm -it claude-spot omp      # then /login inside omp, then exit
 
 x-base: &base
   image: binance-bot:latest
@@ -31,19 +33,18 @@ x-base: &base
   volumes:
     - ${BOT_DATA_DIR:-./docker-data}:/app/data
     - ${BOT_BACKUP_DIR:-./docker-backups}:/app/backups
-  # Pin DNS to public resolvers — bypasses host router which times out
-  # under aiodns load (sniper-paper hammers Solana/Jupiter endpoints).
-  dns:
-    - 1.1.1.1
-    - 8.8.8.8
+  # DNS: containers use the Docker daemon's resolvers, i.e. the host's (/etc/resolv.conf).
+  # Do not pin public resolvers here: some networks (the Pi's current one) block outbound
+  # DNS to 1.1.1.1/8.8.8.8, which breaks every lookup. To pin, set "dns" in
+  # /etc/docker/daemon.json to resolvers reachable from the current network.
   environment:
     TZ: UTC
     BINANCE_BOT_BACKUP_DIR: /app/backups
     BINANCE_BOT_PROJECT_DIR: /app
-    # Airdrop scheduler state must sit on the persistent volume; without this
-    # it defaults to ~/.local/share/binance-bot/data inside the container and
-    # is lost on recreate.
     AIRDROP_DATA_DIR: /app/data
+    # bot-status / cash-distributor / capital-pool read fleet state from the volume.
+    BOT_STATUS_DATA_DIR: /app/data
+  stop_grace_period: 60s
   logging:
     driver: json-file
     options:
@@ -52,13 +53,40 @@ x-base: &base
 
 services:
 
+  # ---------- LIVE ----------
+
+  # Claude agentic Spot trader: one persistent omp session, a cycle every 4 minutes.
+  # Live submission still requires CLAUDE_SPOT_ENABLED=true, CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot,
+  # USE_TESTNET=false, DRY_RUN=false, CONFIRM_LIVE_TRADING=yes. Emergency stop: touch data/claude-spot.stop.
+  claude-spot:
+    <<: *base
+    container_name: claude-spot
+    profiles: ["live", "all"]
+    command: ["bb", "claude-spot", "--submit-live", "--daemon", "--interval-seconds", "240"]
+
+  listing-sniper-momentum:
+    <<: *base
+    container_name: listing-sniper-momentum
+    profiles: ["live", "all"]
+    environment:
+      TZ: UTC
+      BINANCE_BOT_BACKUP_DIR: /app/backups
+      BINANCE_BOT_PROJECT_DIR: /app
+      LISTING_SNIPER_HOLD_MODE: momentum
+      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-momentum-state.json
+      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-momentum-events.jsonl
+      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-momentum-ledger.jsonl
+      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-momentum.stop
+      LISTING_WATCHLIST_PATH: /app/data/listing-watchlist.json
+    command: ["bb", "listing-sniper", "--submit-live", "--daemon"]
+
   # ---------- PAPER ----------
 
   mean-reversion-paper:
     <<: *base
     container_name: mean-reversion-paper
     profiles: ["paper", "all"]
-    command: ["python", "-m", "src.mean_reversion", "--paper", "--daemon"]
+    command: ["bb", "mean-reversion", "--paper", "--daemon"]
 
   pool-paper:
     <<: *base
@@ -66,17 +94,18 @@ services:
     profiles: ["paper", "all"]
     environment:
       TZ: UTC
+      BINANCE_BOT_BACKUP_DIR: /app/backups
+      BINANCE_BOT_PROJECT_DIR: /app
       POOL_MODE: paper
-    command: ["python", "-m", "src.pool"]
+    command: ["bb", "pool"]
 
   sniper-paper:
     <<: *base
     container_name: sniper-paper
     profiles: ["paper", "all"]
     command:
-      - "python"
-      - "-m"
-      - "src.sniper.paper"
+      - "bb"
+      - "sniper-paper"
       - "--entry-sol"
       - "0.005"
       - "--hold-seconds"
@@ -90,43 +119,70 @@ services:
       - "--summary-path"
       - "/app/data/sniper-paper-summary.json"
 
+  listing-sniper-flat:
+    <<: *base
+    container_name: listing-sniper-flat
+    profiles: ["paper", "all"]
+    environment:
+      TZ: UTC
+      BINANCE_BOT_BACKUP_DIR: /app/backups
+      BINANCE_BOT_PROJECT_DIR: /app
+      LISTING_SNIPER_HOLD_MODE: flat
+      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-flat-state.json
+      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-flat-events.jsonl
+      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-flat-ledger.jsonl
+      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-flat.stop
+      LISTING_WATCHLIST_PATH: /app/data/listing-watchlist.json
+    command: ["bb", "listing-sniper", "--paper", "--daemon"]
+
+  listing-sniper-trailing:
+    <<: *base
+    container_name: listing-sniper-trailing
+    profiles: ["paper", "all"]
+    environment:
+      TZ: UTC
+      BINANCE_BOT_BACKUP_DIR: /app/backups
+      BINANCE_BOT_PROJECT_DIR: /app
+      LISTING_SNIPER_HOLD_MODE: trailing
+      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-trailing-state.json
+      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-trailing-events.jsonl
+      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-trailing-ledger.jsonl
+      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-trailing.stop
+      LISTING_WATCHLIST_PATH: /app/data/listing-watchlist.json
+    command: ["bb", "listing-sniper", "--paper", "--daemon"]
+
   signals-dexscreener:
     <<: *base
     container_name: signals-dexscreener
     profiles: ["paper", "all"]
-    command: ["python", "-m", "src.signals.dexscreener", "--daemon"]
+    command: ["bb", "signals-dexscreener", "--daemon"]
 
   signals-dexscreener-launches:
     <<: *base
     container_name: signals-dexscreener-launches
     profiles: ["v2"]
-    command: ["python", "-m", "src.signals.dexscreener_launches", "--daemon"]
+    command: ["bb", "signals-dexscreener-launches", "--daemon"]
 
+  # One-time login first: docker compose run --rm -it signals-telegram bb signals-telegram-setup
   signals-telegram:
     <<: *base
     container_name: signals-telegram
     profiles: ["paper", "all"]
-    command: ["python", "-m", "src.signals.telegram_ingester", "--daemon"]
+    command: ["bb", "signals-telegram-ingester", "--daemon"]
 
   signals-smart-money:
     <<: *base
     container_name: signals-smart-money
     profiles: ["paper", "all"]
-    command: ["python", "-m", "src.signals.smart_money", "--daemon"]
+    command: ["bb", "signals-smart-money", "--daemon"]
 
   # ---------- DISABLED / OPT-IN ----------
-
-  claude-spot:
-    <<: *base
-    container_name: claude-spot
-    profiles: ["claude-spot"]
-    command: ["python", "-m", "src.claude_spot", "--submit-live"]
 
   main-bot:
     <<: *base
     container_name: main-bot
     profiles: ["main-bot"]
-    command: ["python", "-m", "src.main"]
+    command: ["bb", "main"]
 
   # ---------- SCHEDULER (periodic jobs) ----------
 

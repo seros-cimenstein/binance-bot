@@ -1,0 +1,12 @@
+[Unit]
+Description=Binance Listing Announcement Detector Cycle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.local/share/binance-bot
+EnvironmentFile=%h/.local/share/binance-bot/.env
+ExecStart=%h/.local/share/binance-bot/bin/bb listing-detector --detect-only
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,33 @@
+[package]
+name = "bb-cli"
+description = "The `bb` binary: one entry point for every bot runtime, backtest and operator command."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "bb"
+path = "src/main.rs"
+
+[dependencies]
+bb-core.workspace = true
+bb-airdrop.workspace = true
+bb-capital.workspace = true
+bb-listing.workspace = true
+bb-polymarket.workspace = true
+bb-pool.workspace = true
+bb-products.workspace = true
+bb-runtime.workspace = true
+bb-signals.workspace = true
+bb-sniper.workspace = true
+bb-social.workspace = true
+bb-strategies.workspace = true
+bb-trader.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true

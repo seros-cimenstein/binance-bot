@@ -7,6 +7,6 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/.local/share/binance-bot
 EnvironmentFile=%h/.local/share/binance-bot/.env
-ExecStart=%h/.local/share/binance-bot/venv/bin/python -m src.funding_arb --paper
+ExecStart=%h/.local/share/binance-bot/bin/bb funding-arb --paper
 StandardOutput=journal
 StandardError=journal

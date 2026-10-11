@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Send SIGUSR1 to every matching bot process so runtime rollback closes tracked
 # positions before shutdown.
-PROCESS_PATTERN="${BINANCE_BOT_PROCESS_PATTERN:-python.*-m src.main}"
+PROCESS_PATTERN="${BINANCE_BOT_PROCESS_PATTERN:-bb main}"
 
 mapfile -t PIDS < <(pgrep -f "$PROCESS_PATTERN" || true)
 

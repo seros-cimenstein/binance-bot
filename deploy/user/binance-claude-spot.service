@@ -1,12 +1,20 @@
 [Unit]
-Description=Binance Claude Autonomous Spot Cycle
+Description=Binance Claude Agentic Spot Trader (omp session, cycle every 4 minutes)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
+# Long-running daemon: one persistent omp RPC session; a decision cycle every
+# --interval-seconds. SIGTERM finishes any in-flight route before exiting.
+Type=simple
 WorkingDirectory=%h/.local/share/binance-bot
 EnvironmentFile=%h/.local/share/binance-bot/.env
-ExecStart=%h/.local/share/binance-bot/venv/bin/python -m src.claude_spot --submit-live
+ExecStart=%h/.local/share/binance-bot/bin/bb claude-spot --submit-live --daemon --interval-seconds 240
+Restart=always
+RestartSec=30
+TimeoutStopSec=120
 StandardOutput=journal
 StandardError=journal
+
+[Install]
+WantedBy=default.target

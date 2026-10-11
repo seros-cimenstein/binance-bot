@@ -8,7 +8,7 @@ Type=simple
 WorkingDirectory=%h/.local/share/binance-bot
 EnvironmentFile=%h/.local/share/binance-bot/.env
 Environment=POOL_MODE=paper
-ExecStart=%h/.local/share/binance-bot/venv/bin/python -m src.pool
+ExecStart=%h/.local/share/binance-bot/bin/bb pool
 Restart=on-failure
 RestartSec=30
 StandardOutput=journal

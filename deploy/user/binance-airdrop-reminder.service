@@ -7,6 +7,6 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/.local/share/binance-bot
 EnvironmentFile=%h/.local/share/binance-bot/.env
-ExecStart=%h/.local/share/binance-bot/venv/bin/python -m src.airdrop.scheduler remind
+ExecStart=%h/.local/share/binance-bot/bin/bb airdrop-scheduler remind
 StandardOutput=journal
 StandardError=journal

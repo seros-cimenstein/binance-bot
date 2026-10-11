@@ -1,0 +1,36 @@
+[package]
+name = "bb-binance"
+description = "Native Binance REST + WebSocket client (spot, wallet, convert, margin, USD-M futures) and market-data feeds."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bb-core.workspace = true
+tokio.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
+url.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rust_decimal.workspace = true
+chrono.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+ed25519-dalek = { workspace = true, features = ["pem"] }
+rand.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true
+rust_decimal_macros.workspace = true
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

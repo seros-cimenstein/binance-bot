@@ -1,24 +1,26 @@
 # supercronic crontab — all times UTC
-# Schedule mirrors deploy/user/*.timer files.
 #
 # Format: minute hour day month dow  command
 
 # Funding arb — one minute after each Binance USD-M funding window (00,08,16 UTC)
-# Live: bot's own min_balance_usdt=$50 floor blocks trades below that threshold,
+# Live: the bot's own min_balance_usdt=$50 floor blocks trades below that threshold,
 # so this stays inert until the wallet is actually funded past $50.
-1  0,8,16  *  *  *   cd /app && python -m src.funding_arb --submit-live
+1  0,8,16  *  *  *   cd /app && bb funding-arb --submit-live
+
+# Listing-announcement detector — every 2 minutes (feeds the listing-sniper watchlist)
+*/2  *  *  *  *      cd /app && LISTING_WATCHLIST_PATH=/app/data/listing-watchlist.json bb listing-detector --detect-only
 
 # Long-horizon trend filter — daily 00:30 UTC (runtime enforces real cadence)
-30  0  *  *  *       cd /app && python -m src.trend_filter --submit-live
+30  0  *  *  *       cd /app && bb trend-filter --submit-live
 
 # Daily airdrop digest — 06:00 UTC (~ 09:00 Europe/Istanbul)
-0  6  *  *  *        cd /app && python -m src.airdrop.scheduler remind
+0  6  *  *  *        cd /app && bb airdrop-scheduler remind
 
 # TODO Phase 2 enable on Pi: V2 signal snapshotter — every minute.
-# *  *  *  *  *       cd /app && python -m src.signals.snapshotter --once
+# *  *  *  *  *       cd /app && bb signals-snapshotter --once
 
 # TODO Phase 2 enable on Pi: V2 weekly evaluation report — Sundays 00:45 UTC.
-# 45  0  *  *  0      cd /app && python -m src.signals.v2_report
+# 45  0  *  *  0      cd /app && bb signals-v2-report
 
 # Daily SQLite backups — 23:15 / 23:30 UTC (~ 02:15 / 02:30 Europe/Istanbul next day)
 15  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=14 bash scripts/backup_db.sh

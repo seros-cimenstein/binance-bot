@@ -1,0 +1,45 @@
+[package]
+name = "bb-sniper"
+description = "Solana memecoin sniper: pump.fun launch detector, safety scorer, Jupiter paper/live executor."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bb-core.workspace = true
+tokio.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rust_decimal.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+clap.workspace = true
+base64.workspace = true
+bs58.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+rand.workspace = true
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+solana-transaction = { version = "5.1", features = ["wincode"] }
+solana-keypair = "4"
+solana-signer = "4"
+wincode = "0.6"
+rpassword = "7"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+wiremock.workspace = true
+rust_decimal_macros.workspace = true
+pretty_assertions.workspace = true
+parking_lot = "0.12"
+solana-signature = { version = "3", features = ["verify"] }
