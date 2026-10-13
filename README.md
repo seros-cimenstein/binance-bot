@@ -166,11 +166,12 @@ touch docker-data/claude-spot.stop                      # emergency stop for the
 ```
 
 Profiles:
-- `live`: the Claude trader, the live momentum listing sniper and the scheduler.
+- `live`: the Claude trader (the only live trader) and the scheduler.
 - `paper`: paper and signal workloads plus the scheduler.
 - `all`: both of the above.
 - `v2`: the launch detector.
 - `main-bot`: the legacy SMA runtime.
+- `listing-sniper-live`: the live momentum listing sniper (off in production).
 
 Periodic jobs live in `docker/crontab`. systemd user units for non-Docker
 hosts are in `deploy/user/`, installed by `scripts/setup_user_deploy.sh`. See

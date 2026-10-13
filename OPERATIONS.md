@@ -23,6 +23,16 @@ Commands below are written as `bb <command>`; substitute the binary or the
 `docker compose run --rm <service>` prefix for your host. Every command has
 `bb <command> --help`.
 
+## Live Posture
+
+Claude Spot (`claude-spot`) is the only live trader, Spot only. Since
+2026-10-12 every other live runtime is off so nothing else trades the shared
+wallet: funding arb (spot + USD-M futures), the listing detector and momentum
+listing sniper, and the trend filter. Their `docker/crontab` lines are
+commented out, `.env.docker` sets their `*_ENABLED` / `CONFIRM_LIVE_*` /
+`*_PROVEN_EDGE` gates off, and the live sniper moved to the opt-in compose
+profile `listing-sniper-live`. Claude Spot cannot write margin or futures.
+
 ## Safety Posture
 
 The legacy strategy runtime (`bb main`, user unit `binance-bot.service`,
@@ -75,11 +85,12 @@ docker compose build
 docker compose --profile all up -d
 ```
 
-Profiles: `live` (Claude trader, live momentum listing sniper, scheduler),
-`paper` (paper and signal workloads, scheduler), `all` (both), `v2` (launch
-detector), `main-bot` (legacy SMA runtime). Periodic jobs (funding-arb,
-trend-filter, listing detector, airdrop digest, SQLite backups) run in the
-`scheduler` container from `docker/crontab`.
+Profiles: `live` (Claude trader, scheduler), `paper` (paper and signal
+workloads, scheduler), `all` (both), `v2` (launch detector), `main-bot`
+(legacy SMA runtime), `listing-sniper-live` (live momentum sniper, off).
+Periodic jobs (airdrop digest, SQLite backups) run in the `scheduler`
+container from `docker/crontab`; the funding-arb, listing-detector and
+trend-filter lines are disabled.
 
 ## Status And Logs
 
@@ -480,10 +491,11 @@ fleet health and an advisory distribution.
 
 ## Listing Detector And Snipers
 
+**Off since 2026-10-12** (see Live Posture). When enabled,
 `bb listing-detector --detect-only` polls Binance listing announcements and
 arms the shared watchlist `LISTING_WATCHLIST_PATH`
-(`data/listing-watchlist.json`). It runs every 2 minutes from the Docker
-`scheduler` (`docker/crontab`) or from `binance-listing-detector.timer`.
+(`data/listing-watchlist.json`) every 2 minutes from the Docker `scheduler`
+(`docker/crontab`) or from `binance-listing-detector.timer`.
 
 `bb listing-sniper` diffs exchangeInfo against known symbols plus the
 watchlist and fires flat, trailing or momentum round trips
@@ -497,7 +509,7 @@ its own state, audit, ledger and stop file:
 | momentum | `listing-sniper-momentum` / `binance-listing-sniper-momentum.service` | `bb listing-sniper --submit-live --daemon` | `data/listing-sniper-momentum.stop` |
 
 The flat and trailing services are in the `paper`/`all` profiles; momentum is
-in `live`/`all`. A live fire needs `LISTING_SNIPER_ENABLED=true`,
+in the opt-in `listing-sniper-live` profile (off). A live fire needs `LISTING_SNIPER_ENABLED=true`,
 `CONFIRM_LIVE_LISTING_SNIPER=yes` and `LISTING_SNIPER_PROVEN_EDGE=yes`, and is
 bounded by `LISTING_SNIPER_NOTIONAL_USDT` and
 `LISTING_SNIPER_DAILY_SPEND_CAP_USDT`. Without those gates the momentum service
@@ -528,7 +540,37 @@ docker compose up -d signals-telegram
 The ingester refuses to start until the session file exists. Its stop file is
 `data/signals-telegram.stop`.
 
+## Trend Filter
+
+**Disabled since 2026-10-12.** The scheduler line in `docker/crontab` is
+commented out and `.env.docker` sets `TREND_FILTER_ENABLED=false` and
+`TREND_FILTER_PROVEN_EDGE=no`. A backtest of the live config (top-1, 90-day
+lookback, 30-day rebalance, 11-coin universe) lost to holding BTC: from
+2023-01 +155% vs +399%; from 2025-01 −35% vs −12% (`no_edge`), with ~69% max
+drawdown. Re-enable only after `bb trend-filter-backtest` shows a real edge.
+
+When enabled, `bb trend-filter --submit-live` runs daily (00:30 UTC) and
+rebalances every `TREND_FILTER_REBALANCE_EVERY_DAYS` into the top
+`TREND_FILTER_TOP_K` assets by trailing return. Its tracked holdings live in
+`data/trend-filter-state.json`; every order attempt goes to
+`data/trend-filter-ledger.jsonl`.
+
+- A tracked holding worth less than `TREND_FILTER_MIN_ORDER_NOTIONAL_USDT` is
+  released (`release_dust`): Binance rejects such sells (`-1013 NOTIONAL`), so
+  the strategy stops tracking it and the coins stay in the wallet as dust.
+- Live buys spend at most the USDT actually free after the sells (the plan
+  assumes sells fill at the signal price); a buy that would fall below the
+  minimum notional is skipped and ledgered as failed.
+- Any failed or skipped order keeps the previous rebalance timestamp, so the
+  next daily run retries instead of waiting a full rebalance period.
+
+The trend filter sizes from the shared wallet's free USDT, which Claude Spot
+also trades.
+
 ## Delta-Neutral Funding-Rate Harvest
+
+**Off since 2026-10-12** (see Live Posture): its scheduler line is commented
+out and `FUNDING_ARB_ENABLED=false`.
 
 `bb funding-arb-backtest` is the research harness; `bb funding-arb` is the
 runtime (crate `bb-strategies`). Strategy: long spot + short USD-M perp 1:1,
@@ -834,6 +876,9 @@ not pass.
 The paper backup timer retains 35 verified daily SQLite snapshots, enough to
 protect recent paper evidence, canary analysis, and rollback investigations.
 On Docker the `scheduler` runs the same backups nightly (`docker/crontab`).
+The backup/restore scripts resolve the database setting (`DB_PATH`, or the
+key named by `BINANCE_BOT_DB_SETTING_KEY`) from the process environment first,
+then `.env`, then the default; in Docker that means `.env.docker`'s values.
 
 ```bash
 systemctl --user status binance-pool-paper-backup.timer --no-pager

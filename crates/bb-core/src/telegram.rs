@@ -15,6 +15,8 @@ const DEFAULT_COOLDOWN_S: i64 = 60;
 const COOLDOWN_CAP_S: i64 = 24 * 60 * 60;
 /// Telegram's hard limit is 4096 UTF-16 units; stay below it.
 pub const MAX_MESSAGE_CHARS: usize = 3900;
+/// Transport failures (DNS, connect, timeout) are usually brief network blips.
+const SEND_ATTEMPTS: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct CooldownState {
@@ -115,11 +117,19 @@ impl Telegram {
             "parse_mode": "HTML",
             "disable_web_page_preview": true,
         });
-        let resp = match self.http.post(&url).json(&body).send().await {
-            Ok(r) => r,
-            Err(err) => {
-                tracing::warn!(error = %err.without_url(), "telegram alert error");
-                return false;
+        let mut attempt = 1;
+        let resp = loop {
+            match self.http.post(&url).json(&body).send().await {
+                Ok(r) => break r,
+                Err(err) if attempt < SEND_ATTEMPTS => {
+                    tracing::debug!(attempt, error = %self.describe(err), "telegram send failed; retrying");
+                    tokio::time::sleep(Duration::from_secs(u64::from(attempt))).await;
+                    attempt += 1;
+                }
+                Err(err) => {
+                    tracing::warn!(attempts = attempt, error = %self.describe(err), "telegram alert error");
+                    return false;
+                }
             }
         };
         let status = resp.status();
@@ -135,6 +145,24 @@ impl Telegram {
             tracing::warn!(%status, body = %truncate(&text, 200), "telegram alert failed");
         }
         false
+    }
+
+    /// Transport error with its cause chain (`error sending request` alone hides
+    /// DNS vs connect vs timeout); the token is redacted defensively.
+    fn describe(&self, err: reqwest::Error) -> String {
+        let err = err.without_url();
+        let mut text = err.to_string();
+        let mut source = std::error::Error::source(&err);
+        while let Some(cause) = source {
+            text.push_str(": ");
+            text.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        if self.token.is_empty() {
+            text
+        } else {
+            text.replace(&self.token, "<redacted>")
+        }
     }
 
     /// Escape plain text and send; `monospace` wraps it in `<pre>`.

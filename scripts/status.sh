@@ -16,11 +16,17 @@ if [ -z "$SERVICE_SCOPE" ]; then
     esac
 fi
 
+# Process environment wins (Docker passes settings via env_file, not .env),
+# then the .env file, then the default.
 configured_value() {
     local key="$1"
     local default="$2"
     local line
 
+    if [ -n "${!key:-}" ]; then
+        printf '%s\n' "${!key}"
+        return
+    fi
     if [ -f "$ENV_FILE" ]; then
         line=$(grep -E "^${key}=" "$ENV_FILE" | tail -n 1 || true)
         if [ -n "$line" ]; then

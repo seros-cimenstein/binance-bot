@@ -60,9 +60,9 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
 
 fn binance_client(config: &TraderConfig) -> Result<BinanceClient> {
     let credentials = Credentials::new(config.api_key.clone(), &config.api_secret)?;
-    let binance = BinanceConfig::new(config.use_testnet)
-        .with_credentials(credentials)
-        .with_retries(0, Duration::from_millis(500), Duration::from_secs(8));
+    // Default retry policy: transport/5xx failures on idempotent reads retry
+    // with backoff; order POSTs are never retried.
+    let binance = BinanceConfig::new(config.use_testnet).with_credentials(credentials);
     Ok(BinanceClient::new(binance)?)
 }
 

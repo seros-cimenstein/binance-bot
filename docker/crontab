@@ -2,16 +2,21 @@
 #
 # Format: minute hour day month dow  command
 
-# Funding arb — one minute after each Binance USD-M funding window (00,08,16 UTC)
-# Live: the bot's own min_balance_usdt=$50 floor blocks trades below that threshold,
-# so this stays inert until the wallet is actually funded past $50.
-1  0,8,16  *  *  *   cd /app && bb funding-arb --submit-live
+# Claude Spot (its own compose service) is the only live trader. Funding arb
+# (spot + USD-M futures), the listing detector/sniper and the trend filter were
+# switched off 2026-10-12 so nothing else trades the shared wallet.
 
-# Listing-announcement detector — every 2 minutes (feeds the listing-sniper watchlist)
-*/2  *  *  *  *      cd /app && LISTING_WATCHLIST_PATH=/app/data/listing-watchlist.json bb listing-detector --detect-only
+# Funding arb (disabled): one minute after each USD-M funding window.
+# 1  0,8,16  *  *  *   cd /app && bb funding-arb --submit-live
 
-# Long-horizon trend filter — daily 00:30 UTC (runtime enforces real cadence)
-30  0  *  *  *       cd /app && bb trend-filter --submit-live
+# Listing-announcement detector (disabled): fed the listing-sniper watchlist only.
+# */2  *  *  *  *      cd /app && LISTING_WATCHLIST_PATH=/app/data/listing-watchlist.json bb listing-detector --detect-only
+
+# Trend filter: disabled 2026-10-12. A backtest of the live config (top-1, 90d
+# lookback, 30d rebalance) lost to holding BTC (2023→: +155% vs +399%;
+# 2025→: -35% vs -12%, verdict no_edge, max drawdown ~69%).
+# Re-enable only after `bb trend-filter-backtest` shows a real edge:
+# 30  0  *  *  *       cd /app && bb trend-filter --submit-live
 
 # Daily airdrop digest — 06:00 UTC (~ 09:00 Europe/Istanbul)
 0  6  *  *  *        cd /app && bb airdrop-scheduler remind

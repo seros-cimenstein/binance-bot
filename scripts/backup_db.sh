@@ -9,11 +9,17 @@ RETENTION="${BINANCE_BOT_BACKUP_RETENTION:-14}"
 DB_SETTING_KEY="${BINANCE_BOT_DB_SETTING_KEY:-DB_PATH}"
 DB_DEFAULT_PATH="${BINANCE_BOT_DB_DEFAULT_PATH:-data/bot.db}"
 
+# Process environment wins (Docker passes settings via env_file, not .env),
+# then the .env file, then the default.
 configured_value() {
     local key="$1"
     local default="$2"
     local line
 
+    if [ -n "${!key:-}" ]; then
+        printf '%s\n' "${!key}"
+        return
+    fi
     if [ -f "$ENV_FILE" ]; then
         line=$(grep -E "^${key}=" "$ENV_FILE" | tail -n 1 || true)
         if [ -n "$line" ]; then

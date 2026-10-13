@@ -1,8 +1,8 @@
 # docker-compose.yml — Binance bot fleet (Rust `bb` binary)
 #
 # Every long-running runtime is a container running one `bb <command>`.
-# Periodic jobs (funding-arb, trend-filter, listing detector, airdrop digest,
-# backups) run in the `scheduler` container via supercronic (docker/crontab).
+# Periodic jobs (airdrop digest, backups) run in the `scheduler` container via
+# supercronic (docker/crontab). Claude Spot is the only live trader.
 #
 # Layout:
 #   - The `bb` binary and `omp` (Claude agent CLI) are baked into the image.
@@ -14,10 +14,11 @@
 #
 # Profiles:
 #   paper   -> paper/research workloads + scheduler
-#   live    -> Claude Spot trader + live momentum listing sniper + scheduler (live cron jobs)
+#   live    -> Claude Spot trader + scheduler
 #   all     -> paper + live
 #   v2      -> signals-dexscreener-launches (V2 launch snapshotter)
 #   main-bot-> legacy SMA bot (disabled in production)
+#   listing-sniper-live -> live momentum listing sniper (disabled in production)
 #
 # Claude (omp) auth, once per data dir: either set ANTHROPIC_API_KEY in the env file, or
 #   docker compose run --rm -it claude-spot omp      # then /login inside omp, then exit
@@ -64,10 +65,12 @@ services:
     profiles: ["live", "all"]
     command: ["bb", "claude-spot", "--submit-live", "--daemon", "--interval-seconds", "240"]
 
+  # ---------- DISABLED / OPT-IN (live) ----------
+  # Off since 2026-10-12: Claude Spot is the only live trader on the shared wallet.
   listing-sniper-momentum:
     <<: *base
     container_name: listing-sniper-momentum
-    profiles: ["live", "all"]
+    profiles: ["listing-sniper-live"]
     environment:
       TZ: UTC
       BINANCE_BOT_BACKUP_DIR: /app/backups

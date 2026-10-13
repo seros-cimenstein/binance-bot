@@ -2,7 +2,11 @@
 //!
 //! Every `rebalance_every_days`, rank the universe by trailing `lookback_days` return,
 //! hold the top K equal-weighted: sell holdings that dropped out, buy new entrants
-//! (spot-only, long-only). Live submission requires `TREND_FILTER_ENABLED=true`,
+//! (spot-only, long-only). Holdings worth less than the minimum order notional are
+//! released (untracked, left in the wallet) because the exchange cannot sell them.
+//! Live buys are capped by the USDT free after the sells, and any failed order keeps
+//! the rebalance due so the next run retries.
+//! Live submission requires `TREND_FILTER_ENABLED=true`,
 //! `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TREND_FILTER=yes` and
 //! `TREND_FILTER_PROVEN_EDGE=yes`.
 
@@ -301,6 +305,9 @@ pub enum Action {
     Buy,
     Sell,
     Hold,
+    /// Stop tracking a holding worth less than the exchange minimum order; it
+    /// cannot be sold, so the coins stay in the wallet as dust.
+    ReleaseDust,
     SkipRebalance,
     SkipCycle,
 }
@@ -445,14 +452,21 @@ impl TrendFilterAdvisor<'_> {
 
         let by_symbol: HashMap<&str, &TrendFilterSignal> =
             signals.iter().map(|s| (s.symbol.as_str(), s)).collect();
+        let value_of = |h: &TrendFilterHolding| {
+            by_symbol
+                .get(h.symbol.as_str())
+                .map(|s| h.qty * s.current_price)
+        };
+        // Binance rejects orders below the minimum notional, so a holding worth
+        // less can never be sold and would block every rotation.
+        let is_dust = |h: &TrendFilterHolding| {
+            value_of(h).is_some_and(|value| value < cfg.min_order_notional_usdt)
+        };
         let held_value: Decimal = state
             .holdings
             .iter()
-            .filter_map(|h| {
-                by_symbol
-                    .get(h.symbol.as_str())
-                    .map(|s| h.qty * s.current_price)
-            })
+            .filter(|h| !is_dust(h))
+            .filter_map(value_of)
             .sum();
         let total_equity = balance_usdt + held_value;
         let per_symbol = if eligible.is_empty() {
@@ -462,11 +476,31 @@ impl TrendFilterAdvisor<'_> {
         };
 
         let mut decisions = Vec::new();
-        let held: HashSet<&str> = state.holdings.iter().map(|h| h.symbol.as_str()).collect();
+        for h in state.holdings.iter().filter(|h| is_dust(h)) {
+            decisions.push(TrendFilterDecision {
+                qty: h.qty,
+                ..TrendFilterDecision::new(
+                    Action::ReleaseDust,
+                    &h.symbol,
+                    format!(
+                        "holding {} worth ${:.4} is below min order notional ${}; released as wallet dust",
+                        h.symbol,
+                        value_of(h).unwrap_or_default(),
+                        py_money(cfg.min_order_notional_usdt)
+                    ),
+                )
+            });
+        }
+        let held: HashSet<&str> = state
+            .holdings
+            .iter()
+            .filter(|h| !is_dust(h))
+            .map(|h| h.symbol.as_str())
+            .collect();
         for h in state
             .holdings
             .iter()
-            .filter(|h| !targets.contains(h.symbol.as_str()))
+            .filter(|h| !is_dust(h) && !targets.contains(h.symbol.as_str()))
         {
             decisions.push(TrendFilterDecision {
                 qty: h.qty,
@@ -682,15 +716,44 @@ fn reference_price(
         .unwrap_or_default()
 }
 
-/// Sells first (free cash), then buys; every attempt is ledgered.
+/// Untrack a dust holding; no order is sent, the coins stay in the wallet.
+fn release_dust(
+    d: &TrendFilterDecision,
+    by_symbol: &HashMap<&str, &TrendFilterSignal>,
+    now_ms: i64,
+    holdings: &mut Holdings,
+) -> TrendFilterLedgerEntry {
+    let price = reference_price(&d.symbol, by_symbol, holdings);
+    holdings.remove(&d.symbol);
+    TrendFilterLedgerEntry {
+        timestamp_ms: now_ms,
+        action: Action::ReleaseDust,
+        symbol: d.symbol.clone(),
+        qty: d.qty,
+        price,
+        notional_usdt: d.qty * price,
+        fee_quote: Decimal::ZERO,
+        order_id: String::new(),
+        success: true,
+        error: String::new(),
+    }
+}
+
+/// Releases dust, sells (free cash), then buys sized to the USDT actually free
+/// after the sells; every attempt is ledgered.
 async fn execute_decisions(
     trader: &dyn SpotTrader,
     decisions: &[TrendFilterDecision],
     by_symbol: &HashMap<&str, &TrendFilterSignal>,
+    min_order_notional_usdt: Decimal,
     now_ms: i64,
     holdings: &mut Holdings,
 ) -> Vec<TrendFilterLedgerEntry> {
-    let mut ledger = Vec::new();
+    let mut ledger: Vec<TrendFilterLedgerEntry> = decisions
+        .iter()
+        .filter(|d| d.action == Action::ReleaseDust)
+        .map(|d| release_dust(d, by_symbol, now_ms, holdings))
+        .collect();
     for d in decisions.iter().filter(|d| d.action == Action::Sell) {
         match trader.market_sell(&d.symbol, d.qty).await {
             Ok(fill) => {
@@ -737,18 +800,63 @@ async fn execute_decisions(
             }
         }
     }
-    for d in decisions.iter().filter(|d| d.action == Action::Buy) {
+    let buys: Vec<&TrendFilterDecision> = decisions
+        .iter()
+        .filter(|d| d.action == Action::Buy)
+        .collect();
+    if buys.is_empty() {
+        return ledger;
+    }
+    // Targets assume every sell filled at the signal price; the wallet is the
+    // truth (fees, slippage, failed sells, cash used by other bots).
+    let mut budget = match trader.free_usdt().await {
+        Ok(free) => free,
+        Err(err) => {
+            let error = error_label(&err, 200);
+            for d in &buys {
+                ledger.push(TrendFilterLedgerEntry::failed(
+                    now_ms,
+                    Action::Buy,
+                    &d.symbol,
+                    error.clone(),
+                ));
+            }
+            common::alert(&format!(
+                "trend filter BUY FAILED: free USDT unavailable: {}",
+                error_label(&err, 150)
+            ))
+            .await;
+            return ledger;
+        }
+    };
+    for (index, d) in buys.iter().enumerate() {
         let Some(sig) = by_symbol
             .get(d.symbol.as_str())
             .filter(|s| s.current_price > Decimal::ZERO)
         else {
             continue;
         };
-        match trader
-            .market_buy_quote(&d.symbol, d.target_notional_usdt)
-            .await
-        {
+        let spend = d
+            .target_notional_usdt
+            .min(budget / Decimal::from(buys.len() - index));
+        if spend < min_order_notional_usdt {
+            let error = format!(
+                "TrendFilterError: free USDT ${budget:.4} leaves ${spend:.4} for {}, below min order notional ${}",
+                d.symbol,
+                py_money(min_order_notional_usdt)
+            );
+            common::alert(&format!("trend filter BUY SKIPPED {}: {error}", d.symbol)).await;
+            ledger.push(TrendFilterLedgerEntry::failed(
+                now_ms,
+                Action::Buy,
+                &d.symbol,
+                error,
+            ));
+            continue;
+        }
+        match trader.market_buy_quote(&d.symbol, spend).await {
             Ok(fill) => {
+                budget -= spend;
                 let avg = if fill.average.is_zero() {
                     sig.current_price
                 } else {
@@ -815,6 +923,7 @@ fn apply_paper(
     let mut ledger = Vec::new();
     for d in decisions {
         match d.action {
+            Action::ReleaseDust => ledger.push(release_dust(d, by_symbol, now_ms, holdings)),
             Action::Sell => {
                 let price = reference_price(&d.symbol, by_symbol, holdings);
                 holdings.remove(&d.symbol);
@@ -929,13 +1038,21 @@ pub async fn run_cycle(
     let decisions = TrendFilterAdvisor { settings }.decide(&state, &signals, balance_usdt, now_ms);
     let rebalanced = decisions
         .iter()
-        .any(|d| matches!(d.action, Action::Buy | Action::Sell));
+        .any(|d| matches!(d.action, Action::Buy | Action::Sell | Action::ReleaseDust));
 
     let mut ledger = Vec::new();
     let mut holdings = Holdings(state.holdings.clone());
     let executed = match (mode, trader) {
         (Mode::Live, Some(trader)) if rebalanced && !insufficient_balance => {
-            ledger = execute_decisions(trader, &decisions, &by_symbol, now_ms, &mut holdings).await;
+            ledger = execute_decisions(
+                trader,
+                &decisions,
+                &by_symbol,
+                settings.min_order_notional_usdt,
+                now_ms,
+                &mut holdings,
+            )
+            .await;
             true
         }
         (Mode::Paper, _) if rebalanced && !insufficient_balance => {
@@ -945,9 +1062,16 @@ pub async fn run_cycle(
         _ => false,
     };
     if executed {
+        // A failed or skipped order keeps the old timestamp so the next daily
+        // run retries instead of waiting a full rebalance period.
+        let all_succeeded = ledger.iter().all(|entry| entry.success);
         state = TrendFilterState {
             holdings: holdings.0,
-            last_rebalance_time_ms: now_ms,
+            last_rebalance_time_ms: if all_succeeded {
+                now_ms
+            } else {
+                state.last_rebalance_time_ms
+            },
         };
         save_state(&state, Path::new(&settings.state_path))?;
         common::append_jsonl_many(Path::new(&settings.ledger_path), &ledger)?;
@@ -1281,12 +1405,14 @@ mod tests {
     struct FakeTrader {
         calls: Mutex<Vec<(&'static str, String, Decimal)>>,
         fail_sells: bool,
+        /// Free USDT; 20 when unset.
+        free: Option<Decimal>,
     }
 
     #[async_trait]
     impl SpotTrader for FakeTrader {
         async fn free_usdt(&self) -> Result<Decimal> {
-            Ok(dec!(20))
+            Ok(self.free.unwrap_or(dec!(20)))
         }
         async fn market_sell(&self, symbol: &str, qty: Decimal) -> Result<SpotFill> {
             self.calls.lock().push(("sell", symbol.into(), qty));
@@ -1370,9 +1496,91 @@ mod tests {
         let st = load_state(Path::new(&live.state_path)).unwrap();
         let symbols: Vec<_> = st.holdings.iter().map(|h| h.symbol.as_str()).collect();
         assert_eq!(symbols, ["A/USDT", "B/USDT"]);
+        // The failed sell leaves the rebalance due, so the next run retries.
+        assert_eq!(st.last_rebalance_time_ms, 0);
         let calls = trader.calls.lock().clone();
-        // Equity = 20 USDT + 0.1 A × 90 = 29 → B target 29 USDT.
-        assert_eq!(calls[1], ("buy", "B/USDT".to_owned(), dec!(29)));
+        // Planned equity = 20 USDT + 0.1 A × 90 = 29, but only 20 USDT is free.
+        assert_eq!(calls[1], ("buy", "B/USDT".to_owned(), dec!(20)));
+    }
+
+    fn swap_source() -> FixedCloses {
+        FixedCloses(
+            [
+                ("A/USDT".to_owned(), closes(100, 90, 32)),
+                ("B/USDT".to_owned(), closes(100, 150, 32)),
+            ]
+            .into(),
+        )
+    }
+
+    fn live_with_holding(dir: &Path, qty: Decimal) -> TrendFilterSettings {
+        let s = TrendFilterSettings {
+            proven_edge: true,
+            min_balance_usdt: Decimal::ZERO,
+            ..settings(dir)
+        };
+        save_state(
+            &TrendFilterState {
+                holdings: vec![TrendFilterHolding {
+                    qty,
+                    ..holding("A/USDT")
+                }],
+                last_rebalance_time_ms: 0,
+            },
+            Path::new(&s.state_path),
+        )
+        .unwrap();
+        s
+    }
+
+    #[tokio::test]
+    async fn holding_below_min_notional_is_released_and_rotation_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        // 0.01 A × 90 = $0.90: Binance would reject the sell with NOTIONAL.
+        let s = live_with_holding(dir.path(), dec!(0.01));
+        let trader = FakeTrader::default();
+        let payload = run_cycle(&s, Mode::Live, Some(&trader), &swap_source())
+            .await
+            .unwrap();
+        assert_eq!(
+            acts(&payload.decisions),
+            vec![(Action::ReleaseDust, "A/USDT"), (Action::Buy, "B/USDT")]
+        );
+        // Dust is excluded from equity: the buy targets the 20 free USDT only.
+        assert_eq!(
+            *trader.calls.lock(),
+            [("buy", "B/USDT".to_owned(), dec!(20))]
+        );
+        assert!(payload.ledger_entries.iter().all(|e| e.success));
+        let st = load_state(Path::new(&s.state_path)).unwrap();
+        let symbols: Vec<_> = st.holdings.iter().map(|h| h.symbol.as_str()).collect();
+        assert_eq!(symbols, ["B/USDT"]);
+        assert!(st.last_rebalance_time_ms > 0);
+    }
+
+    #[tokio::test]
+    async fn buy_is_skipped_when_free_cash_is_below_min_notional() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = live_with_holding(dir.path(), dec!(0.1));
+        // Equity 3 + 0.1 × 90 = 12 plans a $12 buy; the sell fails, leaving $3.
+        let trader = FakeTrader {
+            fail_sells: true,
+            free: Some(dec!(3)),
+            ..FakeTrader::default()
+        };
+        let payload = run_cycle(&s, Mode::Live, Some(&trader), &swap_source())
+            .await
+            .unwrap();
+        assert_eq!(
+            *trader.calls.lock(),
+            [("sell", "A/USDT".to_owned(), dec!(0.1))]
+        );
+        let buy = &payload.ledger_entries[1];
+        assert_eq!((buy.action, buy.success), (Action::Buy, false));
+        assert!(buy.error.contains("below min order notional"), "{}", buy.error);
+        let st = load_state(Path::new(&s.state_path)).unwrap();
+        assert_eq!(st.holdings.len(), 1);
+        assert_eq!(st.last_rebalance_time_ms, 0);
     }
 
     #[tokio::test]
