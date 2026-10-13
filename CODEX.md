@@ -109,9 +109,19 @@ driven project.
   configured bot and official X API search results, normalize/hash records, and
   feed per-asset evidence to Claude Spot through `get_social_evidence`. It must
   not bypass platform terms, scrape private chats, use browser automation for
-  X, store unnecessary raw personal data, or create an order-submission path.
-  Social evidence is information for Claude only and must never bypass
-  exchange rules, order-test, emergency-stop, or reconciliation.
+  X (except the Phase 43 collector below), store unnecessary raw personal data,
+  or create an order-submission path. Social evidence is information for Claude
+  only and must never bypass exchange rules, order-test, emergency-stop, or
+  reconciliation.
+- Phase 43 X pre-pump signal insighter: by operator decision (2026-10-13) the
+  Camoufox collector may read public X posts and searches through browser
+  automation from a dedicated burner account. It is read-only: it must not post,
+  like, follow, repost, DM, or read private content; it keeps its pacing caps and
+  privacy reduction; and it never holds Binance credentials or an order path.
+  The operator owns the X Terms of Service and account-ban risk. Haiku's
+  traction and exhaustion calls are information for deterministic entry/exit
+  rules only. Nothing executes until the Phase 43 paper gate passes and a
+  separate execution approval is given.
 - Phase 36 Claude Spot Telegram decision explanations are observability-only.
   They must be derived from the completed cycle result/audit data, must not
   make a separate LLM call, and must not change live routing, prompt, order-test,

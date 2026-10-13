@@ -5,6 +5,13 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-13: Planned Phase 43 (X pre-pump signal insighter: Camoufox
+  collector, traction scoring with watch -> focus -> hot escalation, Haiku
+  stage and exhaustion calls, exhaustion scale-out exits; paper-evaluated
+  against pre-registered gates) in `IMPLEMENTATION_PLAN.md`. Not started.
+  Operator approved the Camoufox X collector and `CODEX.md` was amended.
+  Still open in Gate 0: target venue (Binance-listed vs on-chain Solana) and
+  the pre-registered design doc.
 - 2026-10-13 (later): Claude Spot fresh start on the Pi (seref, operator
   request). No failed-route halt was active (last attempted submission was
   `submitted`). `claude-spot` was stopped, then `claude-spot-decisions.jsonl`
