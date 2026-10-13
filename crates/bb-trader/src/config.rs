@@ -19,6 +19,15 @@ pub const PROMPT_VERSION: &str = "claude-spot-v4-agentic";
 /// The only accepted value of `CLAUDE_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 
+/// Default `CLAUDE_SPOT_AUDIT_PATH`.
+pub const DEFAULT_AUDIT_PATH: &str = "data/claude-spot-decisions.jsonl";
+/// Default `CLAUDE_SPOT_JOURNAL_PATH`.
+pub const DEFAULT_JOURNAL_PATH: &str = "data/claude-spot-journal.jsonl";
+/// Default `CLAUDE_SPOT_STATE_PATH`.
+pub const DEFAULT_STATE_PATH: &str = "data/claude-spot-agent-state.json";
+/// Default `CLAUDE_SPOT_STOP_PATH`.
+pub const DEFAULT_STOP_PATH: &str = "data/claude-spot.stop";
+
 /// Guardrail variables of the Python trader that no longer exist. Setting them has no
 /// effect; [`TraderConfig::from_lookup`] reports them once.
 pub const REMOVED_VARS: [&str; 14] = [
@@ -204,19 +213,16 @@ impl TraderConfig {
             timeout: positive_duration(timeout_seconds, "claude_timeout_seconds")?,
             prompt_version: env.string("CLAUDE_SPOT_PROMPT_VERSION", PROMPT_VERSION),
             session_dir: env.path("CLAUDE_SPOT_SESSION_DIR", "data/claude-spot-session"),
-            journal_path: env.path("CLAUDE_SPOT_JOURNAL_PATH", "data/claude-spot-journal.jsonl"),
+            journal_path: env.path("CLAUDE_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
             journal_prompt_entries: env.integer("CLAUDE_SPOT_JOURNAL_PROMPT_ENTRIES", 8)?,
             compact_at_percent: env.float("CLAUDE_SPOT_COMPACT_AT_PERCENT", 70.0)?,
             max_daily_llm_cost_usd: env
                 .decimal("CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD", Decimal::ZERO)?,
-            state_path: env.path(
-                "CLAUDE_SPOT_STATE_PATH",
-                "data/claude-spot-agent-state.json",
-            ),
+            state_path: env.path("CLAUDE_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
             route_stale_seconds: env.float("CLAUDE_SPOT_ROUTE_STALE_SECONDS", 60.0)?,
-            audit_path: env.path("CLAUDE_SPOT_AUDIT_PATH", "data/claude-spot-decisions.jsonl"),
+            audit_path: env.path("CLAUDE_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
             lock_path: env.path("CLAUDE_SPOT_LOCK_PATH", "data/claude-spot.lock"),
-            stop_path: env.path("CLAUDE_SPOT_STOP_PATH", "data/claude-spot.stop"),
+            stop_path: env.path("CLAUDE_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
             telegram_explain: env.boolean("CLAUDE_SPOT_TELEGRAM_EXPLAIN", true)?,
             telegram_reason_chars: env.integer("CLAUDE_SPOT_TELEGRAM_REASON_CHARS", 0)?,
             max_route_legs: env.integer("CLAUDE_SPOT_MAX_ROUTE_LEGS", 3)?,

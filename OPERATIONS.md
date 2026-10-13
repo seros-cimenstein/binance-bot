@@ -105,6 +105,15 @@ journalctl --user -u binance-pool-paper.service -f
 Docker: `docker compose ps`, `docker compose logs -f <service>`, and
 `docker compose run --rm scheduler bb bot-status`.
 
+Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
+profiles `gui`/`paper`/`live`/`all`) serves the same fleet view plus Claude
+Spot trades, cycles, journal, stop-file and failed-route-halt state at
+`http://localhost:8787` on the Docker host. It is published on `127.0.0.1`
+only and mounts the data dir read-only. From another machine:
+`ssh -L 8787:localhost:8787 <host>`. On a systemd host,
+`scripts/setup_user_deploy.sh` installs it next to `bb`; run
+`cd ~/.local/share/binance-bot && bin/cryptobot-gui`.
+
 Run one foreground read-only/paper evaluation cycle when diagnosing catalog or
 valuation behavior:
 

@@ -4,7 +4,8 @@ A Binance trading fleet written in Rust: a native Binance REST/WebSocket client,
 a Claude-driven agentic Spot trader, systematic strategies (funding arb, trend
 filter, mean reversion), a capital pool with a Claude allocator, a listing
 sniper, Solana launch sniping, signal collectors, and research backtests. All
-of it ships as one binary, `bb`.
+of it ships as one binary, `bb`, next to a read-only web dashboard,
+`cryptobot-gui`.
 
 ## Layout
 
@@ -22,6 +23,7 @@ of it ships as one binary, `bb`.
 | `bb-runtime` | legacy strategy runtime (`main`, demo SMA, risk guard, order manager), `ops-check` |
 | `bb-signals`, `bb-sniper`, `bb-social`, `bb-polymarket`, `bb-airdrop` | DexScreener/Telegram/smart-money signals, Solana pump.fun sniper, social evidence, Polymarket scanner, airdrop scheduler |
 | `bb-cli` | the `bb` binary |
+| `cryptobot-gui` | read-only localhost web dashboard (`cryptobot-gui` binary) |
 
 Money (prices, quantities, balances, fees, PnL) is `rust_decimal::Decimal`
 end to end; `f64` is used only for statistics.
@@ -30,6 +32,7 @@ end to end; `f64` is used only for statistics.
 
 ```bash
 cargo build --release -p bb-cli          # -> target/release/bb
+cargo build --release -p cryptobot-gui   # -> target/release/cryptobot-gui
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 scripts/pool_replay.sh                   # deterministic paper-pool fixture replay
@@ -109,6 +112,54 @@ Choose the model and thinking level with `CLAUDE_SPOT_MODEL` (default
 omp needs Claude credentials: either `ANTHROPIC_API_KEY`, or a one-time
 interactive `omp` login (stored under `PI_CODING_AGENT_DIR`).
 
+## Dashboard (`cryptobot-gui`)
+
+A read-only web page for the fleet, in five tabs that refresh every 30 s:
+
+- **Overview:** portfolio value and 24h change, Claude's P&L and win rate, the
+  open position, Claude's status (running / idle / stopped by the stop file /
+  halted on a failed route), the cumulative P&L curve, allocation, Claude's
+  latest call and recent trades.
+- **History:** every Claude Spot trade from the whole audit log with net P&L,
+  win rate, average win/loss, profit factor, fees and hold time; cumulative
+  P&L, per-trade and daily P&L charts, outcome mix, P&L by coin and a trade
+  table (click a row for Claude's reasoning); 24h / 7d / 30d / all ranges.
+- **Wallet:** spot balances (free and in orders) with price, 24h change, value
+  and share, Simple Earn positions, Binance wallet totals, account fees and an
+  API-key safety check (withdrawals, IP restriction, extra permissions).
+- **Claude:** cycles with Claude's summaries, tool calls and cost, and its
+  journal.
+- **Fleet:** every bot from `bb bot-status` with activity and P&L.
+
+Trade results come from the route quotes the trader logs: each submitted route
+opens a trade in the coin it bought, which closes when Claude later sells that
+coin (or is marked at the current price while held). Cost is the USDT value
+given up, so fees and spread count against the trade and the trade results add
+up to the whole run. Moves into stablecoins count toward net P&L but not toward
+wins and losses.
+
+```bash
+cryptobot-gui                                  # http://localhost:8787/
+cryptobot-gui --open                           # same, and open it in the default browser
+                                               # (if one is already running, just open it)
+cryptobot-gui --bind 127.0.0.1:9000 --data-dir ~/.local/share/binance-bot/data
+ssh -L 8787:localhost:8787 <bot-host>          # view a remote box from your laptop
+```
+
+- **Read-only.** GET routes only. It reads the Claude Spot files
+  (`CLAUDE_SPOT_AUDIT_PATH`, `_JOURNAL_PATH`, `_STATE_PATH`, `_STOP_PATH`,
+  relative to the working directory like the trader), the fleet files under
+  `BOT_STATUS_DATA_DIR`, and Binance through signed GETs (account, 24h
+  tickers, wallet totals, API-key restrictions; one read is reused for 20 s).
+  It never writes a file or calls an order endpoint. Stopping the trader is
+  still `touch` on the stop file.
+- **Localhost only.** It listens on `127.0.0.1:8787` (`--bind` /
+  `CRYPTOBOT_GUI_BIND`) and answers only requests whose `Host` is `localhost`,
+  `127.0.0.1` or `[::1]`, which blocks DNS-rebinding pages. There is no login,
+  so don't publish it on a network interface.
+- Without Binance credentials the wallet tab stays empty and open trades are
+  not marked; everything else still works.
+
 ## Capital pool, Claude allocator, auto-convert
 
 `bb capital-pool` shows the plan: a reserve (`CAPITAL_RESERVE_PCT`), per-module
@@ -163,6 +214,7 @@ docker compose run --rm -it claude-spot omp             # one-time Claude login 
 docker compose run --rm -it signals-telegram bb signals-telegram-setup   # one-time Telegram user login
 docker compose --profile all up -d
 touch docker-data/claude-spot.stop                      # emergency stop for the Claude trader
+# dashboard: http://localhost:8787 on the Docker host (published on 127.0.0.1 only)
 ```
 
 Profiles:
@@ -171,6 +223,7 @@ Profiles:
 - `all`: both of the above.
 - `v2`: the launch detector.
 - `main-bot`: the legacy SMA runtime.
+- `gui`: the `cryptobot-gui` dashboard alone (it also starts with `paper`, `live` and `all`; the data volume is mounted read-only).
 - `listing-sniper-live`: the live momentum listing sniper (off in production).
 
 Periodic jobs live in `docker/crontab`. systemd user units for non-Docker

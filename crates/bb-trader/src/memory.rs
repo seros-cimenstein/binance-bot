@@ -84,7 +84,8 @@ pub fn row_route_id(row: &Value) -> String {
         .to_owned()
 }
 
-fn row_asset(row: &Value, field: &str) -> String {
+/// Upper-case `decision.<field>`, else `selected_route.<field>` (`source_asset`, `destination_asset`).
+pub fn row_asset(row: &Value, field: &str) -> String {
     ["decision", "selected_route"]
         .iter()
         .find_map(|section| {

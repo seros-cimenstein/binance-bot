@@ -5,6 +5,35 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-13 (later): Claude Spot fresh start on the Pi (seref, operator
+  request). No failed-route halt was active (last attempted submission was
+  `submitted`). `claude-spot` was stopped, then `claude-spot-decisions.jsonl`
+  (533 rows since 2026-10-11), `claude-spot-journal.jsonl`,
+  `claude-spot-agent-state.json` and `claude-spot-session/` were moved to
+  `/home/seref/binance-bot/docker-backups/claude-spot-reset-20261013T120128Z/`
+  and the container restarted; it opened a new omp session and ran a clean
+  first cycle. The stale May audit copy on the laptop went to
+  `~/.local/share/binance-bot/backups/claude-spot-reset-*/`. omp credentials
+  (`omp-agent/`) were kept.
+- 2026-10-13 (later): `cryptobot-gui` redesigned into Overview / History /
+  Wallet / Claude / Fleet tabs. History reads the whole audit log (cached by
+  size+mtime) and computes per-trade P&L from route quotes (`history.rs`);
+  the wallet tab adds free/locked balances, 24h change, Earn positions,
+  Binance wallet totals and API-key restrictions (`wallet.rs`). Verified with
+  clippy, `cargo test --workspace` (877 passed) and browser runs on a
+  generated 35-trade fixture plus the real (empty) local data with the real
+  wallet.
+- 2026-10-13: Added `cryptobot-gui` (crate `crates/cryptobot-gui`), a
+  read-only, localhost-only axum web dashboard: wallet, Claude Spot
+  status (stop file / failed-route halt / activity), trades, cycles,
+  journal, LLM cost, and the `bb bot-status` fleet view. GET routes only,
+  loopback `Host` check, compose service `cryptobot-gui` published on
+  127.0.0.1:8787 with the data dir mounted read-only. Verified with
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace` (870 passed), and a browser smoke run against a
+  copy of the local data dir (no Binance credentials, so the wallet panel
+  was empty). Note: the entries below predate the Rust port and still
+  cite Python modules and pytest commands.
 - 2026-05-30: Phase 43 calibration landed. Replaced the "hyper-aggressive"
   mission and "holding is for cowards" framing with a cost-aware mission,
   removed the `override_bps_limits` decision field and its bypass of the

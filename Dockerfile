@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 #
-# Binance bot fleet image: one static-ish `bb` binary plus the `omp` agent CLI
-# (Claude decisions for claude-spot and the capital allocator run through omp RPC).
+# Binance bot fleet image: one static-ish `bb` binary, the read-only `cryptobot-gui`
+# dashboard, plus the `omp` agent CLI (Claude decisions for claude-spot and the capital
+# allocator run through omp RPC).
 
 # ---------- build ----------
 FROM rust:1-bookworm AS build
@@ -14,8 +15,8 @@ RUN apt-get update \
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --locked -p bb-cli \
- && install -m 0755 target/release/bb /usr/local/bin/bb
+RUN cargo build --release --locked -p bb-cli -p cryptobot-gui \
+ && install -m 0755 target/release/bb target/release/cryptobot-gui /usr/local/bin/
 
 # ---------- runtime ----------
 FROM debian:bookworm-slim AS runtime
@@ -52,7 +53,7 @@ RUN set -eux; \
     ln -s /opt/bun/bin/omp /usr/local/bin/omp; \
     omp --version
 
-COPY --from=build /usr/local/bin/bb /usr/local/bin/bb
+COPY --from=build /usr/local/bin/bb /usr/local/bin/cryptobot-gui /usr/local/bin/
 
 WORKDIR /app
 COPY docker ./docker

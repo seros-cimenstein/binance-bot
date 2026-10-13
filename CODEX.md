@@ -170,6 +170,13 @@ driven project.
   `API_ASSET_WHITELIST`.
 - Withdrawals remain hard-blocked by policy unless a future withdrawal-specific
   safety phase is explicitly approved.
+- The `cryptobot-gui` dashboard (crate `crates/cryptobot-gui`) is read-only and
+  localhost-only. It may read bot files and query Binance through signed GET
+  endpoints, but it must not write files, toggle the emergency stop, clear the
+  failed-route halt, or call any order, transfer, withdrawal, margin or futures
+  write endpoint. It keeps the loopback `Host` check and must not be published
+  on a non-loopback interface; adding controls needs a separate reviewed phase
+  with authentication.
 
 ## Current Verification Commands
 

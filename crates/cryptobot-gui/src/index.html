@@ -1,0 +1,971 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>cryptobot</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --surface: #fff; --surface-2: #f1f3f6; --fg: #14171c; --muted: #687080; --faint: #9aa1ad;
+    --border: #e4e7ec; --accent: #4f46e5; --accent-soft: rgba(79, 70, 229, .1);
+    --pos: #12965a; --pos-soft: rgba(18, 150, 90, .12); --neg: #d9363e; --neg-soft: rgba(217, 54, 62, .11);
+    --warn: #b7791f; --warn-soft: rgba(183, 121, 31, .13);
+    --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .06);
+    --c1: #4f46e5; --c2: #0ea5e9; --c3: #14b8a6; --c4: #f59e0b; --c5: #ec4899; --c6: #94a3b8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0d12; --surface: #13161d; --surface-2: #1a1e27; --fg: #e7e9ee; --muted: #9198a5; --faint: #5f6673;
+      --border: #242934; --accent: #8b93fb; --accent-soft: rgba(139, 147, 251, .14);
+      --pos: #34d27b; --pos-soft: rgba(52, 210, 123, .13); --neg: #f87171; --neg-soft: rgba(248, 113, 113, .13);
+      --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .13); --shadow: none;
+      --c1: #8b93fb; --c2: #38bdf8; --c3: #2dd4bf; --c4: #fbbf24; --c5: #f472b6; --c6: #64748b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+         -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; }
+  .num { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); } .faint { color: var(--faint); }
+  .pos { color: var(--pos); } .neg { color: var(--neg); } .warn { color: var(--warn); }
+  .small { font-size: 12px; }
+
+  /* top bar */
+  .top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 85%, transparent);
+         backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+  .top-inner { max-width: 1240px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; gap: 20px; height: 56px; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+  .brand .mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--accent), var(--c2)); }
+  .tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; flex: 1; }
+  .tabs a { padding: 6px 12px; border-radius: 8px; color: var(--muted); text-decoration: none; font-weight: 500; white-space: nowrap; }
+  .tabs a:hover { color: var(--fg); background: var(--surface-2); }
+  .tabs a[aria-current="page"] { color: var(--fg); background: var(--surface); box-shadow: var(--shadow); outline: 1px solid var(--border); }
+  .top-right { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+  .icon-btn { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; width: 32px; height: 32px; cursor: pointer;
+              display: grid; place-items: center; color: var(--muted); }
+  .icon-btn:hover { color: var(--fg); }
+  .icon-btn.spin svg { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .status { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border-radius: 999px; font-weight: 600; font-size: 12px;
+            background: var(--surface-2); color: var(--muted); }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .status.pos { background: var(--pos-soft); color: var(--pos); }
+  .status.pos .dot { box-shadow: 0 0 0 0 currentColor; animation: pulse 2s infinite; }
+  .status.neg { background: var(--neg-soft); color: var(--neg); }
+  .status.warn { background: var(--warn-soft); color: var(--warn); }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 50%, transparent); } 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+  main { max-width: 1240px; margin: 0 auto; padding: 20px; display: grid; gap: 16px; }
+  .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .page-head h1 { font-size: 20px; margin: 0; letter-spacing: -.02em; }
+  .page-head p { margin: 2px 0 0; color: var(--muted); }
+
+  .alerts { display: grid; gap: 8px; }
+  .alert { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 10px; border: 1px solid; }
+  .alert.neg { background: var(--neg-soft); border-color: color-mix(in srgb, var(--neg) 35%, transparent); color: var(--neg); }
+  .alert.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); color: var(--warn); }
+  .alert b { display: block; }
+  .alert span { color: var(--fg); opacity: .85; }
+
+  .grid { display: grid; gap: 16px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+  .split { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+  .halves { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (max-width: 900px) { .split, .halves { grid-template-columns: minmax(0, 1fr); } }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); min-width: 0; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px 0; }
+  .card-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .card-head .hint { color: var(--muted); font-size: 12px; }
+  .card-body { padding: 12px 16px 16px; }
+  .card-body.flush { padding: 8px 0 4px; }
+
+  .kpi { padding: 14px 16px; }
+  .kpi .label { color: var(--muted); font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .kpi .value { font-size: 26px; font-weight: 650; letter-spacing: -.02em; margin-top: 4px; line-height: 1.15; }
+  .kpi .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .kpi .sub b { font-weight: 600; }
+
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+          background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+  .chip.pos { background: var(--pos-soft); color: var(--pos); }
+  .chip.neg { background: var(--neg-soft); color: var(--neg); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+  .chip.accent { background: var(--accent-soft); color: var(--accent); }
+
+  .seg { display: inline-flex; background: var(--surface-2); border-radius: 9px; padding: 3px; gap: 2px; }
+  .seg button { border: 0; background: transparent; padding: 4px 12px; border-radius: 7px; cursor: pointer; color: var(--muted); font-weight: 500; }
+  .seg button[aria-pressed="true"] { background: var(--surface); color: var(--fg); box-shadow: var(--shadow); }
+
+  .toggle { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 16px; border-top: 1px solid var(--border); vertical-align: middle; }
+  thead th { border-top: 0; color: var(--muted); font-weight: 500; font-size: 12px; white-space: nowrap; padding-top: 4px; padding-bottom: 6px; }
+  td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.nw { white-space: nowrap; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--surface-2); }
+  tr.detail td { background: var(--surface-2); border-top: 0; padding-top: 2px; }
+  .table-wrap { overflow-x: auto; }
+  .asset { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+  .coin { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; color: #fff; flex: none; }
+  .route { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .route .arrow { color: var(--faint); }
+  .bar-cell { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+  .bar-track { width: 80px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; flex: none; }
+  .bar-fill { height: 100%; border-radius: 3px; background: var(--accent); }
+  .bar-fill.pos { background: var(--pos); } .bar-fill.neg { background: var(--neg); }
+
+  .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+  .empty b { display: block; color: var(--fg); font-weight: 600; margin-bottom: 2px; }
+  .error-box { padding: 12px 16px; color: var(--neg); }
+
+  .chart { width: 100%; min-height: 40px; }
+  .chart svg { display: block; overflow: visible; }
+  .chart .grid-line { stroke: var(--border); stroke-dasharray: 2 4; }
+  .chart .zero { stroke: var(--faint); }
+  .chart .axis { fill: var(--faint); font-size: 11px; }
+  .chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .line.pos { stroke: var(--pos); } .chart .line.neg { stroke: var(--neg); }
+  .chart .area.pos { fill: var(--pos-soft); } .chart .area.neg { fill: var(--neg-soft); }
+  .chart .dot { stroke: var(--surface); stroke-width: 1.5; fill: var(--faint); }
+  .chart .dot.pos { fill: var(--pos); } .chart .dot.neg { fill: var(--neg); } .chart .dot.accent { fill: var(--accent); }
+  .chart .bar.pos { fill: var(--pos); } .chart .bar.neg { fill: var(--neg); } .chart .bar.muted { fill: var(--faint); }
+  .chart .bar.accent { fill: var(--accent); }
+  .chart .bar:hover { opacity: .8; }
+  .chart .guide { stroke: var(--faint); stroke-dasharray: 3 3; }
+
+  .donut { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: center; }
+  .donut svg circle.seg-arc { transition: stroke-width .15s; cursor: default; }
+  .donut svg circle.seg-arc:hover { stroke-width: 22; }
+  .legend { display: grid; gap: 6px; min-width: 150px; flex: 1; }
+  .legend-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .legend-row .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .legend-row .lv { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+  .checks { display: grid; gap: 2px; }
+  .check { display: flex; gap: 12px; align-items: flex-start; padding: 10px 16px; border-top: 1px solid var(--border); }
+  .check:first-child { border-top: 0; }
+  .check .ic { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 13px; font-weight: 700; margin-top: 1px; }
+  .check .ic.pos { background: var(--pos-soft); color: var(--pos); }
+  .check .ic.neg { background: var(--neg-soft); color: var(--neg); }
+  .check .ic.warn { background: var(--warn-soft); color: var(--warn); }
+  .check .ic.muted { background: var(--surface-2); color: var(--muted); }
+  .check .t { font-weight: 600; }
+  .check .d { color: var(--muted); font-size: 12px; }
+
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px 20px; }
+  .fact .k { color: var(--muted); font-size: 12px; }
+  .fact .v { font-weight: 600; margin-top: 1px; word-break: break-word; }
+
+  .feed { display: grid; }
+  .feed-item { padding: 12px 16px; border-top: 1px solid var(--border); display: grid; gap: 6px; }
+  .feed-item:first-child { border-top: 0; }
+  .feed-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .feed-meta .sep { color: var(--faint); }
+  .feed-text { white-space: pre-wrap; word-break: break-word; }
+  .clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+
+  .quote { padding: 14px 16px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 10px 10px 0;
+           white-space: pre-wrap; word-break: break-word; }
+
+  .footnote { color: var(--muted); font-size: 12px; }
+  details.footnote summary { cursor: pointer; color: var(--accent); }
+  details.footnote p { margin: 6px 0 0; max-width: 820px; }
+
+  .tip { position: fixed; z-index: 50; pointer-events: none; background: var(--fg); color: var(--bg); padding: 7px 10px; border-radius: 8px;
+         font-size: 12px; max-width: 280px; box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
+  .tip .tt { font-weight: 650; margin-bottom: 2px; }
+  .skeleton { height: 120px; border-radius: 14px; background: linear-gradient(90deg, var(--surface) 0%, var(--surface-2) 50%, var(--surface) 100%);
+              background-size: 200% 100%; animation: shimmer 1.4s infinite; border: 1px solid var(--border); }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  @media (max-width: 640px) {
+    .top-inner { flex-wrap: wrap; height: auto; gap: 6px 10px; padding: 8px 12px 0; }
+    .tabs { order: 3; flex-basis: 100%; padding-bottom: 8px; }
+    .top-right { margin-left: auto; }
+    #updated { display: none; }
+    main { padding: 14px 12px; }
+    th, td { padding: 8px 10px; }
+    .kpi .value { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <div class="brand"><span class="mark"></span><span class="name">cryptobot</span></div>
+    <nav class="tabs" id="tabs">
+      <a href="#overview" data-tab="overview">Overview</a>
+      <a href="#history" data-tab="history">History</a>
+      <a href="#wallet" data-tab="wallet">Wallet</a>
+      <a href="#claude" data-tab="claude">Claude</a>
+      <a href="#fleet" data-tab="fleet">Fleet</a>
+    </nav>
+    <div class="top-right">
+      <span class="status" id="status-pill" title=""><span class="dot"></span><span>…</span></span>
+      <span class="small faint" id="updated"></span>
+      <button class="icon-btn" id="refresh" type="button" title="Refresh now" aria-label="Refresh now">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<main id="view"></main>
+<div class="tip" id="tip" hidden></div>
+<script>
+"use strict";
+// Everything that comes from the bot (including Claude- and web-derived text) is inserted with
+// textContent / createTextNode; nothing is parsed as HTML.
+const REFRESH_MS = 30000;
+const DUST_USDT = 1;
+const TABS = ["overview", "history", "wallet", "claude", "fleet"];
+const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", fleet: "/api/fleet" };
+const SVGNS = "http://www.w3.org/2000/svg";
+const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
+
+const ui = { tab: "overview", range: "all", hideDust: true, expanded: new Set(), data: {}, errors: {}, loadedAt: null, loading: false };
+
+// ---------- DOM helpers ----------
+function el(tag, attrs, ...kids) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else if (key === "class") node.className = value;
+    else node.setAttribute(key, value === true ? "" : value);
+  }
+  append(node, kids);
+  return node;
+}
+function append(node, kids) {
+  for (const kid of kids.flat(Infinity)) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+}
+function sv(tag, attrs, ...kids) {
+  const node = document.createElementNS(SVGNS, tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined) continue;
+    node.setAttribute(key, value);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined) continue;
+    if (kid instanceof Node) node.append(kid); else node.textContent = String(kid);
+  }
+  return node;
+}
+
+// ---------- formatting ----------
+const fmtCache = new Map();
+function nf(min, max) {
+  const key = min + ":" + max;
+  if (!fmtCache.has(key)) fmtCache.set(key, new Intl.NumberFormat(undefined, { minimumFractionDigits: min, maximumFractionDigits: max }));
+  return fmtCache.get(key);
+}
+function num(v) { const n = typeof v === "number" ? v : parseFloat(v); return Number.isFinite(n) ? n : null; }
+function usd(v, opts = {}) {
+  const n = num(v);
+  if (n === null) return "—";
+  const a = Math.abs(n);
+  const dp = a >= 1000 ? 0 : a >= 1 || a === 0 ? 2 : a >= 0.01 ? 3 : 4;
+  const body = "$" + nf(dp, dp).format(a);
+  if (n < 0 && a >= 0.00005) return "−" + body;
+  return (opts.sign && n > 0 ? "+" : "") + body;
+}
+function pct(v, opts = {}) {
+  const n = num(v);
+  if (n === null) return "—";
+  const dp = opts.dp ?? 2;
+  const sign = opts.sign === false ? "" : n > 0 ? "+" : n < 0 ? "−" : "";
+  return sign + nf(dp, dp).format(Math.abs(n)) + "%";
+}
+function qty(v) {
+  const n = num(v);
+  if (n === null) return "—";
+  const a = Math.abs(n);
+  return nf(0, a >= 1000 ? 2 : a >= 1 ? 4 : 8).format(n);
+}
+function tone(v) { const n = num(v); return n === null || n === 0 ? "muted" : n > 0 ? "pos" : "neg"; }
+function ms(iso) { const t = Date.parse(iso); return Number.isFinite(t) ? t : null; }
+function ago(iso) {
+  const t = ms(iso);
+  if (t === null) return "—";
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 45) return "just now";
+  if (s < 3600) return Math.round(s / 60) + "m ago";
+  if (s < 86400) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+}
+function stamp(iso) {
+  const t = ms(iso);
+  return t === null ? "—" : new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function shortDate(iso) {
+  const t = ms(iso);
+  return t === null ? "" : new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+function dayKey(t) {
+  const d = new Date(t);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function duration(sec) {
+  if (sec === null || sec === undefined) return "—";
+  let s = Math.max(0, Math.round(sec));
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + "h " + (m % 60) + "m";
+  return Math.floor(h / 24) + "d " + (h % 24) + "h";
+}
+function pretty(name) { return String(name || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()); }
+
+// ---------- small components ----------
+function card(title, body, opts = {}) {
+  return el("section", { class: "card" },
+    title || opts.action ? el("div", { class: "card-head" }, el("h2", null, title), opts.action || (opts.hint ? el("span", { class: "hint" }, opts.hint) : null)) : null,
+    el("div", { class: "card-body" + (opts.flush ? " flush" : "") }, body));
+}
+function kpi(label, value, sub, valueTone) {
+  return el("div", { class: "card kpi" },
+    el("div", { class: "label" }, label),
+    el("div", { class: "value num" + (valueTone ? " " + valueTone : "") }, value),
+    sub ? el("div", { class: "sub" }, sub) : null);
+}
+function chip(text, t) { return el("span", { class: "chip " + (t || "") }, text); }
+function empty(title, text) { return el("div", { class: "empty" }, el("b", null, title), text); }
+function errorBox(text) { return el("div", { class: "error-box" }, text); }
+function signed(v, fmt = usd) { return el("span", { class: tone(v) + " num" }, fmt(v, { sign: true })); }
+function coinColor(asset) {
+  let h = 0;
+  for (const c of String(asset)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return "hsl(" + (h % 360) + " 55% 48%)";
+}
+function coin(asset) { return el("span", { class: "coin", style: "background:" + coinColor(asset) }, String(asset || "?").slice(0, 3)); }
+function assetLabel(asset, extra) { return el("span", { class: "asset" }, coin(asset), asset || "?", extra || null); }
+function routeLabel(t) { return el("span", { class: "route" }, el("span", { class: "muted" }, t.source_asset || "?"), el("span", { class: "arrow" }, "→"), assetLabel(t.destination_asset)); }
+function table(head, rows, opts = {}) {
+  return el("div", { class: "table-wrap" }, el("table", null,
+    el("thead", null, el("tr", null, head.map(([label, cls]) => el("th", { class: cls || null }, label)))),
+    el("tbody", null, rows)));
+}
+function seg(options, current, onPick) {
+  return el("div", { class: "seg", role: "group" }, options.map(([value, label]) =>
+    el("button", { type: "button", "aria-pressed": String(value === current), onclick: () => onPick(value) }, label)));
+}
+
+// ---------- tooltip ----------
+const tipEl = document.getElementById("tip");
+function showTip(evt, lines) {
+  tipEl.replaceChildren(...lines.filter(Boolean).map((line, i) => el("div", { class: i === 0 ? "tt" : null }, line)));
+  tipEl.hidden = false;
+  const pad = 14, rect = tipEl.getBoundingClientRect();
+  let x = evt.clientX + pad, y = evt.clientY + pad;
+  if (x + rect.width > innerWidth - 8) x = evt.clientX - rect.width - pad;
+  if (y + rect.height > innerHeight - 8) y = evt.clientY - rect.height - pad;
+  tipEl.style.left = Math.max(8, x) + "px";
+  tipEl.style.top = Math.max(8, y) + "px";
+}
+function hideTip() { tipEl.hidden = true; }
+
+// ---------- charts (plain SVG, drawn at the container's width) ----------
+function niceTicks(min, max, count = 4) {
+  if (min === max) { min -= 1; max += 1; }
+  const raw = (max - min) / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const f = raw / mag;
+  const step = (f >= 7.5 ? 10 : f >= 3.5 ? 5 : f >= 1.5 ? 2 : 1) * mag;
+  const lo = Math.floor(min / step) * step, hi = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.abs(v) < step / 1e6 ? 0 : v);
+  return { lo, hi, ticks };
+}
+function frame(svg, W, H, P, ticks, Y) {
+  // One decimal count for the whole axis, enough to tell neighbouring ticks apart.
+  const step = ticks.length > 1 ? Math.abs(ticks[1] - ticks[0]) : 1;
+  const dp = Math.min(6, Math.max(0, -Math.floor(Math.log10(step))));
+  const label = (v) => (v < 0 ? "−$" : "$") + nf(dp, dp).format(Math.abs(v));
+  for (const t of ticks) {
+    svg.append(sv("line", { x1: P.l, x2: W - P.r, y1: Y(t), y2: Y(t), class: t === 0 ? "zero" : "grid-line" }));
+    svg.append(sv("text", { x: P.l - 8, y: Y(t) + 4, class: "axis", "text-anchor": "end" }, label(t)));
+  }
+}
+let clipSeq = 0;
+function lineChart(points, opts = {}) {
+  const host = el("div", { class: "chart" });
+  host.draw = (W) => {
+    const H = opts.height || 240, P = { l: 62, r: 14, t: 12, b: 26 };
+    const iw = Math.max(20, W - P.l - P.r), ih = H - P.t - P.b;
+    const ys = points.map((p) => p.y);
+    const { lo, hi, ticks } = niceTicks(Math.min(0, ...ys), Math.max(0, ...ys));
+    const n = points.length;
+    const X = (i) => P.l + (n === 1 ? iw / 2 : (i * iw) / (n - 1));
+    const Y = (v) => P.t + ((hi - v) / (hi - lo)) * ih;
+    const svg = sv("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
+    frame(svg, W, H, P, ticks, Y);
+    const id = "clip" + ++clipSeq, zero = Y(0);
+    svg.append(sv("defs", null,
+      sv("clipPath", { id: id + "p" }, sv("rect", { x: 0, y: 0, width: W, height: zero })),
+      sv("clipPath", { id: id + "n" }, sv("rect", { x: 0, y: zero, width: W, height: Math.max(0, H - zero) }))));
+    const pts = points.map((p, i) => X(i).toFixed(1) + "," + Y(p.y).toFixed(1));
+    const line = "M" + pts.join(" L");
+    const area = `M${X(0).toFixed(1)},${zero.toFixed(1)} L${pts.join(" L")} L${X(n - 1).toFixed(1)},${zero.toFixed(1)} Z`;
+    for (const [clip, cls] of [[id + "p", "pos"], [id + "n", "neg"]]) {
+      svg.append(sv("g", { "clip-path": `url(#${clip})` }, sv("path", { d: area, class: "area " + cls }), sv("path", { d: line, class: "line " + cls })));
+    }
+    const r = n > 60 ? 2 : 3.5;
+    points.forEach((p, i) => svg.append(sv("circle", { cx: X(i), cy: Y(p.y), r, class: "dot " + (p.tone || "") })));
+    const labelAt = [...new Set([0, Math.round((n - 1) / 2), n - 1])];
+    for (const i of labelAt) {
+      if (!points[i] || !points[i].label) continue;
+      svg.append(sv("text", { x: X(i), y: H - 6, class: "axis", "text-anchor": n === 1 ? "middle" : i === 0 ? "start" : i === n - 1 ? "end" : "middle" }, points[i].label));
+    }
+    const guide = sv("line", { y1: P.t, y2: P.t + ih, class: "guide", visibility: "hidden" });
+    svg.append(guide);
+    const hit = sv("rect", { x: P.l - 6, y: P.t, width: iw + 12, height: ih, fill: "transparent" });
+    hit.addEventListener("mousemove", (e) => {
+      const box = svg.getBoundingClientRect();
+      const i = n === 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round(((e.clientX - box.left - P.l) / iw) * (n - 1))));
+      guide.setAttribute("x1", X(i)); guide.setAttribute("x2", X(i)); guide.setAttribute("visibility", "visible");
+      showTip(e, points[i].tip);
+    });
+    hit.addEventListener("mouseleave", () => { guide.setAttribute("visibility", "hidden"); hideTip(); });
+    svg.append(hit);
+    host.replaceChildren(svg);
+  };
+  return host;
+}
+function barChart(bars, opts = {}) {
+  const host = el("div", { class: "chart" });
+  host.draw = (W) => {
+    const H = opts.height || 200, P = { l: 62, r: 14, t: 12, b: 26 };
+    const iw = Math.max(20, W - P.l - P.r), ih = H - P.t - P.b;
+    const ys = bars.map((b) => b.y);
+    const { lo, hi, ticks } = niceTicks(Math.min(0, ...ys), Math.max(0, ...ys));
+    const Y = (v) => P.t + ((hi - v) / (hi - lo)) * ih;
+    const svg = sv("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
+    frame(svg, W, H, P, ticks, Y);
+    const slot = iw / bars.length, bw = Math.max(2, Math.min(34, slot * 0.68));
+    const every = Math.max(1, Math.ceil(bars.length / Math.max(1, Math.floor(iw / 64))));
+    bars.forEach((b, i) => {
+      const x = P.l + i * slot + (slot - bw) / 2;
+      const top = Math.min(Y(b.y), Y(0)), h = Math.max(1.5, Math.abs(Y(b.y) - Y(0)));
+      const rect = sv("rect", { x, y: top, width: bw, height: h, rx: Math.min(3, bw / 3), class: "bar " + (b.tone || tone(b.y)) });
+      rect.addEventListener("mousemove", (e) => showTip(e, b.tip));
+      rect.addEventListener("mouseleave", hideTip);
+      svg.append(rect);
+      if (b.label && i % every === 0) svg.append(sv("text", { x: x + bw / 2, y: H - 6, class: "axis", "text-anchor": "middle" }, b.label));
+    });
+    host.replaceChildren(svg);
+  };
+  return host;
+}
+function donut(segments, opts = {}) {
+  const size = opts.size || 168, stroke = 18, r = (size - stroke - 6) / 2, c = 2 * Math.PI * r;
+  const total = segments.reduce((a, s) => a + Math.max(0, s.value), 0);
+  const svg = sv("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}` });
+  svg.append(sv("circle", { cx: size / 2, cy: size / 2, r, fill: "none", stroke: "var(--surface-2)", "stroke-width": stroke }));
+  let offset = 0;
+  if (total > 0) {
+    for (const s of segments) {
+      if (s.value <= 0) continue;
+      const len = (s.value / total) * c;
+      const arc = sv("circle", { cx: size / 2, cy: size / 2, r, fill: "none", stroke: s.color, "stroke-width": stroke, class: "seg-arc",
+        "stroke-dasharray": `${Math.max(0, len - (segments.length > 1 ? 1.5 : 0))} ${c}`, "stroke-dashoffset": -offset,
+        transform: `rotate(-90 ${size / 2} ${size / 2})` });
+      arc.addEventListener("mousemove", (e) => showTip(e, [s.label, s.display + " · " + pct((s.value / total) * 100, { sign: false, dp: 1 })]));
+      arc.addEventListener("mouseleave", hideTip);
+      svg.append(arc);
+      offset += len;
+    }
+  }
+  svg.append(sv("text", { x: size / 2, y: size / 2 - 2, "text-anchor": "middle", fill: "var(--fg)", "font-size": 18, "font-weight": 650 }, opts.center || ""));
+  svg.append(sv("text", { x: size / 2, y: size / 2 + 16, "text-anchor": "middle", fill: "var(--muted)", "font-size": 11 }, opts.sub || ""));
+  const legend = el("div", { class: "legend" }, segments.map((s) =>
+    el("div", { class: "legend-row" }, el("span", { class: "sw", style: "background:" + s.color }), s.label, el("span", { class: "lv" }, s.display))));
+  return el("div", { class: "donut" }, svg, opts.legend === false ? null : legend);
+}
+function drawCharts() {
+  for (const chart of document.querySelectorAll("#view .chart")) if (chart.draw) chart.draw(chart.clientWidth);
+}
+
+// ---------- derived data ----------
+function claudeState() {
+  const st = ui.data.status;
+  if (!st) return { label: ui.errors.status ? "Unknown" : "Loading", tone: "", detail: ui.errors.status || "" };
+  if (st.stop_active) return { label: "Stopped", tone: "neg", detail: "Emergency stop file present: " + st.stop_path };
+  if (st.halt) return { label: "Halted", tone: "neg", detail: st.halt };
+  const last = st.agent && st.agent.last_cycle ? st.agent.last_cycle.finished_at : null;
+  if (!last) return { label: "Waiting", tone: "", detail: "No Claude cycle recorded yet" };
+  const age = (Date.now() - ms(last)) / 1000;
+  // The daemon runs a cycle every 4 minutes.
+  if (age <= 900) return { label: "Running", tone: "pos", detail: "Last cycle " + ago(last) };
+  return { label: "Idle", tone: "warn", detail: "Last cycle " + ago(last) };
+}
+const RANGES = [["24h", "24h", 864e5], ["7d", "7d", 6048e5], ["30d", "30d", 2592e6], ["all", "All", Infinity]];
+function tradesInRange(trades) {
+  const span = RANGES.find(([key]) => key === ui.range)[2];
+  if (!Number.isFinite(span)) return trades;
+  const cutoff = Date.now() - span;
+  return trades.filter((t) => (ms(t.opened_at) ?? 0) >= cutoff);
+}
+function stats(trades) {
+  const sum = (arr, f) => arr.reduce((a, t) => a + (num(f(t)) || 0), 0);
+  const wins = trades.filter((t) => t.status === "win"), losses = trades.filter((t) => t.status === "loss");
+  const decided = [...wins, ...losses];
+  const realized = trades.filter((t) => ["win", "loss", "cash"].includes(t.status));
+  const open = trades.filter((t) => t.status === "open");
+  const grossWin = sum(wins, (t) => t.pnl_usdt), grossLoss = sum(losses, (t) => t.pnl_usdt);
+  const byPnl = [...decided].sort((a, b) => num(b.pnl_usdt) - num(a.pnl_usdt));
+  const ordered = [...decided].sort((a, b) => (ms(b.closed_at || b.opened_at) ?? 0) - (ms(a.closed_at || a.opened_at) ?? 0));
+  let streak = 0;
+  for (const t of ordered) { if (t.status === ordered[0].status) streak++; else break; }
+  const holds = decided.map((t) => t.hold_seconds).filter((v) => v !== null && v !== undefined);
+  // Return base: what the first trade in view put to work (Claude rotates one bankroll).
+  const first = [...trades].sort((a, b) => (ms(a.opened_at) ?? 0) - (ms(b.opened_at) ?? 0))[0];
+  const start = first ? num(first.cost_usdt) : null;
+  return {
+    count: trades.length, wins, losses, decided, realized, open,
+    net: sum(realized, (t) => t.pnl_usdt), unrealized: sum(open, (t) => t.pnl_usdt), start,
+    winRate: decided.length ? (wins.length / decided.length) * 100 : null,
+    profitFactor: grossLoss < 0 ? grossWin / -grossLoss : grossWin > 0 ? Infinity : null,
+    avgWin: wins.length ? grossWin / wins.length : null, avgLoss: losses.length ? grossLoss / losses.length : null,
+    best: byPnl[0] || null, worst: byPnl.length ? byPnl[byPnl.length - 1] : null,
+    fees: sum(trades, (t) => t.fees_usdt),
+    avgHold: holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : null,
+    streak: ordered.length ? { n: streak, status: ordered[0].status } : null,
+  };
+}
+function resultChip(t) {
+  const map = { win: ["Win", "pos"], loss: ["Loss", "neg"], open: ["Open", "accent"], cash: ["To cash", ""], unknown: ["Unknown", ""] };
+  const [label, cls] = map[t.status] || [t.status, ""];
+  return chip(label, cls);
+}
+function equityPoints(s) {
+  const events = [...s.realized].sort((a, b) => (ms(a.closed_at || a.opened_at) ?? 0) - (ms(b.closed_at || b.opened_at) ?? 0));
+  let cum = 0;
+  const points = events.map((t) => {
+    cum += num(t.pnl_usdt) || 0;
+    const when = t.closed_at || t.opened_at;
+    return { y: cum, label: shortDate(when), tone: t.status === "win" ? "pos" : t.status === "loss" ? "neg" : "",
+      tip: [usd(cum, { sign: true }) + " total", t.source_asset + " → " + t.destination_asset + "  " + usd(t.pnl_usdt, { sign: true }) + " (" + pct(t.pnl_pct) + ")", stamp(when)] };
+  });
+  if (s.open.length) {
+    const y = cum + s.unrealized;
+    points.push({ y, label: "now", tone: "accent", tip: [usd(y, { sign: true }) + " incl. open", "Open: " + usd(s.unrealized, { sign: true }) + " unrealized", "marked at current price"] });
+  }
+  return points;
+}
+
+// ---------- shell ----------
+function alerts() {
+  const items = [];
+  const st = ui.data.status;
+  if (st && st.stop_active) items.push(["neg", "Emergency stop is on", "Claude Spot won't trade while " + st.stop_path + " exists. Delete it to resume."]);
+  if (st && st.halt) items.push(["neg", "Live trading halted", st.halt + ". Review, then run bb claude-spot --mark-failed-route-reviewed."]);
+  if (st && st.audit_error) items.push(["neg", "Audit log unreadable", st.audit_error]);
+  for (const [key, error] of Object.entries(ui.errors)) items.push(["warn", "Couldn't load " + key, error]);
+  if (!items.length) return null;
+  return el("div", { class: "alerts" }, items.map(([t, title, text]) => el("div", { class: "alert " + t }, el("div", null, el("b", null, title), el("span", null, text)))));
+}
+function pageHead(title, sub, action) {
+  return el("div", { class: "page-head" }, el("div", null, el("h1", null, title), sub ? el("p", null, sub) : null), action || null);
+}
+function loadingView() { return el("div", { class: "grid kpis" }, [1, 2, 3, 4].map(() => el("div", { class: "skeleton" }))); }
+
+function renderHeader() {
+  const s = claudeState();
+  const pill = document.getElementById("status-pill");
+  pill.className = "status " + s.tone;
+  pill.title = s.detail;
+  pill.replaceChildren(el("span", { class: "dot" }), el("span", null, "Claude · " + s.label));
+  for (const a of document.querySelectorAll("#tabs a")) {
+    if (a.dataset.tab === ui.tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  }
+  document.getElementById("updated").textContent = ui.loadedAt ? "Updated " + new Date(ui.loadedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+}
+
+function render() {
+  renderHeader();
+  const view = document.getElementById("view");
+  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, claude: claudePage, fleet: fleetPage };
+  view.replaceChildren(alerts() || "", pages[ui.tab]());
+  hideTip();
+  drawCharts();
+}
+
+// ---------- Overview ----------
+function overviewPage() {
+  const { wallet, history, status } = ui.data;
+  if (!wallet && !history && !status) return loadingView();
+  const trades = history ? history.trades : [];
+  const s = stats(trades);
+  const state = claudeState();
+  const openTrade = [...trades].reverse().find((t) => t.status === "open");
+  const lastCycle = status && status.cycles && status.cycles[0];
+  const agent = status ? status.agent || {} : {};
+  const change = wallet && !wallet.error ? num(wallet.change_24h_usdt) : null;
+  const total = wallet && !wallet.error ? num(wallet.total_usdt) : null;
+  const changePct = change !== null && total ? (change / (total - change)) * 100 : null;
+
+  const kpis = el("div", { class: "grid kpis" },
+    kpi("Portfolio value", total === null ? "—" : usd(total),
+      change === null ? (wallet && wallet.error ? "wallet unavailable" : "") : el("span", null, el("b", { class: tone(change) }, usd(change, { sign: true }) + " (" + pct(changePct) + ")"), " last 24h")),
+    kpi("Claude P&L", s.realized.length || s.open.length ? usd(s.net + s.unrealized, { sign: true }) : "—",
+      s.decided.length ? el("span", null, el("b", null, pct(s.winRate, { sign: false, dp: 0 })), " win rate · " + s.wins.length + "W / " + s.losses.length + "L")
+        : "no closed trades yet", s.realized.length || s.open.length ? tone(s.net + s.unrealized) : null),
+    kpi("Open position", openTrade ? openTrade.destination_asset : "None",
+      openTrade ? el("span", null, el("b", { class: tone(openTrade.pnl_usdt) }, usd(openTrade.pnl_usdt, { sign: true }) + " (" + pct(openTrade.pnl_pct) + ")"), " · held " + duration(openTrade.hold_seconds))
+        : "Claude is in cash or between trades"),
+    kpi("Claude", state.label, el("span", null, state.detail, agent.cycle_count ? " · " + agent.cycle_count + " cycles" : "",
+      num(agent.llm_cost_usd) ? " · " + usd(agent.llm_cost_usd) + " LLM today" : ""), state.tone || null));
+
+  const points = equityPoints(s);
+  const equity = card("Cumulative P&L", points.length >= 1 ? lineChart(points, { height: 230 })
+    : empty("No trades yet", "The curve starts with Claude's first closed trade."), { hint: s.realized.length ? s.realized.length + " realized trades" : null });
+
+  const holdings = wallet && !wallet.error ? wallet.holdings.filter((h) => num(h.value_usdt) >= DUST_USDT) : [];
+  const allocation = card("Allocation", wallet && wallet.error ? errorBox(wallet.error)
+    : holdings.length ? allocationDonut(wallet) : empty("Nothing to show", "No balances worth $1 or more."));
+
+  const thinking = card("Claude's latest call", lastCycle ? el("div", { class: "grid", style: "gap:10px" },
+      el("div", { class: "feed-meta" }, actionChip(lastCycle), el("span", null, ago(lastCycle.timestamp)), el("span", { class: "sep" }, "·"), el("span", null, stamp(lastCycle.timestamp))),
+      el("div", { class: "quote" }, cycleSummary(lastCycle) || "No summary for this cycle."),
+      lastCycle.error ? el("div", { class: "neg small" }, lastCycle.error) : null,
+      status.journal && status.journal[0] ? el("div", { class: "grid", style: "gap:4px;margin-top:4px" },
+        el("div", { class: "small muted" }, "Latest journal note · " + ago(status.journal[0].timestamp)),
+        el("div", { class: "feed-text clamp", onclick: (e) => e.currentTarget.classList.toggle("clamp") }, status.journal[0].text)) : null)
+    : empty("No cycles yet", "Claude's reasoning shows up here after its first cycle."), { action: el("a", { href: "#claude", class: "small", style: "color:var(--accent);text-decoration:none" }, "All cycles →") });
+
+  const recent = [...trades].reverse().slice(0, 5);
+  const recentCard = card("Recent trades", recent.length ? tradeTable(recent, { compact: true })
+    : empty("No trades yet", "Trades appear here as soon as Claude executes one."), { flush: recent.length > 0,
+    action: el("a", { href: "#history", class: "small", style: "color:var(--accent);text-decoration:none" }, "Full history →") });
+
+  return el("div", { class: "grid" }, kpis, el("div", { class: "grid split" }, equity, allocation), el("div", { class: "grid halves" }, thinking, recentCard));
+}
+function allocationDonut(wallet) {
+  const rows = wallet.holdings.filter((h) => num(h.value_usdt) > 0);
+  const top = rows.slice(0, 5);
+  const rest = rows.slice(5).reduce((a, h) => a + num(h.value_usdt), 0);
+  const segments = top.map((h, i) => ({ label: h.asset, value: num(h.value_usdt), display: usd(h.value_usdt), color: PALETTE[i] }));
+  if (rest > 0) segments.push({ label: "Other (" + (rows.length - 5) + ")", value: rest, display: usd(rest), color: PALETTE[5] });
+  return donut(segments, { center: usd(wallet.total_usdt), sub: "total" });
+}
+function actionChip(cycle) {
+  const action = (cycle.agent && cycle.agent.end_cycle && cycle.agent.end_cycle.action) || (cycle.decision && cycle.decision.action) || "";
+  const a = action.toLowerCase();
+  return chip(action ? pretty(action) : "—", ["traded", "rebalance", "buy", "sell"].includes(a) ? "accent" : a === "hold" || a === "held" ? "" : "warn");
+}
+function cycleSummary(cycle) {
+  return (cycle.agent && cycle.agent.end_cycle && cycle.agent.end_cycle.summary) || (cycle.decision && cycle.decision.reason) || "";
+}
+
+// ---------- History ----------
+function historyPage() {
+  const history = ui.data.history;
+  const rangePicker = seg(RANGES.map(([k, label]) => [k, label]), ui.range, (v) => { ui.range = v; render(); });
+  const head = pageHead("Trade history", "Every trade Claude has made since the fresh start, with its result.", rangePicker);
+  if (!history) return el("div", { class: "grid" }, head, ui.errors.history ? card(null, errorBox(ui.errors.history)) : loadingView());
+  if (history.error) return el("div", { class: "grid" }, head, card(null, errorBox(history.error)));
+  const trades = tradesInRange(history.trades);
+  const s = stats(trades);
+  if (!trades.length) {
+    return el("div", { class: "grid" }, head, card(null, empty(history.trades.length ? "No trades in this range" : "No trades yet",
+      history.trades.length ? "Pick a longer range to see older trades." : "Claude's history was reset. Charts fill in as it trades.")), failedRoutesCard(history));
+  }
+
+  const pf = s.profitFactor === null ? "—" : s.profitFactor === Infinity ? "∞" : nf(2, 2).format(s.profitFactor);
+  const kpis = el("div", { class: "grid kpis" },
+    kpi("Net P&L", usd(s.net, { sign: true }), el("span", null, s.open.length ? el("span", null, el("b", { class: tone(s.unrealized) }, usd(s.unrealized, { sign: true })), " unrealized · ") : "",
+      s.start ? pct(((s.net + s.unrealized) / s.start) * 100) + " total on " + usd(s.start) + " starting" : ""), tone(s.net)),
+    kpi("Win rate", s.winRate === null ? "—" : pct(s.winRate, { sign: false, dp: 0 }),
+      el("span", null, el("b", { class: "pos" }, s.wins.length + " wins"), " · ", el("b", { class: "neg" }, s.losses.length + " losses"),
+        s.streak && s.streak.n > 1 ? " · " + s.streak.n + " " + (s.streak.status === "win" ? "wins" : "losses") + " in a row" : "")),
+    kpi("Avg win / loss", el("span", null, el("span", { class: "pos" }, s.avgWin === null ? "—" : usd(s.avgWin, { sign: true })), el("span", { class: "faint" }, " / "),
+      el("span", { class: "neg" }, s.avgLoss === null ? "—" : usd(s.avgLoss))), "Profit factor " + pf + (s.profitFactor !== null ? " (above 1 = winning)" : "")),
+    kpi("Fees & spread", usd(s.fees), "Avg hold " + duration(s.avgHold) + " · " + s.count + " trades"));
+
+  const points = equityPoints(s);
+  const equity = card("Cumulative P&L", lineChart(points, { height: 260 }), { hint: "each dot is a trade" });
+
+  const bars = [...trades].filter((t) => num(t.pnl_usdt) !== null)
+    .sort((a, b) => (ms(a.opened_at) ?? 0) - (ms(b.opened_at) ?? 0))
+    .map((t) => ({ y: num(t.pnl_usdt), label: shortDate(t.opened_at), tone: t.status === "win" ? "pos" : t.status === "loss" ? "neg" : t.status === "open" ? "accent" : "muted",
+      tip: [t.source_asset + " → " + t.destination_asset, usd(t.pnl_usdt, { sign: true }) + " (" + pct(t.pnl_pct) + ")" + (t.status === "open" ? " · open" : t.status === "cash" ? " · to cash" : ""), stamp(t.opened_at) + " · held " + duration(t.hold_seconds)] }));
+  const perTrade = card("Result per trade", bars.length ? barChart(bars, { height: 200 }) : empty("No results yet", ""), { hint: "green win · red loss · blue open" });
+
+  const days = new Map();
+  for (const t of s.realized) {
+    const t0 = ms(t.closed_at || t.opened_at);
+    if (t0 === null) continue;
+    const key = dayKey(t0);
+    const d = days.get(key) || { pnl: 0, n: 0, t: t0 };
+    d.pnl += num(t.pnl_usdt) || 0; d.n++;
+    days.set(key, d);
+  }
+  const dayBars = [...days.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, d]) => ({ y: d.pnl, label: shortDate(new Date(d.t).toISOString()),
+    tip: [new Date(d.t).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }), usd(d.pnl, { sign: true }), d.n + " trade" + (d.n === 1 ? "" : "s") + " closed"] }));
+  const daily = card("Daily P&L", dayBars.length ? barChart(dayBars, { height: 200 }) : empty("No closed trades", ""));
+
+  const mix = card("Outcomes", donut([
+    { label: "Wins", value: s.wins.length, display: String(s.wins.length), color: "var(--pos)" },
+    { label: "Losses", value: s.losses.length, display: String(s.losses.length), color: "var(--neg)" },
+    { label: "Open", value: s.open.length, display: String(s.open.length), color: "var(--accent)" },
+    { label: "To cash", value: trades.filter((t) => t.status === "cash").length, display: String(trades.filter((t) => t.status === "cash").length), color: "var(--c6)" },
+  ], { center: s.winRate === null ? "—" : pct(s.winRate, { sign: false, dp: 0 }), sub: "win rate" }));
+
+  return el("div", { class: "grid" }, head, kpis,
+    el("div", { class: "grid split" }, equity, mix),
+    el("div", { class: "grid halves" }, perTrade, daily),
+    assetCard(trades),
+    card("Trades", tradeTable([...trades].reverse(), { expandable: true }), { flush: true, hint: "click a row for Claude's reasoning" }),
+    failedRoutesCard(history),
+    el("details", { class: "footnote" }, el("summary", null, "How results are calculated"),
+      el("p", null, "Each route Claude submits opens a trade in the coin it bought. The trade closes when Claude later sells that coin. Cost is the USDT value Claude gave up; the result is what the coins were worth when sold (or right now, if still held) minus that cost, so fees and spread are included and the trade results add up to the whole run. Values are the bot's USDT quotes at execution time, not exchange statements. Moves into stablecoins count toward net P&L but not toward wins and losses.")));
+}
+function assetCard(trades) {
+  const groups = new Map();
+  for (const t of trades) {
+    if (!["win", "loss", "open"].includes(t.status)) continue;
+    const g = groups.get(t.destination_asset) || { asset: t.destination_asset, n: 0, wins: 0, losses: 0, pnl: 0 };
+    g.n++; g.pnl += num(t.pnl_usdt) || 0;
+    if (t.status === "win") g.wins++; else if (t.status === "loss") g.losses++;
+    groups.set(t.destination_asset, g);
+  }
+  const rows = [...groups.values()].sort((a, b) => b.pnl - a.pnl);
+  if (!rows.length) return null;
+  const maxAbs = Math.max(...rows.map((g) => Math.abs(g.pnl)), 1e-9);
+  return card("By coin", table([["Coin"], ["Trades", "r"], ["Win rate", "r"], ["P&L", "r"]], rows.map((g) =>
+    el("tr", null,
+      el("td", null, assetLabel(g.asset)),
+      el("td", { class: "r" }, String(g.n)),
+      el("td", { class: "r" }, g.wins + g.losses ? pct((g.wins / (g.wins + g.losses)) * 100, { sign: false, dp: 0 }) : "—"),
+      el("td", { class: "r" }, el("div", { class: "bar-cell" }, signed(g.pnl),
+        el("div", { class: "bar-track" }, el("div", { class: "bar-fill " + tone(g.pnl), style: "width:" + Math.max(3, (Math.abs(g.pnl) / maxAbs) * 100) + "%" }))))))),
+    { flush: true, hint: "which coins made or lost money" });
+}
+function tradeKey(t) { return t.opened_at + "|" + t.route_id; }
+function tradeTable(trades, opts = {}) {
+  const head = opts.compact
+    ? [["Trade"], ["Result"], ["P&L", "r"], ["When", "r"]]
+    : [["Opened"], ["Trade"], ["Result"], ["Invested", "r"], ["P&L", "r"], ["Return", "r"], ["Fees", "r"], ["Held", "r"]];
+  const rows = [];
+  for (const t of trades) {
+    const key = tradeKey(t);
+    if (opts.compact) {
+      rows.push(el("tr", null, el("td", null, routeLabel(t)), el("td", null, resultChip(t)),
+        el("td", { class: "r" }, signed(t.pnl_usdt)), el("td", { class: "r muted", title: stamp(t.opened_at) }, ago(t.opened_at))));
+      continue;
+    }
+    const open = ui.expanded.has(key);
+    rows.push(el("tr", { class: opts.expandable ? "click" : null, onclick: opts.expandable ? () => { open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } : null },
+      el("td", { class: "nw muted" }, stamp(t.opened_at)),
+      el("td", null, routeLabel(t)),
+      el("td", null, resultChip(t)),
+      el("td", { class: "r" }, usd(t.cost_usdt)),
+      el("td", { class: "r" }, signed(t.pnl_usdt)),
+      el("td", { class: "r" }, el("span", { class: tone(t.pnl_pct) }, pct(t.pnl_pct))),
+      el("td", { class: "r muted" }, usd(t.fees_usdt)),
+      el("td", { class: "r muted" }, duration(t.hold_seconds) + (t.status === "open" ? "+" : ""))));
+    if (open) {
+      rows.push(el("tr", { class: "detail" }, el("td", { colspan: 8 }, el("div", { class: "grid", style: "gap:6px;padding:6px 0" },
+        el("div", { class: "feed-text" }, t.reason || "No reasoning recorded for this route."),
+        el("div", { class: "feed-meta" },
+          el("span", null, "Closed " + (t.closed_at ? stamp(t.closed_at) : t.status === "open" ? "— still held" : "—")),
+          el("span", { class: "sep" }, "·"), el("span", null, "Exit value " + usd(t.exit_usdt)),
+          el("span", { class: "sep" }, "·"), el("span", null, t.legs + " order" + (t.legs === 1 ? "" : "s")),
+          el("span", { class: "sep" }, "·"), el("span", { class: "faint" }, t.route_id))))));
+    }
+  }
+  return table(head, rows);
+}
+function failedRoutesCard(history) {
+  if (!history || !history.failed_routes || !history.failed_routes.length) return null;
+  return card("Failed routes", el("div", { class: "feed" }, [...history.failed_routes].reverse().map((f) =>
+    el("div", { class: "feed-item" }, el("div", { class: "feed-meta" }, chip("Failed", "neg"), el("span", null, stamp(f.timestamp)),
+      el("span", { class: "sep" }, "·"), el("span", null, (f.source_asset || "?") + " → " + (f.destination_asset || "?"))),
+      el("div", { class: "small" }, f.error || "no error text")))), { flush: true, hint: "orders reached the exchange, then something went wrong" });
+}
+
+// ---------- Wallet ----------
+function walletPage() {
+  const wallet = ui.data.wallet;
+  const head = pageHead("Wallet", "Live from your Binance API keys (read-only).", null);
+  if (!wallet) return el("div", { class: "grid" }, head, ui.errors.wallet ? card(null, errorBox(ui.errors.wallet)) : loadingView());
+  if (wallet.error) return el("div", { class: "grid" }, head, card(null, empty("Wallet unavailable", wallet.error)));
+
+  const total = num(wallet.total_usdt), change = num(wallet.change_24h_usdt);
+  const usdt = wallet.holdings.find((h) => h.asset === "USDT");
+  const visible = wallet.holdings.filter((h) => !ui.hideDust || num(h.value_usdt) >= DUST_USDT);
+  const hidden = wallet.holdings.length - visible.length;
+  const hiddenValue = wallet.holdings.filter((h) => !visible.includes(h)).reduce((a, h) => a + (num(h.value_usdt) || 0), 0);
+  const largest = wallet.holdings[0];
+
+  const kpis = el("div", { class: "grid kpis" },
+    kpi("Total value", usd(total), wallet.wallets.length > 1 ? "Spot balances · all wallets " + usd(wallet.wallets.reduce((a, w) => a + num(w.balance_usdt), 0)) : "Spot balances"),
+    kpi("24h change", usd(change, { sign: true }), pct(total - change ? (change / (total - change)) * 100 : null) + " at today's amounts", tone(change)),
+    kpi("Cash (USDT)", usdt ? usd(usdt.value_usdt) : "$0.00", usdt ? qty(usdt.free) + " free" + (num(usdt.locked) ? " · " + qty(usdt.locked) + " in orders" : "") : "none held"),
+    kpi("Assets", String(wallet.holdings.length), largest ? "Largest: " + largest.asset + " " + pct(total ? (num(largest.value_usdt) / total) * 100 : null, { sign: false, dp: 0 }) : ""));
+
+  const toggle = el("label", { class: "toggle" }, el("input", { type: "checkbox", checked: ui.hideDust, onchange: (e) => { ui.hideDust = e.target.checked; render(); } }), "Hide balances under $1");
+  const holdingRows = visible.map((h) => {
+    const share = total && num(h.value_usdt) ? (num(h.value_usdt) / total) * 100 : 0;
+    return el("tr", null,
+      el("td", null, assetLabel(h.asset, h.earn ? chip("Earn", "accent") : null)),
+      el("td", { class: "r" }, el("div", null, qty(h.total)), num(h.locked) ? el("div", { class: "small muted" }, qty(h.locked) + " in orders") : null),
+      el("td", { class: "r muted" }, h.price_usdt === null ? "—" : usd(h.price_usdt)),
+      el("td", { class: "r" }, h.change_24h_pct === null ? el("span", { class: "faint" }, "—") : el("span", { class: tone(h.change_24h_pct) }, pct(h.change_24h_pct))),
+      el("td", { class: "r" }, h.value_usdt === null ? el("span", { class: "faint", title: "no USDT market" }, "unpriced") : usd(h.value_usdt)),
+      el("td", { class: "r" }, el("div", { class: "bar-cell" }, el("span", { class: "muted" }, pct(share, { sign: false, dp: 1 })),
+        el("div", { class: "bar-track" }, el("div", { class: "bar-fill", style: "width:" + Math.max(share > 0 ? 2 : 0, share) + "%" })))));
+  });
+  if (hidden > 0) holdingRows.push(el("tr", null, el("td", { colspan: 6, class: "muted small" }, hidden + " small balance" + (hidden === 1 ? "" : "s") + " hidden (" + usd(hiddenValue) + " total)")));
+  const holdings = card("Holdings", table([["Asset"], ["Amount", "r"], ["Price", "r"], ["24h", "r"], ["Value", "r"], ["Share", "r"]], holdingRows), { flush: true, action: toggle });
+
+  const allocation = card("Allocation", allocationDonut(wallet));
+  const wallets = card("Binance wallets", wallet.wallets_error ? errorBox(wallet.wallets_error) : wallet.wallets.length
+    ? el("div", { class: "legend" }, wallet.wallets.map((w, i) => el("div", { class: "legend-row" }, el("span", { class: "sw", style: "background:" + PALETTE[i % PALETTE.length] }), w.name, el("span", { class: "lv" }, usd(w.balance_usdt)))))
+    : empty("No balances", ""), { hint: "valued by Binance in USDT" });
+
+  return el("div", { class: "grid" }, head, kpis,
+    wallet.prices_error ? el("div", { class: "alert warn" }, el("div", null, el("b", null, "Prices incomplete"), el("span", null, wallet.prices_error))) : null,
+    el("div", { class: "grid split", style: "align-items:start" }, holdings, el("div", { class: "grid", style: "align-content:start" }, allocation, wallets)),
+    el("div", { class: "grid halves" }, securityCard(wallet), accountCard(wallet)));
+}
+function check(state, title, detail) {
+  const icon = { pos: "✓", neg: "!", warn: "!", muted: "–" }[state];
+  return el("div", { class: "check" }, el("span", { class: "ic " + state }, icon), el("div", null, el("div", { class: "t" }, title), el("div", { class: "d" }, detail)));
+}
+function securityCard(wallet) {
+  const k = wallet.api_key;
+  if (!k) return card("API key safety", errorBox(wallet.api_key_error || "API key permissions unavailable"));
+  const items = [
+    k.enableWithdrawals ? check("neg", "Withdrawals are enabled", "Anyone with this key could move funds off Binance. Turn it off in API Management.")
+      : check("pos", "Withdrawals disabled", "The key can't move funds off Binance."),
+    k.ipRestrict ? check("pos", "IP restricted", "The key only works from your whitelisted IPs.")
+      : check("warn", "No IP restriction", "The key works from any IP. Restrict it to the Pi's IP in API Management."),
+    k.enableSpotAndMarginTrading ? check("pos", "Spot trading enabled", "Claude Spot needs this to trade.")
+      : check("warn", "Spot trading disabled", "Claude Spot can't place orders with this key."),
+  ];
+  const extras = [["enableFutures", "Futures"], ["enableMargin", "Margin"], ["permitsUniversalTransfer", "Universal transfer"], ["enableInternalTransfer", "Internal transfer"], ["enableVanillaOptions", "Options"]]
+    .filter(([key]) => k[key]).map(([, label]) => label);
+  items.push(extras.length ? check("warn", extras.join(", ") + (extras.length === 1 ? " permission" : " permissions") + " on", "Not used while Claude Spot is the only live trader. Turning them off shrinks what a leaked key could do.")
+    : check("pos", "No extra permissions", "Futures, margin and transfers are off."));
+  return card("API key safety", el("div", { class: "checks" }, items), { flush: true, hint: k.createTime ? "key created " + new Date(k.createTime).toLocaleDateString() : null });
+}
+function accountCard(wallet) {
+  const a = wallet.account;
+  if (!a) return card("Account", errorBox("Account details unavailable"));
+  const yes = (v) => (v ? "Yes" : "No");
+  return card("Account", el("div", { class: "facts" },
+    fact("Type", a.account_type || "—"), fact("Can trade", yes(a.can_trade)), fact("Can deposit", yes(a.can_deposit)), fact("Can withdraw", yes(a.can_withdraw)),
+    fact("Maker fee", pct(a.maker_fee_pct, { sign: false, dp: 3 })), fact("Taker fee", pct(a.taker_fee_pct, { sign: false, dp: 3 })),
+    fact("Data as of", stamp(wallet.fetched_at))), { hint: "account-level flags (not the key's)" });
+}
+function fact(k, v) { return el("div", { class: "fact" }, el("div", { class: "k" }, k), el("div", { class: "v" }, v)); }
+
+// ---------- Claude ----------
+function claudePage() {
+  const st = ui.data.status;
+  const head = pageHead("Claude", "What the trader is doing and why.", null);
+  if (!st) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
+  const state = claudeState();
+  const agent = st.agent || {};
+  const latest = st.cycles[0];
+  const model = latest && latest.agent ? latest.agent.model : "";
+  const traded = st.cycles.filter((c) => ["traded", "rebalance"].includes(((c.agent && c.agent.end_cycle && c.agent.end_cycle.action) || "").toLowerCase())).length;
+
+  const kpis = el("div", { class: "grid kpis" },
+    kpi("Status", state.label, state.detail, state.tone || null),
+    kpi("Cycles", agent.cycle_count ? String(agent.cycle_count) : "0", latest ? "since the fresh start · last " + ago(latest.timestamp) : "since the fresh start"),
+    kpi("Trade decisions", st.cycles.length ? pct((traded / st.cycles.length) * 100, { sign: false, dp: 0 }) : "—", "of the last " + st.cycles.length + " cycles traded"),
+    kpi("LLM cost today", usd(agent.llm_cost_usd), model ? model.replace(/^.*\//, "") + (latest.agent.thinking ? " · " + latest.agent.thinking + " thinking" : "") : ""));
+
+  const costBars = [...st.cycles].reverse().map((c) => {
+    const usage = (c.agent && c.agent.usage) || {};
+    return { y: num(usage.cost_usd) || 0, tone: "accent", label: "",
+      tip: [stamp(c.timestamp), usd(usage.cost_usd) + " · " + ((c.agent && c.agent.tool_calls) || []).length + " tool calls", (c.agent && c.agent.end_cycle ? pretty(c.agent.end_cycle.action) : "")] };
+  });
+  const cost = card("Cost per cycle", costBars.length ? barChart(costBars, { height: 150 }) : empty("No cycles yet", ""), { hint: "last " + costBars.length + " cycles" });
+
+  const feed = card("Cycles", st.cycles.length ? el("div", { class: "feed" }, st.cycles.slice(0, 40).map((c) => {
+    const a = c.agent || {}, usage = a.usage || {};
+    const summary = cycleSummary(c);
+    const text = el("div", { class: "feed-text clamp", title: "click to expand", onclick: (e) => e.currentTarget.classList.toggle("clamp") }, summary || "No summary.");
+    return el("div", { class: "feed-item" },
+      el("div", { class: "feed-meta" }, actionChip(c), a.turn_status && a.turn_status !== "completed" ? chip(pretty(a.turn_status), "neg") : null,
+        el("span", { title: stamp(c.timestamp) }, ago(c.timestamp)), el("span", { class: "sep" }, "·"),
+        el("span", null, (a.tool_calls || []).length + " tools"), el("span", { class: "sep" }, "·"), el("span", null, usd(usage.cost_usd))),
+      text, c.error ? el("div", { class: "small neg" }, c.error) : null);
+  })) : empty("No cycles yet", "Claude's first cycle shows up within a few minutes of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
+
+  const journal = card("Journal", st.journal_error ? errorBox(st.journal_error) : st.journal.length
+    ? el("div", { class: "feed" }, st.journal.slice(0, 30).map((j) => el("div", { class: "feed-item" },
+      el("div", { class: "feed-meta" }, el("span", { title: stamp(j.timestamp) }, ago(j.timestamp))),
+      el("div", { class: "feed-text clamp", onclick: (e) => e.currentTarget.classList.toggle("clamp") }, j.text))))
+    : empty("Empty journal", "Claude writes its theses here so they survive restarts."), { flush: st.journal.length > 0, hint: "Claude's own notes" });
+
+  return el("div", { class: "grid" }, head, kpis, cost, el("div", { class: "grid split" }, feed, journal));
+}
+
+// ---------- Fleet ----------
+function fleetPage() {
+  const fleet = ui.data.fleet;
+  const head = pageHead("Fleet", "Every bot's last activity and results, from its own files.", null);
+  if (!fleet) return el("div", { class: "grid" }, head, ui.errors.fleet ? card(null, errorBox(ui.errors.fleet)) : loadingView());
+  const activityTone = { recent: "pos", seen: "", stale: "warn", never: "" };
+  const rows = fleet.bots.map((b) => el("tr", null,
+    el("td", { class: "nw" }, el("b", null, pretty(b.name))),
+    el("td", { class: "nw" }, chip(pretty(b.activity.status), activityTone[b.activity.status] || ""), " ",
+      el("span", { class: "small muted" }, b.activity.age_seconds === null ? "" : duration(b.activity.age_seconds) + " ago")),
+    el("td", { class: "r" }, b.trades_24h + " / " + b.trades_lifetime),
+    el("td", { class: "r" }, signed(b.pnl_24h_usdt)),
+    el("td", { class: "r" }, signed(b.pnl_lifetime_usdt)),
+    el("td", { class: "small muted" }, b.state_summary || "")));
+  return el("div", { class: "grid" }, head, card(null, table([["Bot"], ["Activity"], ["Trades 24h / all", "r"], ["P&L 24h", "r"], ["P&L all", "r"], ["State"]], rows), { flush: true }));
+}
+
+// ---------- data loading ----------
+async function load() {
+  if (ui.loading) return;
+  ui.loading = true;
+  const button = document.getElementById("refresh");
+  button.classList.add("spin");
+  const keys = Object.keys(ENDPOINTS);
+  const results = await Promise.allSettled(keys.map((k) => fetch(ENDPOINTS[k], { cache: "no-store" }).then((r) => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  })));
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") { ui.data[keys[i]] = r.value; delete ui.errors[keys[i]]; }
+    else ui.errors[keys[i]] = r.reason && r.reason.message ? r.reason.message : String(r.reason);
+  });
+  ui.loadedAt = Date.now();
+  ui.loading = false;
+  button.classList.remove("spin");
+  render();
+}
+function route() {
+  const tab = location.hash.replace(/^#/, "");
+  ui.tab = TABS.includes(tab) ? tab : "overview";
+  render();
+}
+let resizeTimer = null;
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawCharts, 120); });
+addEventListener("hashchange", () => { route(); scrollTo({ top: 0 }); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - (ui.loadedAt || 0) > REFRESH_MS) load(); });
+document.getElementById("refresh").addEventListener("click", load);
+setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
+route();
+load();
+</script>
+</body>
+</html>

@@ -54,6 +54,7 @@ async-trait = "0.1"
 reqwest = { version = "0.13", features = ["json", "gzip", "query", "form"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 url = "2"
+axum = "0.8"
 
 # data
 serde = { version = "1", features = ["derive"] }

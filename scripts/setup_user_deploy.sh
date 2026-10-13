@@ -10,10 +10,12 @@ SOURCE_DB="${BINANCE_BOT_SOURCE_DB:-/opt/binance-bot/data/live.db}"
 echo "Staging user-owned Binance Bot in $PROJECT_DIR..."
 mkdir -p "$PROJECT_DIR" "$PROJECT_DIR/bin" "$PROJECT_DIR/data" "$PROJECT_DIR/logs" "$PROJECT_DIR/backups" "$UNIT_DIR"
 
-echo "Building the bb release binary..."
-cargo build --release --locked -p bb-cli --manifest-path "$SOURCE_DIR/Cargo.toml"
-install -m 0755 "$SOURCE_DIR/target/release/bb" "$PROJECT_DIR/bin/bb.new"
-mv -f -- "$PROJECT_DIR/bin/bb.new" "$PROJECT_DIR/bin/bb"
+echo "Building the bb and cryptobot-gui release binaries..."
+cargo build --release --locked -p bb-cli -p cryptobot-gui --manifest-path "$SOURCE_DIR/Cargo.toml"
+for binary in bb cryptobot-gui; do
+    install -m 0755 "$SOURCE_DIR/target/release/$binary" "$PROJECT_DIR/bin/$binary.new"
+    mv -f -- "$PROJECT_DIR/bin/$binary.new" "$PROJECT_DIR/bin/$binary"
+done
 
 # Runtime only needs the binary plus operator scripts; source stays in the checkout.
 rsync -a --delete "$SOURCE_DIR/scripts/" "$PROJECT_DIR/scripts/"

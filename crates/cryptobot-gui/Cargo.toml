@@ -1,0 +1,29 @@
+[package]
+name = "cryptobot-gui"
+description = "Read-only, localhost-only web dashboard for the bot fleet: wallet, Claude Spot trade history and status, fleet."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bb-core.workspace = true
+bb-binance.workspace = true
+bb-capital.workspace = true
+bb-trader.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rust_decimal.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+rust_decimal_macros.workspace = true
