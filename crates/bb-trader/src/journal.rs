@@ -82,6 +82,9 @@ pub struct AgentState {
     pub llm_cost_usd: Decimal,
     pub session_id: Option<String>,
     pub last_cycle: Option<LastCycle>,
+    /// Consecutive cycles whose turn failed on every configured model.
+    #[serde(default)]
+    pub brain_down_cycles: u32,
 }
 
 impl AgentState {
@@ -115,6 +118,23 @@ impl AgentState {
             self.llm_cost_usd = Decimal::ZERO;
         }
         self.llm_cost_usd += cost;
+    }
+
+    /// Count a cycle turn: `Some(true)` = failed on every model, `Some(false)` = succeeded,
+    /// `None` = neither (no turn, shutdown abort, retry blocked by a route call). Returns
+    /// `true` exactly once per outage, when the streak reaches `alert_after` (0 = never).
+    pub fn record_brain(&mut self, all_models_failed: Option<bool>, alert_after: u32) -> bool {
+        match all_models_failed {
+            Some(true) => {
+                self.brain_down_cycles = self.brain_down_cycles.saturating_add(1);
+                alert_after > 0 && self.brain_down_cycles == alert_after
+            }
+            Some(false) => {
+                self.brain_down_cycles = 0;
+                false
+            }
+            None => false,
+        }
     }
 }
 
@@ -151,5 +171,44 @@ mod tests {
         assert_eq!(state.cost_on("2026-10-11"), Decimal::ZERO);
         state.add_cost("2026-10-11", dec!(0.1));
         assert_eq!(state.cost_on("2026-10-11"), dec!(0.1));
+    }
+
+    #[test]
+    fn brain_down_alert_fires_once_per_outage_and_survives_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        // An old state file without the counter still loads.
+        std::fs::write(
+            &path,
+            r#"{"cycle_count":4,"llm_cost_date":"","llm_cost_usd":"0","session_id":null,"last_cycle":null}"#,
+        )
+        .unwrap();
+        let mut state = AgentState::load(&path);
+        assert_eq!(state.cycle_count, 4);
+        assert!(!state.record_brain(Some(true), 3));
+        assert!(!state.record_brain(Some(true), 3));
+        state.save(&path).unwrap();
+        // Restart: the streak continues from disk.
+        let mut state = AgentState::load(&path);
+        assert_eq!(state.brain_down_cycles, 2);
+        assert!(!state.record_brain(None, 3), "no-turn cycles do not count");
+        assert!(
+            state.record_brain(Some(true), 3),
+            "third failed cycle alerts"
+        );
+        assert!(
+            !state.record_brain(Some(true), 3),
+            "not again during the outage"
+        );
+        assert!(!state.record_brain(Some(false), 3));
+        assert_eq!(state.brain_down_cycles, 0);
+        assert!(!state.record_brain(Some(true), 3));
+        assert!(!state.record_brain(Some(true), 3));
+        assert!(
+            state.record_brain(Some(true), 3),
+            "alerts again after a success"
+        );
+        let mut never = AgentState::default();
+        assert!((0..10).all(|_| !never.record_brain(Some(true), 0)));
     }
 }

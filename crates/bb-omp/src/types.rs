@@ -265,11 +265,18 @@ pub struct TurnOutcome {
     pub session_settled: bool,
 }
 
-/// `provider` + `id` of a model.
+/// `provider` + `id` of a model (`set_model` / `get_state.model` return the full `Model`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelRef {
     pub provider: String,
     pub id: String,
+    /// The model's context window in tokens, when omp reports it.
+    #[serde(
+        default,
+        rename = "contextWindow",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub context_window: Option<u64>,
 }
 
 /// `get_state.contextUsage`.

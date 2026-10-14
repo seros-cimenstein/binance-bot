@@ -3,21 +3,44 @@
 
 use std::fmt::Write as _;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use bb_core::money::to_f64;
 use bb_omp::{
-    AgentSession, CancellationToken, HostToolHandler, OmpError, PromptStatus, SessionConfig,
-    TurnOutcome,
+    AgentSession, AssistantMessage, CancellationToken, HostToolHandler, HostToolOutcome, OmpError,
+    PromptStatus, SessionConfig, SessionState, TurnOutcome,
 };
 use rust_decimal::Decimal;
+use serde_json::Value;
 
-use crate::audit::{ToolCallEntry, UsageEntry};
-use crate::config::TraderConfig;
+use crate::alerts::BRAIN_UNAVAILABLE;
+use crate::audit::{AttemptEntry, ToolCallEntry, UsageEntry};
+use crate::config::{ModelSpec, TraderConfig};
 use crate::context::{DecisionContext, MISSION, execution_invariants};
 use crate::cycle::CycleMode;
 use crate::error::{Result, TraderError};
 use crate::journal::{JournalEntry, LastCycle};
 use crate::tools::tool_definitions;
+
+/// The only order path; a failed turn that called it is never retried on another model.
+const ROUTE_TOOL: &str = "execute_route";
+
+/// Lower-case markers of a provider rate / usage limit in an error text.
+const LIMIT_MARKERS: [&str; 8] = [
+    "429",
+    "rate limit",
+    "rate_limit",
+    "ratelimit",
+    "usage limit",
+    "usage_limit",
+    "too many requests",
+    "quota",
+];
+
+/// Upper bound for one compaction (omp's default is 600s, which stalls the cycle).
+pub const COMPACT_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Instructions for `compact` when the context fills up.
 pub const COMPACT_INSTRUCTIONS: &str = "You are compacting the context of an autonomous Binance Spot trader. \
@@ -258,8 +281,22 @@ pub struct TurnReport {
     pub status: String,
     pub error: Option<String>,
     pub final_text: Option<String>,
+    /// Every tool call of the cycle (failed attempts first).
     pub tool_calls: Vec<ToolCallEntry>,
+    /// Usage summed over every attempt.
     pub usage: UsageEntry,
+    /// `provider/model-id` that produced the final outcome (empty = the configured model).
+    pub model: String,
+    /// Thinking level of `model` (empty = the configured level).
+    pub thinking: String,
+    /// Failures that moved this cycle to another model (compactions and turn attempts).
+    pub attempts: Vec<AttemptEntry>,
+    /// `model` is not the primary.
+    pub fallback_active: bool,
+    /// `Some(true)`: the turn failed on every configured model (no orders were placed);
+    /// `Some(false)`: a model completed the turn; `None`: neither (shutdown, aborted, or a
+    /// retry refused because the failed attempt called `execute_route`).
+    pub all_models_failed: Option<bool>,
 }
 
 impl TurnReport {
@@ -285,6 +322,7 @@ impl TurnReport {
                 cache_write: outcome.usage.cache_write_tokens,
                 cost_usd: outcome.usage.cost_usd,
             },
+            ..Self::default()
         }
     }
 
@@ -297,11 +335,123 @@ impl TurnReport {
     }
 }
 
+fn add_usage(total: &mut UsageEntry, usage: &UsageEntry) {
+    total.input += usage.input;
+    total.output += usage.output;
+    total.cache_read += usage.cache_read;
+    total.cache_write += usage.cache_write;
+    total.cost_usd += usage.cost_usd;
+}
+
+fn is_limit_text(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    LIMIT_MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+/// The limit error of a completed turn whose provider was rate- or usage-limited (its last
+/// assistant message ended in that error). A turn that recovered (omp's own retry fallback)
+/// ends with a normal assistant message and is not limited.
+fn usage_limit(outcome: &TurnOutcome) -> Option<String> {
+    let last = outcome.assistant_messages.last();
+    if last.is_some_and(|message| message.stop_reason.as_deref() != Some("error")) {
+        return None;
+    }
+    if let Some(error) = &outcome.error
+        && (error.http_status == Some(429) || is_limit_text(&error.message))
+    {
+        return Some(error.message.clone());
+    }
+    let message = last?.error_message.as_deref().unwrap_or_default();
+    is_limit_text(message).then(|| message.to_owned())
+}
+
+/// Why an `error` turn failed.
+fn turn_error(outcome: &TurnOutcome) -> String {
+    outcome
+        .error
+        .as_ref()
+        .map(|error| error.message.clone())
+        .or_else(|| {
+            outcome
+                .assistant_messages
+                .last()
+                .and_then(|message| message.error_message.clone())
+        })
+        .unwrap_or_else(|| "turn ended with an error".into())
+}
+
+/// `provider/model-id` of an assistant message.
+fn message_model(message: &AssistantMessage) -> Option<String> {
+    let model = message.model.as_deref()?.trim();
+    if model.is_empty() {
+        return None;
+    }
+    Some(match message.provider.as_deref().map(str::trim) {
+        Some(provider) if !provider.is_empty() && !model.starts_with(&format!("{provider}/")) => {
+            format!("{provider}/{model}")
+        }
+        _ => model.to_owned(),
+    })
+}
+
+/// Counts `execute_route` host calls: the ground truth for "orders may exist" even when a
+/// timed-out turn never reported the tool's end.
+struct RouteCallCounter {
+    inner: Arc<dyn HostToolHandler>,
+    calls: Arc<AtomicU64>,
+}
+
+#[async_trait]
+impl HostToolHandler for RouteCallCounter {
+    async fn call(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancel: CancellationToken,
+    ) -> HostToolOutcome {
+        if name == ROUTE_TOOL {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+        }
+        self.inner.call(name, arguments, cancel).await
+    }
+}
+
+/// One prompt attempt on one model.
+struct Attempt {
+    report: TurnReport,
+    /// Why the attempt counts as a brain failure (eligible for model failover).
+    failure: Option<String>,
+    /// The session is quiescent, so switching models and prompting again is safe.
+    settled: bool,
+}
+
 /// The long-lived omp agent of one trader.
 pub struct TraderAgent {
     session: AgentSession,
-    timeout: std::time::Duration,
+    /// Turn timeout (fallback attempts, or every attempt without fallbacks).
+    timeout: Duration,
+    /// Primary attempt timeout while fallbacks exist.
+    primary_timeout: Duration,
+    cooldown: Duration,
     compact_at_percent: f64,
+    /// `[primary, fallbacks...]`.
+    models: Vec<ModelSpec>,
+    /// Index into `models` last selected by the trader or observed from omp.
+    active: usize,
+    /// Resolved primary `provider/model-id` (a bare `--model` pattern resolves when omp first
+    /// reports the session model).
+    primary_name: Option<String>,
+    /// `provider/model-id` omp last reported as active (empty = unknown).
+    effective: String,
+    /// When a fallback is active: the cycle start from which the primary is tried again.
+    primary_retry_at: Option<Instant>,
+    /// The primary's context window, learned while on it.
+    primary_window: Option<u64>,
+    route_calls: Arc<AtomicU64>,
+    /// Compaction failures of the current cycle that moved it to another model.
+    cycle_attempts: Vec<AttemptEntry>,
+    /// Model switch notices for the operator, sent after the cycle's audit row.
+    notices: Vec<String>,
     pub session_id: String,
     pub resumed: bool,
 }
@@ -321,6 +471,7 @@ impl TraderAgent {
             } else {
                 Vec::new()
             },
+            compact_timeout: COMPACT_TIMEOUT,
             ..SessionConfig::default()
         }
     }
@@ -338,7 +489,13 @@ impl TraderAgent {
         config: &TraderConfig,
         tools: Arc<dyn HostToolHandler>,
     ) -> Result<Self> {
-        session.set_host_tools(tool_definitions(), tools).await?;
+        let models = config.model_chain()?;
+        let route_calls = Arc::new(AtomicU64::new(0));
+        let counted: Arc<dyn HostToolHandler> = Arc::new(RouteCallCounter {
+            inner: tools,
+            calls: Arc::clone(&route_calls),
+        });
+        session.set_host_tools(tool_definitions(), counted).await?;
         let opened = session.open_session(&config.session_dir).await?;
         if opened.cancelled {
             return Err(TraderError::config("omp cancelled open_session"));
@@ -347,38 +504,397 @@ impl TraderAgent {
             session_id = ?opened.session_id,
             resumed = opened.resumed,
             dir = %config.session_dir.display(),
+            fallbacks = models.len() - 1,
             "omp trader session ready"
         );
+        let primary_name = (!models[0].provider.is_empty()).then(|| models[0].name());
         Ok(Self {
             session,
             timeout: config.timeout,
+            primary_timeout: config.primary_timeout,
+            cooldown: config.fallback_cooldown,
             compact_at_percent: config.compact_at_percent,
+            effective: primary_name.clone().unwrap_or_default(),
+            primary_name,
+            models,
+            active: 0,
+            primary_retry_at: None,
+            primary_window: None,
+            route_calls,
+            cycle_attempts: Vec::new(),
+            notices: Vec::new(),
             session_id: opened.session_id.unwrap_or_default(),
             resumed: opened.resumed,
         })
     }
 
-    /// Compact with trader-specific instructions once the context passes the threshold.
-    pub async fn maybe_compact(&self) {
-        let percent = match self.session.state().await {
-            Ok(state) => state.context_usage.and_then(|usage| usage.percent),
+    fn fallback_enabled(&self) -> bool {
+        self.models.len() > 1
+    }
+
+    fn is_primary(&self, name: &str) -> bool {
+        self.primary_name.as_deref() == Some(name)
+    }
+
+    /// An unknown model counts as the primary (omp starts on it).
+    fn on_primary(&self) -> bool {
+        self.effective.is_empty() || self.is_primary(&self.effective)
+    }
+
+    fn current_model(&self) -> String {
+        if self.effective.is_empty() {
+            self.models[self.active].name()
+        } else {
+            self.effective.clone()
+        }
+    }
+
+    fn model_index(&self, name: &str) -> Option<usize> {
+        if self.is_primary(name) {
+            return Some(0);
+        }
+        self.models.iter().position(|model| model.name() == name)
+    }
+
+    /// Per-attempt timeout: the primary gets the shorter budget while fallbacks exist.
+    fn attempt_timeout(&self) -> Duration {
+        if self.fallback_enabled() && self.on_primary() {
+            self.primary_timeout
+        } else {
+            self.timeout
+        }
+    }
+
+    /// Model switch notices since the last call (send after the cycle's audit row).
+    pub fn take_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notices)
+    }
+
+    /// Record the model omp reports as active; announce moves off and back onto the primary
+    /// (whether the trader or omp's own retry fallback switched).
+    fn observe(&mut self, name: &str, why: &str) {
+        if name.is_empty() || name == self.effective {
+            return;
+        }
+        if self.primary_name.is_none() {
+            // A bare `--model` pattern: the first reported model is what it resolved to.
+            self.primary_name = Some(name.to_owned());
+            self.effective = name.to_owned();
+            return;
+        }
+        let was_fallback = !self.on_primary();
+        if let Some(index) = self.model_index(name) {
+            self.active = index;
+        }
+        self.effective = name.to_owned();
+        if self.is_primary(name) {
+            self.primary_retry_at = None;
+            if was_fallback {
+                tracing::info!(
+                    model = name,
+                    reason = why,
+                    "trader back on the primary model"
+                );
+                self.notices.push(format!("back on primary {name} ({why})"));
+            }
+        } else {
+            if self.primary_retry_at.is_none() {
+                self.primary_retry_at = Some(Instant::now() + self.cooldown);
+            }
+            tracing::warn!(model = name, reason = why, "trader on a fallback model");
+            self.notices
+                .push(format!("switched to fallback {name} ({why})"));
+        }
+    }
+
+    fn observe_state(&mut self, state: &SessionState) {
+        let Some(model) = &state.model else {
+            return;
+        };
+        let name = format!("{}/{}", model.provider, model.id);
+        self.observe(&name, "omp reports it as the session model");
+        if self.is_primary(&name) {
+            let window = state
+                .context_usage
+                .as_ref()
+                .and_then(|usage| usage.context_window)
+                .or(model.context_window);
+            if window.is_some() {
+                self.primary_window = window;
+            }
+        }
+    }
+
+    fn observe_turn(&mut self, outcome: &TurnOutcome) {
+        if let Some(name) = outcome
+            .assistant_messages
+            .iter()
+            .rev()
+            .find_map(message_model)
+        {
+            self.observe(&name, "omp switched models during the turn");
+        }
+    }
+
+    /// `set_model` + `set_thinking_level` to `models[index]`.
+    async fn switch_to(&mut self, index: usize, why: &str) -> std::result::Result<(), OmpError> {
+        let spec = self.models[index].clone();
+        let selected = self
+            .session
+            .set_model(&spec.provider, &spec.model_id)
+            .await?;
+        if let Err(error) = self.session.set_thinking_level(spec.thinking).await {
+            tracing::warn!(%error, model = %spec.name(), "set_thinking_level failed; keeping omp's level");
+        }
+        if index == 0 && selected.context_window.is_some() {
+            self.primary_window = selected.context_window;
+        }
+        self.active = index;
+        self.observe(&spec.name(), why);
+        Ok(())
+    }
+
+    /// The next model not yet tried, after the active one (wrapping).
+    fn next_untried(&self, tried: &[bool]) -> Option<usize> {
+        let len = self.models.len();
+        (1..len)
+            .map(|step| (self.active + step) % len)
+            .find(|index| !tried[*index])
+    }
+
+    /// Switch to the next untried model that accepts the switch; `None` when none is left.
+    async fn switch_next(&mut self, tried: &mut [bool], why: &str) -> Option<usize> {
+        while let Some(next) = self.next_untried(tried) {
+            tried[next] = true;
+            match self.switch_to(next, why).await {
+                Ok(()) => return Some(next),
+                Err(error) => {
+                    tracing::warn!(%error, model = %self.models[next].name(), "model switch failed");
+                }
+            }
+        }
+        None
+    }
+
+    /// Cycle start: return to the primary once the fallback cooldown ended, then compact.
+    pub async fn prepare_cycle(&mut self) {
+        self.cycle_attempts.clear();
+        if self.fallback_enabled()
+            && !self.on_primary()
+            && self.primary_retry_at.is_some_and(|at| Instant::now() >= at)
+        {
+            self.return_to_primary().await;
+        }
+        self.maybe_compact().await;
+    }
+
+    /// Switch back to the primary. A context too large for the primary's window is compacted
+    /// on the current model first; any failure keeps the fallback for another cooldown.
+    async fn return_to_primary(&mut self) {
+        let state = match self.session.state().await {
+            Ok(state) => state,
+            Err(error) => {
+                tracing::warn!(%error, "get_state failed; staying on the fallback model");
+                return;
+            }
+        };
+        self.observe_state(&state);
+        if self.on_primary() {
+            return;
+        }
+        let tokens = state.context_usage.as_ref().and_then(|usage| usage.tokens);
+        if let (Some(tokens), Some(window)) = (tokens, self.primary_window) {
+            #[allow(clippy::cast_precision_loss)]
+            let percent = tokens as f64 * 100.0 / window.max(1) as f64;
+            if percent >= self.compact_at_percent {
+                tracing::info!(
+                    percent,
+                    model = %self.current_model(),
+                    "context too large for the primary; compacting before switching back"
+                );
+                if let Err(error) = self.session.compact(Some(COMPACT_INSTRUCTIONS)).await {
+                    tracing::warn!(%error, "compaction before returning to the primary failed; staying on the fallback");
+                    self.primary_retry_at = Some(Instant::now() + self.cooldown);
+                    return;
+                }
+            }
+        }
+        if let Err(error) = self.switch_to(0, "fallback cooldown ended").await {
+            tracing::warn!(%error, "switching back to the primary failed; staying on the fallback");
+            self.primary_retry_at = Some(Instant::now() + self.cooldown);
+        }
+    }
+
+    /// Compact with trader-specific instructions once the context passes the threshold. A
+    /// failed compaction moves to the next model and retries there (once per model); if every
+    /// model fails, the turn still runs.
+    pub async fn maybe_compact(&mut self) {
+        let state = match self.session.state().await {
+            Ok(state) => state,
             Err(error) => {
                 tracing::warn!(%error, "get_state failed; skipping compaction check");
                 return;
             }
         };
-        if let Some(percent) = percent.filter(|p| *p >= self.compact_at_percent) {
-            tracing::info!(percent, "compacting trader context");
-            if let Err(error) = self.session.compact(Some(COMPACT_INSTRUCTIONS)).await {
-                tracing::warn!(%error, "compaction failed");
+        self.observe_state(&state);
+        let percent = state.context_usage.and_then(|usage| usage.percent);
+        let Some(percent) = percent.filter(|p| *p >= self.compact_at_percent) else {
+            return;
+        };
+        tracing::info!(percent, model = %self.current_model(), "compacting trader context");
+        let mut tried = vec![false; self.models.len()];
+        tried[self.active] = true;
+        // A context larger than the model's own window cannot be summarized by that model
+        // (seen 2026-10-14: Haiku at 130% after a night on the larger fallback); move first.
+        if percent >= 100.0 && self.fallback_enabled() {
+            let model = self.current_model();
+            let why = format!("context is {percent:.0}% of {model}'s window");
+            if self.switch_next(&mut tried, &why).await.is_some() {
+                self.cycle_attempts.push(AttemptEntry {
+                    model,
+                    status: "compaction".into(),
+                    error: why,
+                });
+            }
+        }
+        loop {
+            let model = self.current_model();
+            let Err(error) = self.session.compact(Some(COMPACT_INSTRUCTIONS)).await else {
+                return;
+            };
+            tracing::warn!(%error, %model, "compaction failed");
+            let why = format!("compaction failed on {model}: {error}");
+            if self.switch_next(&mut tried, &why).await.is_none() {
+                return;
+            }
+            self.cycle_attempts.push(AttemptEntry {
+                model,
+                status: "compaction".into(),
+                error: error.to_string(),
+            });
+        }
+    }
+
+    /// Run one cycle turn. Shutdown aborts the turn (in-flight routes still finish). A failed
+    /// attempt (timeout, error, crash, or a rate/usage-limited completion) is retried once per
+    /// remaining model, unless it called `execute_route` (orders may exist), recorded its
+    /// `end_cycle`, or shutdown was requested.
+    pub async fn run_turn(&mut self, prompt: &str, shutdown: &CancellationToken) -> TurnReport {
+        let mut attempts = std::mem::take(&mut self.cycle_attempts);
+        let mut carried_calls = Vec::new();
+        let mut carried_usage = UsageEntry::default();
+        let mut tried = vec![false; self.models.len()];
+        loop {
+            tried[self.active] = true;
+            let model = self.current_model();
+            let routes_before = self.route_calls.load(Ordering::SeqCst);
+            let timeout = self.attempt_timeout();
+            let Attempt {
+                mut report,
+                failure,
+                settled,
+            } = self.attempt(prompt, timeout, shutdown).await;
+            let Some(reason) = failure else {
+                report.all_models_failed = (report.status == "completed").then_some(false);
+                return self.finish(report, attempts, carried_calls, carried_usage);
+            };
+            let blocker = if shutdown.is_cancelled() {
+                Some("shutdown requested")
+            } else if self.route_calls.load(Ordering::SeqCst) != routes_before
+                || report.tool_calls.iter().any(|call| call.name == ROUTE_TOOL)
+            {
+                Some("the attempt called execute_route, so orders may exist")
+            } else if report
+                .tool_calls
+                .iter()
+                .any(|call| call.name == "end_cycle" && !call.is_error)
+            {
+                Some("the attempt already recorded end_cycle")
+            } else {
+                None
+            };
+            if let Some(blocker) = blocker {
+                if self.fallback_enabled() {
+                    tracing::warn!(%model, %reason, blocker, "turn failed; not retrying on another model");
+                }
+                return self.finish(report, attempts, carried_calls, carried_usage);
+            }
+            if self.next_untried(&tried).is_some() && !settled && !self.settle().await {
+                tracing::warn!(%model, "failed turn did not settle; not retrying on another model");
+                return self.finish(report, attempts, carried_calls, carried_usage);
+            }
+            let failed = AttemptEntry {
+                model: model.clone(),
+                status: report.status.clone(),
+                error: reason,
+            };
+            let why = format!("{model} {}: {}", failed.status, failed.error);
+            if self.switch_next(&mut tried, &why).await.is_none() {
+                report.all_models_failed = Some(true);
+                if self.fallback_enabled() {
+                    let details: Vec<String> = attempts
+                        .iter()
+                        .chain(std::iter::once(&failed))
+                        .map(|a| format!("{} {}: {}", a.model, a.status, a.error))
+                        .collect();
+                    report.error = Some(format!(
+                        "{BRAIN_UNAVAILABLE} (no orders placed): {}",
+                        details.join("; ")
+                    ));
+                }
+                return self.finish(report, attempts, carried_calls, carried_usage);
+            }
+            tracing::warn!(failed = %model, now = %self.current_model(), "retrying the cycle turn on the next model");
+            attempts.push(failed);
+            carried_calls.append(&mut report.tool_calls);
+            add_usage(&mut carried_usage, &report.usage);
+        }
+    }
+
+    /// Final report: earlier attempts' tool calls and usage, and the producing model.
+    fn finish(
+        &self,
+        mut report: TurnReport,
+        attempts: Vec<AttemptEntry>,
+        mut carried_calls: Vec<ToolCallEntry>,
+        carried_usage: UsageEntry,
+    ) -> TurnReport {
+        carried_calls.append(&mut report.tool_calls);
+        report.tool_calls = carried_calls;
+        add_usage(&mut report.usage, &carried_usage);
+        report.model = self.current_model();
+        report.thinking = self
+            .model_index(&report.model)
+            .map(|index| self.models[index].thinking.as_str().to_owned())
+            .unwrap_or_default();
+        report.fallback_active = !self.on_primary();
+        report.attempts = attempts;
+        report
+    }
+
+    /// After an unsettled failed attempt: abort again and confirm nothing is still running.
+    async fn settle(&self) -> bool {
+        if let Err(error) = self.session.abort().await {
+            tracing::warn!(%error, "abort failed");
+        }
+        match self.session.state().await {
+            Ok(state) => !state.is_streaming && !state.is_compacting,
+            Err(error) => {
+                tracing::warn!(%error, "get_state failed after abort");
+                false
             }
         }
     }
 
-    /// Run one cycle turn. Shutdown aborts the turn (in-flight routes still finish).
-    pub async fn run_turn(&mut self, prompt: &str, shutdown: &CancellationToken) -> TurnReport {
+    /// One prompt on the active model.
+    async fn attempt(
+        &mut self,
+        prompt: &str,
+        timeout: Duration,
+        shutdown: &CancellationToken,
+    ) -> Attempt {
         let result = {
-            let turn = self.session.prompt(prompt, self.timeout);
+            let turn = self.session.prompt(prompt, timeout);
             tokio::pin!(turn);
             tokio::select! {
                 result = &mut turn => result,
@@ -393,36 +909,63 @@ impl TraderAgent {
         };
         match result {
             Ok(outcome) => {
-                let status = match outcome.status {
-                    PromptStatus::Completed => "completed",
-                    PromptStatus::Aborted => "aborted",
-                    PromptStatus::Error => "error",
+                self.observe_turn(&outcome);
+                let (status, failure, error) = match outcome.status {
+                    PromptStatus::Completed => match usage_limit(&outcome) {
+                        Some(limit) => ("error", Some(limit.clone()), Some(limit)),
+                        None => ("completed", None, None),
+                    },
+                    PromptStatus::Aborted => ("aborted", None, None),
+                    PromptStatus::Error => ("error", Some(turn_error(&outcome)), None),
                 };
-                TurnReport::from_outcome(status, &outcome, None)
+                Attempt {
+                    report: TurnReport::from_outcome(status, &outcome, error),
+                    failure,
+                    settled: outcome.session_settled,
+                }
             }
-            Err(OmpError::PromptTimeout { after, outcome }) => TurnReport::from_outcome(
-                "timeout",
-                &outcome,
-                Some(format!(
-                    "Claude timed out after {}s; turn aborted",
-                    after.as_secs()
-                )),
-            ),
+            Err(OmpError::PromptTimeout { after, outcome }) => {
+                self.observe_turn(&outcome);
+                let error = format!("Claude timed out after {}s; turn aborted", after.as_secs());
+                Attempt {
+                    report: TurnReport::from_outcome("timeout", &outcome, Some(error.clone())),
+                    failure: Some(error),
+                    settled: outcome.session_settled,
+                }
+            }
             Err(error)
                 if error.is_disconnect() || matches!(error, OmpError::ProcessDied { .. }) =>
             {
-                let report = TurnReport::failed("crashed", format!("omp session crashed: {error}"));
-                match self.session.restart().await {
+                let message = format!("omp session crashed: {error}");
+                let report = TurnReport::failed("crashed", message.clone());
+                let settled = match self.session.restart().await {
                     Ok(opened) => {
                         if let Some(id) = opened.and_then(|o| o.session_id) {
                             self.session_id = id;
                         }
+                        // A fresh omp starts on the configured (primary) model.
+                        self.active = 0;
+                        if let Some(primary) = self.primary_name.clone() {
+                            self.observe(&primary, "omp restarted after a crash");
+                        }
+                        true
                     }
-                    Err(restart) => tracing::error!(%restart, "omp restart failed"),
+                    Err(restart) => {
+                        tracing::error!(%restart, "omp restart failed");
+                        false
+                    }
+                };
+                Attempt {
+                    report,
+                    failure: Some(message),
+                    settled,
                 }
-                report
             }
-            Err(error) => TurnReport::failed("error", error.to_string()),
+            Err(error) => Attempt {
+                report: TurnReport::failed("error", error.to_string()),
+                failure: Some(error.to_string()),
+                settled: false,
+            },
         }
     }
 
@@ -485,6 +1028,110 @@ mod tests {
         async fn respond(&mut self, id: &str, command: &str, data: Value) {
             self.send(json!({"id": id, "type": "response", "command": command, "success": true, "data": data}))
                 .await;
+        }
+
+        async fn fail(&mut self, id: &str, command: &str, error: &str) {
+            self.send(json!({"id": id, "type": "response", "command": command, "success": false, "error": error}))
+                .await;
+        }
+
+        /// No further frame from the client.
+        async fn quiet(&mut self) {
+            let next =
+                tokio::time::timeout(Duration::from_millis(200), self.reader.next_frame()).await;
+            assert!(next.is_err(), "unexpected frame: {next:?}");
+        }
+
+        /// Answer `get_state` with the session model and its context usage.
+        async fn state(&mut self, model: &str, tokens: u64, window: u64) {
+            let (provider, id) = model.split_once('/').unwrap();
+            let (rid, _) = self.expect("get_state").await;
+            #[allow(clippy::cast_precision_loss)]
+            let percent = tokens as f64 * 100.0 / window as f64;
+            self.respond(
+                &rid,
+                "get_state",
+                json!({"model": {"provider": provider, "id": id, "contextWindow": window},
+                       "contextUsage": {"tokens": tokens, "contextWindow": window, "percent": percent}}),
+            )
+            .await;
+        }
+
+        /// Expect `set_model` + `set_thinking_level` to `model` at `thinking`.
+        async fn switch(&mut self, model: &str, thinking: &str, window: u64) {
+            let (provider, id) = model.split_once('/').unwrap();
+            let (rid, frame) = self.expect("set_model").await;
+            assert_eq!(frame["provider"], provider);
+            assert_eq!(frame["modelId"], id);
+            self.respond(
+                &rid,
+                "set_model",
+                json!({"provider": provider, "id": id, "contextWindow": window}),
+            )
+            .await;
+            let (rid, frame) = self.expect("set_thinking_level").await;
+            assert_eq!(frame["level"], thinking);
+            self.respond(&rid, "set_thinking_level", Value::Null).await;
+        }
+
+        async fn compact(&mut self, error: Option<&str>) {
+            let (rid, frame) = self.expect("compact").await;
+            assert_eq!(frame["customInstructions"], COMPACT_INSTRUCTIONS);
+            match error {
+                Some(error) => self.fail(&rid, "compact", error).await,
+                None => {
+                    self.respond(&rid, "compact", json!({"summary": "s", "tokensBefore": 1}))
+                        .await;
+                }
+            }
+        }
+
+        /// Prompt acknowledged; returns its id.
+        async fn prompt(&mut self) -> String {
+            let (pid, frame) = self.expect("prompt").await;
+            assert!(frame["message"].as_str().unwrap().starts_with("# Cycle"));
+            self.respond(&pid, "prompt", Value::Null).await;
+            pid
+        }
+
+        /// The agent calls a host tool (no `tool_execution_*` events, as when a turn dies mid-call).
+        async fn host_call(&mut self, name: &str) {
+            self.send(json!({"type": "host_tool_call", "id": "h-route", "toolCallId": "tc-route",
+                             "toolName": name, "arguments": {"route_id": "USDT->SOL:1", "reason": "x"}}))
+                .await;
+            self.expect("host_tool_result").await;
+        }
+
+        /// The model answers normally.
+        async fn finish_ok(&mut self, pid: &str, model: &str) {
+            let (provider, id) = model.split_once('/').unwrap();
+            self.send(json!({"type": "message_end", "message": {"role": "assistant", "provider": provider,
+                "model": id, "content": [{"type": "text", "text": "Holding."}], "stopReason": "stop",
+                "usage": {"input": 100, "output": 10, "cost": {"total": 0.002}}}}))
+                .await;
+            self.send(
+                json!({"type": "prompt_result", "id": pid, "agentInvoked": true,
+                             "status": "completed", "sessionSettled": true}),
+            )
+            .await;
+        }
+
+        /// The provider rejects the turn with a 429 usage limit.
+        async fn finish_limited(&mut self, pid: &str, model: &str) {
+            let (provider, id) = model.split_once('/').unwrap();
+            self.send(
+                json!({"type": "message_end", "message": {"role": "assistant", "provider": provider,
+                "model": id, "content": [], "stopReason": "error",
+                "errorMessage": "429 rate_limit_error: usage limit reached",
+                "usage": {"input": 0, "output": 0, "cost": {"total": 0.001}}}}),
+            )
+            .await;
+            self.send(
+                json!({"type": "prompt_result", "id": pid, "agentInvoked": true, "status": "error",
+                             "error": {"message": "429 usage limit reached", "httpStatus": 429},
+                             "sessionSettled": true}),
+            )
+            .await;
         }
 
         /// Handshake, tool registration and `open_session`; returns the requested dir.
@@ -614,6 +1261,271 @@ mod tests {
         assert!(!report.tool_calls[0].is_error);
         assert_eq!(report.usage.input, 1000);
         assert_eq!(report.usage.cost_usd.to_string(), "0.0123");
+    }
+
+    const PRIMARY: &str = "anthropic/claude-haiku-5-5";
+    const FALLBACK: &str = "openai-codex/gpt-6.1-sol";
+
+    fn fallback_config(cooldown: &str) -> TraderConfig {
+        config(&[
+            (
+                "CLAUDE_SPOT_FALLBACK_MODELS",
+                "openai-codex/gpt-6.1-sol:low",
+            ),
+            ("CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS", cooldown),
+        ])
+    }
+
+    #[tokio::test]
+    async fn usage_limited_primary_fails_over_and_the_turn_succeeds_on_the_fallback() {
+        let config = fallback_config("1800");
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        assert_eq!(agent.attempt_timeout(), Duration::from_secs(150));
+        let script = tokio::spawn(async move {
+            let pid = server.prompt().await;
+            server.finish_limited(&pid, PRIMARY).await;
+            server.switch(FALLBACK, "low", 272_000).await;
+            let pid = server.prompt().await;
+            server.finish_ok(&pid, FALLBACK).await;
+            server.quiet().await;
+        });
+        let report = agent.run_turn("# Cycle 1", &CancellationToken::new()).await;
+        script.await.unwrap();
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.error, None);
+        assert_eq!(report.model, FALLBACK);
+        assert_eq!(report.thinking, "low");
+        assert!(report.fallback_active);
+        assert_eq!(report.all_models_failed, Some(false));
+        assert_eq!(
+            report.attempts,
+            vec![AttemptEntry {
+                model: PRIMARY.into(),
+                status: "error".into(),
+                error: "429 usage limit reached".into(),
+            }]
+        );
+        assert_eq!(report.usage.cost_usd.to_string(), "0.003");
+        assert_eq!(agent.attempt_timeout(), Duration::from_secs(300));
+        let notices = agent.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].starts_with("switched to fallback openai-codex/gpt-6.1-sol"));
+        assert!(notices[0].contains("429"));
+
+        // The audit row carries the producing model and the failed attempt.
+        let record = serde_json::to_value(crate::audit::AgentRecord {
+            model: report.model.clone(),
+            thinking: report.thinking.clone(),
+            turn_status: report.status.clone(),
+            tool_calls: report.tool_calls.clone(),
+            usage: report.usage.clone(),
+            end_cycle: None,
+            attempts: report.attempts.clone(),
+            fallback_active: report.fallback_active,
+        })
+        .unwrap();
+        assert_eq!(record["model"], FALLBACK);
+        assert_eq!(record["fallback_active"], true);
+        assert_eq!(record["attempts"][0]["model"], PRIMARY);
+    }
+
+    #[tokio::test]
+    async fn failed_turn_that_called_execute_route_is_never_retried() {
+        let config = fallback_config("1800");
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        let script = tokio::spawn(async move {
+            // Reported through omp's tool events (the route errored).
+            let pid = server.prompt().await;
+            server
+                .send(json!({"type": "tool_execution_start", "toolCallId": "tc-1", "toolName": "execute_route",
+                             "args": {"route_id": "USDT->SOL:1", "reason": "x"}}))
+                .await;
+            server.host_call("execute_route").await;
+            server
+                .send(json!({"type": "tool_execution_end", "toolCallId": "tc-1", "toolName": "execute_route",
+                             "result": {"content": [{"type": "text", "text": "failed"}]}, "isError": true}))
+                .await;
+            server.finish_limited(&pid, PRIMARY).await;
+            // No set_model: the next frame is the next cycle's prompt. Here only the host call
+            // reached the bot (the turn died before omp reported the tool).
+            let pid = server.prompt().await;
+            server.host_call("execute_route").await;
+            server.finish_limited(&pid, PRIMARY).await;
+            server.quiet().await;
+        });
+        let first = agent.run_turn("# Cycle 1", &CancellationToken::new()).await;
+        let second = agent.run_turn("# Cycle 2", &CancellationToken::new()).await;
+        script.await.unwrap();
+        for report in [&first, &second] {
+            assert_eq!(report.status, "error");
+            assert!(report.attempts.is_empty());
+            assert_eq!(report.model, PRIMARY);
+            assert!(!report.fallback_active);
+            assert_eq!(report.all_models_failed, None);
+            assert_eq!(report.error.as_deref(), Some("429 usage limit reached"));
+        }
+        assert_eq!(first.tool_calls[0].name, "execute_route");
+        assert!(second.tool_calls.is_empty());
+        assert!(agent.take_notices().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cooldown_expiry_compacts_if_needed_then_returns_to_the_primary() {
+        let config = fallback_config("0");
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        let script = tokio::spawn(async move {
+            // Cycle 1 starts on the primary (100K window), fails over during the turn.
+            server.state(PRIMARY, 10_000, 100_000).await;
+            let pid = server.prompt().await;
+            server.finish_limited(&pid, PRIMARY).await;
+            server.switch(FALLBACK, "low", 272_000).await;
+            let pid = server.prompt().await;
+            server.finish_ok(&pid, FALLBACK).await;
+            // Cycle 2: cooldown over; 90K tokens is too much for the primary, so compact on
+            // the fallback first, then switch back and run the usual compaction check.
+            server.state(FALLBACK, 90_000, 272_000).await;
+            server.compact(None).await;
+            server.switch(PRIMARY, "high", 100_000).await;
+            server.state(PRIMARY, 20_000, 100_000).await;
+            let pid = server.prompt().await;
+            server.finish_ok(&pid, PRIMARY).await;
+            server.quiet().await;
+        });
+        agent.prepare_cycle().await;
+        let first = agent.run_turn("# Cycle 1", &CancellationToken::new()).await;
+        assert_eq!(first.model, FALLBACK);
+        agent.prepare_cycle().await;
+        let second = agent.run_turn("# Cycle 2", &CancellationToken::new()).await;
+        script.await.unwrap();
+        assert_eq!(second.model, PRIMARY);
+        assert_eq!(second.thinking, "high");
+        assert!(!second.fallback_active);
+        assert!(second.attempts.is_empty());
+        let notices = agent.take_notices();
+        assert_eq!(notices.len(), 2, "{notices:?}");
+        assert!(notices[0].starts_with("switched to fallback openai-codex/gpt-6.1-sol"));
+        assert_eq!(
+            notices[1],
+            "back on primary anthropic/claude-haiku-5-5 (fallback cooldown ended)"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_compaction_retries_on_the_fallback_model() {
+        let config = fallback_config("1800");
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        let script = tokio::spawn(async move {
+            server.state(PRIMARY, 90_000, 100_000).await;
+            server
+                .compact(Some("Turn prefix summarization failed: 429"))
+                .await;
+            server.switch(FALLBACK, "low", 272_000).await;
+            server.compact(None).await;
+            let pid = server.prompt().await;
+            server.finish_ok(&pid, FALLBACK).await;
+            server.quiet().await;
+        });
+        agent.prepare_cycle().await;
+        let report = agent.run_turn("# Cycle 1", &CancellationToken::new()).await;
+        script.await.unwrap();
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.model, FALLBACK);
+        assert!(report.fallback_active);
+        assert_eq!(report.attempts.len(), 1);
+        assert_eq!(report.attempts[0].model, PRIMARY);
+        assert_eq!(report.attempts[0].status, "compaction");
+        assert!(report.attempts[0].error.contains("429"));
+        assert_eq!(agent.take_notices().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn context_over_the_primary_window_compacts_on_the_fallback_first() {
+        let config = fallback_config("1800");
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        let script = tokio::spawn(async move {
+            // Restart after a night on the fallback: Haiku is asked to hold 130% of its window.
+            server.state(PRIMARY, 130_000, 100_000).await;
+            // No compaction attempt on the primary: switch first, then compact there.
+            server.switch(FALLBACK, "low", 272_000).await;
+            server.compact(None).await;
+            let pid = server.prompt().await;
+            server.finish_ok(&pid, FALLBACK).await;
+            server.quiet().await;
+        });
+        agent.prepare_cycle().await;
+        let report = agent.run_turn("# Cycle 1", &CancellationToken::new()).await;
+        script.await.unwrap();
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.model, FALLBACK);
+        assert_eq!(report.attempts.len(), 1);
+        assert_eq!(report.attempts[0].status, "compaction");
+        assert!(report.attempts[0].error.contains("130%"));
+    }
+
+    #[tokio::test]
+    async fn without_fallbacks_one_attempt_with_the_existing_timeout() {
+        let config = config(&[]);
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        assert_eq!(agent.attempt_timeout(), config.timeout);
+        let script = tokio::spawn(async move {
+            // Compaction fails: logged, no model switch, the turn still runs.
+            server.state(PRIMARY, 90_000, 100_000).await;
+            server.compact(Some("429")).await;
+            let pid = server.prompt().await;
+            server.finish_limited(&pid, PRIMARY).await;
+            // No set_model. Then omp's own retry fallback answers on another model: reported.
+            let pid = server.prompt().await;
+            server.finish_ok(&pid, FALLBACK).await;
+            server.quiet().await;
+        });
+        agent.prepare_cycle().await;
+        let report = agent.run_turn("# Cycle 1", &CancellationToken::new()).await;
+        assert_eq!(report.status, "error");
+        assert_eq!(report.error.as_deref(), Some("429 usage limit reached"));
+        assert!(report.attempts.is_empty());
+        assert_eq!(report.model, PRIMARY);
+        assert_eq!(report.all_models_failed, Some(true));
+        let report = agent.run_turn("# Cycle 2", &CancellationToken::new()).await;
+        script.await.unwrap();
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.model, FALLBACK);
+        assert!(report.fallback_active);
+        assert_eq!(report.thinking, "");
+        let notices = agent.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("omp switched models during the turn"));
+        assert_eq!(agent.attempt_timeout(), config.timeout);
+    }
+
+    #[tokio::test]
+    async fn every_model_failing_reports_the_brain_unavailable() {
+        let config = fallback_config("1800");
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        let script = tokio::spawn(async move {
+            let pid = server.prompt().await;
+            server.finish_limited(&pid, PRIMARY).await;
+            server.switch(FALLBACK, "low", 272_000).await;
+            let pid = server.prompt().await;
+            server.finish_limited(&pid, FALLBACK).await;
+            server.quiet().await;
+        });
+        let report = agent.run_turn("# Cycle 1", &CancellationToken::new()).await;
+        script.await.unwrap();
+        assert_eq!(report.all_models_failed, Some(true));
+        assert_eq!(report.attempts.len(), 1);
+        let error = report.error.unwrap();
+        assert!(error.starts_with(BRAIN_UNAVAILABLE), "{error}");
+        assert!(
+            error.contains(PRIMARY) && error.contains(FALLBACK),
+            "{error}"
+        );
     }
 
     #[test]

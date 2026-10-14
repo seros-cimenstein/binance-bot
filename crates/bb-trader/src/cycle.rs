@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::agent::{TraderAgent, TurnReport, cycle_prompt};
-use crate::alerts::Alerter;
+use crate::alerts::{Alerter, BRAIN_UNAVAILABLE};
 use crate::audit::{
     AgentRecord, AuditLog, AuditRow, Decision, EndCycle, RowStatus, RowType, failed_route_halt,
 };
@@ -281,12 +281,22 @@ impl Runtime {
         row.session_id = state.session_id.clone();
         row.error = report.error.clone().unwrap_or_default();
         row.agent = Some(AgentRecord {
-            model: self.config.model.clone(),
-            thinking: self.config.thinking.as_str().into(),
+            model: if report.model.is_empty() {
+                self.config.model.clone()
+            } else {
+                report.model.clone()
+            },
+            thinking: if report.thinking.is_empty() {
+                self.config.thinking.as_str().into()
+            } else {
+                report.thinking.clone()
+            },
             turn_status: report.status.clone(),
             tool_calls: report.tool_calls.clone(),
             usage: report.usage.clone(),
             end_cycle: end,
+            attempts: report.attempts.clone(),
+            fallback_active: report.fallback_active,
         });
         row.telegram_sent_routes = Some(state.telegram_sent_routes.clone());
         let route_alerts = state.executions.len();
@@ -323,6 +333,8 @@ impl Runtime {
             tool_calls: Vec::new(),
             usage: Default::default(),
             end_cycle: None,
+            attempts: Vec::new(),
+            fallback_active: false,
         });
         // Durable first: the halt / cost-cap record must survive a crash during the alert.
         self.audit.append(&row)?;
@@ -788,8 +800,9 @@ impl Trader {
             &journal,
         );
         let agent = self.agent().await?;
-        agent.maybe_compact().await;
+        agent.prepare_cycle().await;
         let report = agent.run_turn(&prompt, shutdown).await;
+        let notices = agent.take_notices();
         if shutdown.is_cancelled() {
             runtime.begin_shutdown();
         }
@@ -807,8 +820,28 @@ impl Trader {
             executions,
             error: summary.error.clone(),
         });
+        let brain_down =
+            state.record_brain(report.all_models_failed, config.brain_down_alert_cycles);
         if let Err(error) = state.save(&config.state_path) {
             tracing::warn!(%error, "agent state not saved");
+        }
+        // Observability only, after the durable audit row: model switches and brain outages.
+        for notice in &notices {
+            runtime.alerter.send_notice(notice).await;
+        }
+        if brain_down {
+            tracing::error!(
+                cycles = state.brain_down_cycles,
+                "trader brain unavailable on every model"
+            );
+            runtime
+                .alerter
+                .send_notice(&format!(
+                    "{BRAIN_UNAVAILABLE} for {} consecutive cycles; no orders are being placed. Last error: {}",
+                    state.brain_down_cycles,
+                    summary.error
+                ))
+                .await;
         }
         let failed = summary.status == RowStatus::Failed && runtime.mode == CycleMode::Live;
         Ok(CycleOutcome { summary, failed })
@@ -1309,6 +1342,54 @@ mod tests {
             1,
             "no extra cycle alert after a route alert"
         );
+    }
+
+    #[tokio::test]
+    async fn cycle_summary_records_the_producing_model_and_failed_attempts() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
+        let attempt = |model: &str, status: &str| crate::audit::AttemptEntry {
+            model: model.into(),
+            status: status.into(),
+            error: "429 usage limit reached".into(),
+        };
+        let report = TurnReport {
+            status: "error".into(),
+            error: Some(format!(
+                "{BRAIN_UNAVAILABLE} (no orders placed): anthropic/claude-haiku-5-5 error: 429; openai-codex/gpt-6.1-sol timeout: Claude timed out after 300s"
+            )),
+            model: "openai-codex/gpt-6.1-sol".into(),
+            thinking: "low".into(),
+            attempts: vec![attempt("anthropic/claude-haiku-5-5", "error")],
+            fallback_active: true,
+            all_models_failed: Some(true),
+            ..TurnReport::default()
+        };
+        let (summary, _) = runtime.finish_cycle(&report).await.unwrap();
+        assert_eq!(summary.status, RowStatus::Held);
+        assert!(crate::alerts::eli5(&summary).contains("unavailable on every configured model"));
+        runtime
+            .record_skipped("cycle-2", RowStatus::Held, "halt", "")
+            .await
+            .unwrap();
+        let rows = audit_rows(dir.path());
+        let agent = &rows[0]["agent"];
+        assert_eq!(agent["model"], "openai-codex/gpt-6.1-sol");
+        assert_eq!(agent["thinking"], "low");
+        assert_eq!(agent["fallback_active"], true);
+        assert_eq!(agent["attempts"][0]["model"], "anthropic/claude-haiku-5-5");
+        assert_eq!(agent["attempts"][0]["status"], "error");
+        assert!(
+            rows[0]["decision"]["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with(BRAIN_UNAVAILABLE)
+        );
+        // Rows without a failover keep the previous shape.
+        let skipped = rows[1]["agent"].as_object().unwrap();
+        assert_eq!(skipped["model"], "anthropic/claude-haiku-5-5");
+        assert!(!skipped.contains_key("attempts") && !skipped.contains_key("fallback_active"));
     }
 
     #[test]

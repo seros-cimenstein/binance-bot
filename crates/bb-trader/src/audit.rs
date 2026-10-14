@@ -139,9 +139,20 @@ pub struct EndCycle {
     pub summary: String,
 }
 
+/// One failed model attempt of a cycle turn (the turn was retried on the next model).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AttemptEntry {
+    /// `provider/model-id` the attempt ran on.
+    pub model: String,
+    /// `timeout`, `error`, `crashed`, `completed` (usage-limited) or `compaction`.
+    pub status: String,
+    pub error: String,
+}
+
 /// Agent fields of a cycle summary row.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AgentRecord {
+    /// The model that produced the final outcome (its last assistant message).
     pub model: String,
     pub thinking: String,
     /// `completed`, `aborted`, `error`, `timeout`, `crashed`, `skipped`.
@@ -149,6 +160,12 @@ pub struct AgentRecord {
     pub tool_calls: Vec<ToolCallEntry>,
     pub usage: UsageEntry,
     pub end_cycle: Option<EndCycle>,
+    /// Failed attempts before the final one (model failover), oldest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<AttemptEntry>,
+    /// The final outcome came from a model other than the primary.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fallback_active: bool,
 }
 
 /// `--mark-failed-route-reviewed` marker.

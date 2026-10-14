@@ -8,6 +8,14 @@ use serde_json::Value;
 
 use crate::audit::{AuditRow, RowStatus};
 
+/// Marker of a cycle turn that failed on every configured model (no orders were placed).
+pub const BRAIN_UNAVAILABLE: &str = "brain unavailable on all models";
+
+/// One plain HTML notice about the trader's brain (model switches, outages).
+pub fn brain_notice(text: &str) -> String {
+    format!("<b>CLAUDE SPOT BRAIN</b>\nModel: {}", code(text))
+}
+
 /// Python `TELEGRAM_MESSAGE_MAX_CHARS`.
 pub const MAX_CHARS: usize = 3900;
 
@@ -107,7 +115,10 @@ pub fn eli5(row: &AuditRow) -> String {
             "A safety or configuration check blocked the cycle before trading.".into()
         }
         RowStatus::Held => {
-            if reason.contains("timed out") {
+            if reason.contains(BRAIN_UNAVAILABLE) {
+                "Claude's brain was unavailable on every configured model, so the bot placed no orders and held."
+                    .into()
+            } else if reason.contains("timed out") {
                 "Claude did not answer in time, so the safe move was to hold.".into()
             } else if reason.contains("previous live route failed") {
                 "A previous live route failed, so the bot is waiting instead of compounding an uncertain state.".into()
@@ -324,6 +335,14 @@ impl Alerter {
         }
         sent
     }
+
+    /// Send one [`brain_notice`] (callers send it after the cycle's audit row is durable).
+    pub async fn send_notice(&self, text: &str) -> bool {
+        match &self.sink {
+            Some(sink) => sink.send(&brain_notice(text)).await,
+            None => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -360,6 +379,12 @@ mod tests {
         assert!(eli5(&held).contains("No valid trade route"));
         held.decision.reason = "Claude timed out after 300s".into();
         assert!(eli5(&held).contains("did not answer in time"));
+        held.decision.reason = format!(
+            "{BRAIN_UNAVAILABLE}: anthropic/x timeout (Claude timed out after 150s); no further orders this cycle"
+        );
+        assert!(eli5(&held).contains("unavailable on every configured model"));
+        assert!(eli5(&held).contains("no orders"));
+        assert!(brain_notice("back on <primary>").contains("back on &lt;primary&gt;"));
         held.decision.reason = "previous live route failed after submitting".into();
         assert!(eli5(&held).contains("previous live route failed"));
         held.decision.reason = "daily LLM cost cap reached".into();

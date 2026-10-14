@@ -80,6 +80,67 @@ impl FromStr for MarketPickMode {
     }
 }
 
+/// One model of the trader's chain: `provider/model-id` plus its thinking level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSpec {
+    pub provider: String,
+    pub model_id: String,
+    pub thinking: ThinkingLevel,
+}
+
+impl ModelSpec {
+    /// `provider/model-id[:thinking]`; an omitted thinking level uses `default_thinking`.
+    pub fn parse(entry: &str, default_thinking: ThinkingLevel) -> Result<Self> {
+        let entry = entry.trim();
+        let invalid = |why: &str| {
+            TraderError::config(format!(
+                "invalid model {entry:?}: {why} (expected provider/model-id[:thinking])"
+            ))
+        };
+        let (name, thinking) = match entry.rsplit_once(':') {
+            Some((name, level)) => {
+                let level = level.trim().to_ascii_lowercase();
+                let thinking =
+                    parse_thinking(&level).ok_or_else(|| invalid("unknown thinking level"))?;
+                (name.trim(), thinking)
+            }
+            None => (entry, default_thinking),
+        };
+        let Some((provider, model_id)) = name.split_once('/') else {
+            return Err(invalid("missing provider"));
+        };
+        let (provider, model_id) = (provider.trim(), model_id.trim());
+        if provider.is_empty()
+            || model_id.is_empty()
+            || provider.contains(char::is_whitespace)
+            || model_id.contains(char::is_whitespace)
+        {
+            return Err(invalid("blank provider or model id"));
+        }
+        Ok(Self {
+            provider: provider.to_owned(),
+            model_id: model_id.to_owned(),
+            thinking,
+        })
+    }
+
+    /// `provider/model-id` (a bare primary `--model` pattern has no provider).
+    pub fn name(&self) -> String {
+        if self.provider.is_empty() {
+            self.model_id.clone()
+        } else {
+            format!("{}/{}", self.provider, self.model_id)
+        }
+    }
+}
+
+/// A named thinking level (`inherit` is not a level).
+fn parse_thinking(level: &str) -> Option<ThinkingLevel> {
+    serde_json::from_value(serde_json::Value::String(level.to_owned()))
+        .ok()
+        .filter(|level| !matches!(level, ThinkingLevel::Inherit))
+}
+
 /// Every trader setting.
 #[derive(Debug, Clone)]
 pub struct TraderConfig {
@@ -98,6 +159,15 @@ pub struct TraderConfig {
     /// Enable omp's built-in `web_search` tool alongside the host tools.
     pub web_search: bool,
     pub timeout: Duration,
+    /// `CLAUDE_SPOT_FALLBACK_MODELS`: tried in order when the active model fails a turn
+    /// (without an `execute_route` call) or a compaction. Empty = no fallback.
+    pub fallback_models: Vec<ModelSpec>,
+    /// Per-attempt timeout of the primary while fallbacks exist (fallbacks use `timeout`).
+    pub primary_timeout: Duration,
+    /// How long to stay on a fallback before the primary is tried again (next cycle start).
+    pub fallback_cooldown: Duration,
+    /// Consecutive cycles failed on every model before the brain-down alert (0 = never).
+    pub brain_down_alert_cycles: u32,
     pub prompt_version: String,
     pub session_dir: PathBuf,
     pub journal_path: PathBuf,
@@ -190,6 +260,18 @@ impl TraderConfig {
             env.boolean("CLAUDE_SPOT_BLOCK_FIAT_ASSETS", true)?,
         )?;
         let timeout_seconds = env.float("CLAUDE_SPOT_TIMEOUT_SECONDS", 300.0)?;
+        let fallback_models = env
+            .csv("CLAUDE_SPOT_FALLBACK_MODELS", "")
+            .iter()
+            .map(|entry| ModelSpec::parse(entry, thinking))
+            .collect::<Result<Vec<_>>>()?;
+        let primary_timeout_seconds = env.float("CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS", 150.0)?;
+        let cooldown_seconds = env.float("CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS", 1800.0)?;
+        if cooldown_seconds < 0.0 {
+            return Err(TraderError::config(
+                "CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS must be non-negative",
+            ));
+        }
         let evidence_timeframe = env.string("CLAUDE_SPOT_MARKET_EVIDENCE_TIMEFRAME", "1h");
         if evidence_timeframe != "1h" {
             return Err(TraderError::config("market_evidence_timeframe must be 1h"));
@@ -211,6 +293,13 @@ impl TraderConfig {
             thinking,
             web_search: env.boolean("CLAUDE_SPOT_WEB_SEARCH", true)?,
             timeout: positive_duration(timeout_seconds, "claude_timeout_seconds")?,
+            fallback_models,
+            primary_timeout: positive_duration(
+                primary_timeout_seconds,
+                "CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS",
+            )?,
+            fallback_cooldown: Duration::from_secs_f64(cooldown_seconds),
+            brain_down_alert_cycles: env.integer("CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES", 3)?,
             prompt_version: env.string("CLAUDE_SPOT_PROMPT_VERSION", PROMPT_VERSION),
             session_dir: env.path("CLAUDE_SPOT_SESSION_DIR", "data/claude-spot-session"),
             journal_path: env.path("CLAUDE_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
@@ -335,7 +424,38 @@ impl TraderConfig {
                 "CLAUDE_SPOT_THINKING must name a level",
             ));
         }
+        self.model_chain()?;
         Ok(())
+    }
+
+    /// `[primary, fallbacks...]`. Without fallbacks the primary stays an opaque `--model`
+    /// pattern; with fallbacks it must be `provider/model-id` so the trader can switch back
+    /// to it, and no fallback may repeat the primary or another fallback.
+    pub fn model_chain(&self) -> Result<Vec<ModelSpec>> {
+        if self.fallback_models.is_empty() {
+            let (provider, model_id) = self.model.split_once('/').unwrap_or(("", &self.model));
+            return Ok(vec![ModelSpec {
+                provider: provider.trim().to_owned(),
+                model_id: model_id.trim().to_owned(),
+                thinking: self.thinking,
+            }]);
+        }
+        let primary = ModelSpec::parse(&self.model, self.thinking).map_err(|error| {
+            TraderError::config(format!(
+                "CLAUDE_SPOT_MODEL must be provider/model-id when CLAUDE_SPOT_FALLBACK_MODELS is set: {error}"
+            ))
+        })?;
+        let mut chain = vec![primary];
+        for fallback in &self.fallback_models {
+            if chain.iter().any(|model| model.name() == fallback.name()) {
+                return Err(TraderError::config(format!(
+                    "CLAUDE_SPOT_FALLBACK_MODELS entry {} repeats the primary or another fallback",
+                    fallback.name()
+                )));
+            }
+            chain.push(fallback.clone());
+        }
+        Ok(chain)
     }
 
     /// `DRY_RUN`, `testnet` or `LIVE` (the environment, independent of plan-only).
@@ -648,5 +768,93 @@ pub(crate) mod tests {
             config.scope.allowed_symbols,
             vec!["BTC/USDT".to_owned(), "ETHUSDT".to_owned()]
         );
+    }
+
+    #[test]
+    fn fallback_models_parse_thinking_suffix_and_defaults() {
+        let config = TraderConfig::from_lookup(lookup(&[])).unwrap();
+        assert!(config.fallback_models.is_empty());
+        assert_eq!(config.primary_timeout, Duration::from_secs(150));
+        assert_eq!(config.fallback_cooldown, Duration::from_secs(1800));
+        assert_eq!(config.brain_down_alert_cycles, 3);
+        let chain = config.model_chain().unwrap();
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].name(), "anthropic/claude-haiku-5-5");
+
+        let config = TraderConfig::from_lookup(lookup(&[
+            (
+                "CLAUDE_SPOT_FALLBACK_MODELS",
+                " openai-codex/gpt-6.1-sol:LOW , google/gemini-x ",
+            ),
+            ("CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS", "90"),
+            ("CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS", "0"),
+            ("CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES", "5"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            config.fallback_models,
+            vec![
+                ModelSpec {
+                    provider: "openai-codex".into(),
+                    model_id: "gpt-6.1-sol".into(),
+                    thinking: ThinkingLevel::Low,
+                },
+                // Omitted thinking = the primary's.
+                ModelSpec {
+                    provider: "google".into(),
+                    model_id: "gemini-x".into(),
+                    thinking: ThinkingLevel::High,
+                },
+            ]
+        );
+        assert_eq!(config.primary_timeout, Duration::from_secs(90));
+        assert_eq!(config.fallback_cooldown, Duration::ZERO);
+        assert_eq!(config.brain_down_alert_cycles, 5);
+        let chain = config.model_chain().unwrap();
+        assert_eq!(chain[0].name(), "anthropic/claude-haiku-5-5");
+        assert_eq!(chain[0].thinking, ThinkingLevel::High);
+        assert_eq!(chain[1].name(), "openai-codex/gpt-6.1-sol");
+    }
+
+    #[test]
+    fn fallback_models_reject_bad_entries() {
+        for (fallbacks, extra) in [
+            ("gpt-6.1-sol", None),
+            ("openai-codex/", None),
+            ("/gpt", None),
+            ("openai-codex/gpt-6.1-sol:loud", None),
+            ("openai-codex/gpt-6.1-sol:inherit", None),
+            ("openai codex/gpt", None),
+            // Equal to the primary (thinking does not make it a different model).
+            ("anthropic/claude-haiku-5-5:low", None),
+            (
+                "openai-codex/gpt-6.1-sol,openai-codex/gpt-6.1-sol:low",
+                None,
+            ),
+            // A bare primary pattern cannot be switched back to.
+            (
+                "openai-codex/gpt-6.1-sol",
+                Some(("CLAUDE_SPOT_MODEL", "haiku")),
+            ),
+        ] {
+            let mut pairs = vec![("CLAUDE_SPOT_FALLBACK_MODELS", fallbacks)];
+            pairs.extend(extra);
+            assert!(
+                TraderConfig::from_lookup(lookup(&pairs)).is_err(),
+                "{fallbacks} {extra:?}"
+            );
+        }
+        for pairs in [
+            [("CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS", "0")],
+            [("CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS", "-1")],
+            [("CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES", "-1")],
+        ] {
+            assert!(
+                TraderConfig::from_lookup(lookup(&pairs)).is_err(),
+                "{pairs:?}"
+            );
+        }
+        // Without fallbacks a bare --model pattern stays valid (today's behavior).
+        assert!(TraderConfig::from_lookup(lookup(&[("CLAUDE_SPOT_MODEL", "haiku")])).is_ok());
     }
 }
