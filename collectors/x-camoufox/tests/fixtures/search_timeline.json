@@ -1,0 +1,301 @@
+{
+  "data": {
+    "search_by_raw_query": {
+      "search_timeline": {
+        "timeline": {
+          "instructions": [
+            {
+              "type": "TimelineAddEntries",
+              "entries": [
+                {
+                  "entryId": "tweet-1845000000000000001",
+                  "sortIndex": "1845000000000000001",
+                  "content": {
+                    "entryType": "TimelineTimelineItem",
+                    "__typename": "TimelineTimelineItem",
+                    "itemContent": {
+                      "itemType": "TimelineTweet",
+                      "__typename": "TimelineTweet",
+                      "tweet_results": {
+                        "result": {
+                          "__typename": "Tweet",
+                          "rest_id": "1845000000000000001",
+                          "core": {
+                            "user_results": {
+                              "result": {
+                                "__typename": "User",
+                                "id": "VXNlcjoxNTAwMDAwMDAx",
+                                "rest_id": "1500000001",
+                                "is_blue_verified": true,
+                                "core": {
+                                  "created_at": "Sun Mar 06 12:00:00 +0000 2022",
+                                  "name": "Launch Watcher",
+                                  "screen_name": "LaunchWatcher"
+                                },
+                                "legacy": {
+                                  "followers_count": 1520,
+                                  "friends_count": 300,
+                                  "verified": false
+                                },
+                                "verification": {"verified": false}
+                              }
+                            }
+                          },
+                          "views": {"count": "3100", "state": "EnabledWithCount"},
+                          "source": "<a href=\"https://mobile.twitter.com\" rel=\"nofollow\">Twitter Web App</a>",
+                          "legacy": {
+                            "bookmark_count": 2,
+                            "bookmarked": false,
+                            "created_at": "Fri Oct 11 09:20:00 +0000 2024",
+                            "conversation_id_str": "1845000000000000001",
+                            "display_text_range": [0, 120],
+                            "entities": {
+                              "hashtags": [],
+                              "media": [
+                                {"display_url": "pic.x.com/abc", "expanded_url": "https://x.com/LaunchWatcher/status/1845000000000000001/photo/1", "id_str": "1", "type": "photo", "url": "https://t.co/MEDIA0001"}
+                              ],
+                              "symbols": [{"indices": [8, 13], "text": "PEPE"}],
+                              "timestamps": [],
+                              "urls": [
+                                {"display_url": "pump.fun/coin/6MQ9dDq6…", "expanded_url": "https://pump.fun/coin/6MQ9dDq6siEgRShJa2xbkz6QoECHiqv6MP18FA6hov3Z", "url": "https://t.co/PUMP00001", "indices": [60, 83]}
+                              ],
+                              "user_mentions": []
+                            },
+                            "favorite_count": 40,
+                            "favorited": false,
+                            "full_text": "Ape in  $PEPE   and $wif2 now!\n\nUS$100 is nothing, $1000 neither, $TOOLONGTICKER no &amp; more https://t.co/PUMP00001 https://t.co/MEDIA0001",
+                            "is_quote_status": false,
+                            "lang": "en",
+                            "quote_count": 1,
+                            "reply_count": 3,
+                            "retweet_count": 5,
+                            "retweeted": false,
+                            "user_id_str": "1500000001",
+                            "id_str": "1845000000000000001"
+                          }
+                        }
+                      },
+                      "tweetDisplayType": "Tweet"
+                    },
+                    "clientEventInfo": {"component": "result", "element": "tweet"}
+                  }
+                },
+                {
+                  "entryId": "tweet-1845000000000000002",
+                  "sortIndex": "1845000000000000002",
+                  "content": {
+                    "entryType": "TimelineTimelineItem",
+                    "__typename": "TimelineTimelineItem",
+                    "itemContent": {
+                      "itemType": "TimelineTweet",
+                      "__typename": "TimelineTweet",
+                      "tweet_results": {
+                        "result": {
+                          "__typename": "TweetWithVisibilityResults",
+                          "tweet": {
+                            "rest_id": "1845000000000000002",
+                            "core": {
+                              "user_results": {
+                                "result": {
+                                  "__typename": "User",
+                                  "rest_id": "1500000002",
+                                  "is_blue_verified": false,
+                                  "legacy": {
+                                    "created_at": "Tue Oct 01 08:00:00 +0000 2024",
+                                    "followers_count": 12,
+                                    "screen_name": "fresh_acct_42",
+                                    "verified": false
+                                  }
+                                }
+                              }
+                            },
+                            "views": {"state": "Enabled"},
+                            "note_tweet": {
+                              "is_expandable": true,
+                              "note_tweet_results": {
+                                "result": {
+                                  "id": "Tm90ZVR3ZWV0OjE=",
+                                  "text": "@LaunchWatcher @someone this long note mentions $BONK and CA: F6ANxSg3z9P7tjV7u9MvsRuBZsXaKVosMMw4EgW9DDmv plus 0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+                                  "entity_set": {
+                                    "hashtags": [],
+                                    "symbols": [{"indices": [48, 53], "text": "BONK"}],
+                                    "urls": [],
+                                    "user_mentions": []
+                                  }
+                                }
+                              }
+                            },
+                            "legacy": {
+                              "bookmark_count": 0,
+                              "created_at": "Fri Oct 11 09:21:30 +0000 2024",
+                              "conversation_id_str": "1845000000000000001",
+                              "entities": {"hashtags": [], "symbols": [], "urls": [], "user_mentions": []},
+                              "favorite_count": 0,
+                              "full_text": "@LaunchWatcher @someone this long note mentions $BONK and CA: F6ANxSg3z9P7…",
+                              "in_reply_to_screen_name": "LaunchWatcher",
+                              "in_reply_to_status_id_str": "1845000000000000001",
+                              "in_reply_to_user_id_str": "1500000001",
+                              "is_quote_status": false,
+                              "lang": "en",
+                              "quote_count": 0,
+                              "reply_count": 0,
+                              "retweet_count": 0,
+                              "user_id_str": "1500000002",
+                              "id_str": "1845000000000000002"
+                            }
+                          },
+                          "tweetInterstitial": {"__typename": "ContextualTweetInterstitial", "displayType": "EntireTweet"}
+                        }
+                      },
+                      "tweetDisplayType": "Tweet"
+                    }
+                  }
+                },
+                {
+                  "entryId": "promoted-tweet-1845000000000000099-9f00",
+                  "sortIndex": "1845000000000000099",
+                  "content": {
+                    "entryType": "TimelineTimelineItem",
+                    "__typename": "TimelineTimelineItem",
+                    "itemContent": {
+                      "itemType": "TimelineTweet",
+                      "__typename": "TimelineTweet",
+                      "tweet_results": {
+                        "result": {
+                          "__typename": "Tweet",
+                          "rest_id": "1845000000000000099",
+                          "core": {"user_results": {"result": {"__typename": "User", "rest_id": "99", "legacy": {"followers_count": 5, "screen_name": "ads"}}}},
+                          "legacy": {"created_at": "Fri Oct 11 09:00:00 +0000 2024", "full_text": "Buy $ADS", "id_str": "1845000000000000099", "user_id_str": "99"}
+                        }
+                      },
+                      "promotedMetadata": {"advertiser_results": {}, "impressionId": "9f00"}
+                    }
+                  }
+                },
+                {
+                  "entryId": "user-module-1",
+                  "sortIndex": "1845000000000000050",
+                  "content": {
+                    "entryType": "TimelineTimelineModule",
+                    "__typename": "TimelineTimelineModule",
+                    "displayType": "Vertical",
+                    "items": [
+                      {
+                        "entryId": "user-module-1-user-77",
+                        "item": {
+                          "itemContent": {
+                            "itemType": "TimelineUser",
+                            "__typename": "TimelineUser",
+                            "user_results": {"result": {"__typename": "User", "rest_id": "77"}}
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "entryId": "tweet-1845000000000000003",
+                  "sortIndex": "1845000000000000003",
+                  "content": {
+                    "entryType": "TimelineTimelineItem",
+                    "__typename": "TimelineTimelineItem",
+                    "itemContent": {
+                      "itemType": "TimelineTweet",
+                      "__typename": "TimelineTweet",
+                      "tweet_results": {
+                        "result": {
+                          "__typename": "Tweet",
+                          "rest_id": "1845000000000000003",
+                          "core": {"user_results": {"result": {"__typename": "User", "rest_id": "1500000003", "legacy": {"created_at": "Mon Jan 01 00:00:00 +0000 2018", "followers_count": 250000, "screen_name": "BigCaller"}}}},
+                          "views": {"count": "120000", "state": "EnabledWithCount"},
+                          "quoted_status_result": {
+                            "result": {
+                              "__typename": "Tweet",
+                              "rest_id": "1845000000000000001",
+                              "core": {"user_results": {"result": {"__typename": "User", "rest_id": "1500000001", "legacy": {"followers_count": 1520, "screen_name": "LaunchWatcher"}}}},
+                              "legacy": {"created_at": "Fri Oct 11 09:20:00 +0000 2024", "full_text": "inner", "id_str": "1845000000000000001", "user_id_str": "1500000001"}
+                            }
+                          },
+                          "legacy": {
+                            "bookmark_count": 11,
+                            "created_at": "Fri Oct 11 09:25:00 +0000 2024",
+                            "conversation_id_str": "1845000000000000003",
+                            "entities": {"hashtags": [], "symbols": [{"indices": [0, 5], "text": "PEPE"}], "urls": [], "user_mentions": []},
+                            "favorite_count": 900,
+                            "full_text": "$pepe is sending, told you",
+                            "is_quote_status": true,
+                            "lang": "en",
+                            "quote_count": 20,
+                            "quoted_status_id_str": "1845000000000000001",
+                            "quoted_status_permalink": {"expanded": "https://x.com/LaunchWatcher/status/1845000000000000001"},
+                            "reply_count": 75,
+                            "retweet_count": 140,
+                            "user_id_str": "1500000003",
+                            "id_str": "1845000000000000003"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "entryId": "tweet-1845000000000000004",
+                  "sortIndex": "1845000000000000004",
+                  "content": {
+                    "entryType": "TimelineTimelineItem",
+                    "__typename": "TimelineTimelineItem",
+                    "itemContent": {
+                      "itemType": "TimelineTweet",
+                      "__typename": "TimelineTweet",
+                      "tweet_results": {
+                        "result": {
+                          "__typename": "Tweet",
+                          "rest_id": "1845000000000000004",
+                          "core": {"user_results": {"result": {"__typename": "User", "rest_id": "1500000004", "legacy": {"followers_count": 3, "screen_name": "reposter"}}}},
+                          "legacy": {
+                            "created_at": "Fri Oct 11 09:30:00 +0000 2024",
+                            "full_text": "RT @LaunchWatcher: Ape in $PEPE",
+                            "id_str": "1845000000000000004",
+                            "user_id_str": "1500000004",
+                            "retweet_count": 5,
+                            "retweeted_status_result": {
+                              "result": {
+                                "__typename": "Tweet",
+                                "rest_id": "1845000000000000005",
+                                "core": {"user_results": {"result": {"__typename": "User", "rest_id": "1500000001", "legacy": {"followers_count": 1520, "screen_name": "LaunchWatcher"}}}},
+                                "legacy": {"created_at": "Fri Oct 11 09:29:00 +0000 2024", "full_text": "Original post about $DOGE", "id_str": "1845000000000000005", "user_id_str": "1500000001", "favorite_count": 7}
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "entryId": "cursor-top-1845000000000000004",
+                  "sortIndex": "1845000000000000004",
+                  "content": {"entryType": "TimelineTimelineCursor", "__typename": "TimelineTimelineCursor", "value": "DAADDAABCgAB", "cursorType": "Top"}
+                },
+                {
+                  "entryId": "cursor-bottom-0",
+                  "sortIndex": "0",
+                  "content": {"entryType": "TimelineTimelineCursor", "__typename": "TimelineTimelineCursor", "value": "DAADDAABCgAC", "cursorType": "Bottom"}
+                }
+              ]
+            },
+            {
+              "type": "TimelineReplaceEntry",
+              "entry_id_to_replace": "cursor-bottom-0",
+              "entry": {
+                "entryId": "cursor-bottom-0",
+                "sortIndex": "0",
+                "content": {"entryType": "TimelineTimelineCursor", "__typename": "TimelineTimelineCursor", "value": "DAADDAABCgAD", "cursorType": "Bottom"}
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 [package]
 name = "cryptobot-gui"
-description = "Read-only, localhost-only web dashboard for the bot fleet: wallet, Claude Spot trade history and status, fleet."
+description = "Read-only, localhost-only web dashboard for the bot fleet: wallet, Claude Spot trade history and status, fleet, X insighter signals."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,7 @@ bb-core.workspace = true
 bb-binance.workspace = true
 bb-capital.workspace = true
 bb-trader.workspace = true
+bb-signals.workspace = true
 axum.workspace = true
 tokio.workspace = true
 serde.workspace = true

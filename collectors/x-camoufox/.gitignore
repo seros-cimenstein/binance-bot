@@ -1,0 +1,9 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+# Operator lists and any local login profile stay out of git.
+accounts.txt
+searches.txt
+*-profile/
+*.fingerprint.json

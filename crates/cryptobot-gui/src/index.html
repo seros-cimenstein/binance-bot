@@ -140,6 +140,17 @@
   .chart .bar.accent { fill: var(--accent); }
   .chart .bar:hover { opacity: .8; }
   .chart .guide { stroke: var(--faint); stroke-dasharray: 3 3; }
+  .chart .line.accent { stroke: var(--accent); }
+  .chart .line.exh { stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 5 3; }
+  .chart .stage-mark { stroke: var(--c5); stroke-dasharray: 2 3; }
+  .chart .stage-label { fill: var(--c5); font-size: 10px; font-weight: 600; }
+  .chart .tier-line { stroke: var(--border); }
+  .legend-inline { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .legend-inline .sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+  .token-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .token-head .val { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  .take { display: grid; gap: 8px; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 6px; }
+  .take ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
 
   .donut { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: center; }
   .donut svg circle.seg-arc { transition: stroke-width .15s; cursor: default; }
@@ -206,6 +217,7 @@
       <a href="#wallet" data-tab="wallet">Wallet</a>
       <a href="#claude" data-tab="claude">Claude</a>
       <a href="#fleet" data-tab="fleet">Fleet</a>
+      <a href="#signals" data-tab="signals">Signals</a>
     </nav>
     <div class="top-right">
       <span class="status" id="status-pill" title=""><span class="dot"></span><span>…</span></span>
@@ -224,8 +236,8 @@
 // textContent / createTextNode; nothing is parsed as HTML.
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
-const TABS = ["overview", "history", "wallet", "claude", "fleet"];
-const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", fleet: "/api/fleet" };
+const TABS = ["overview", "history", "wallet", "claude", "fleet", "signals"];
+const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", fleet: "/api/fleet", signals: "/api/signals" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
@@ -595,7 +607,7 @@ function renderHeader() {
 function render() {
   renderHeader();
   const view = document.getElementById("view");
-  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, claude: claudePage, fleet: fleetPage };
+  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, claude: claudePage, fleet: fleetPage, signals: signalsPage };
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
   drawCharts();
@@ -931,6 +943,218 @@ function fleetPage() {
     el("td", { class: "r" }, signed(b.pnl_lifetime_usdt)),
     el("td", { class: "small muted" }, b.state_summary || "")));
   return el("div", { class: "grid" }, head, card(null, table([["Bot"], ["Activity"], ["Trades 24h / all", "r"], ["P&L 24h", "r"], ["P&L all", "r"], ["State"]], rows), { flush: true }));
+}
+
+// ---------- Signals (Phase 43 X insighter, paper only) ----------
+const HOUR_MS = 3600e3;
+const EXIT_ARMS = [["rule_exits", "Rule exits"], ["trailing_only", "Trailing only"], ["scheduled_15m", "Scheduled +15m"],
+  ["scheduled_1h", "Scheduled +1h"], ["scheduled_6h", "Scheduled +6h"], ["peak_upper_bound", "Peak (upper bound)"]];
+function isoMs(t) { return num(t) === null ? null : new Date(num(t)).toISOString(); }
+function frac(v, opts = {}) { const n = num(v); return n === null ? "—" : pct(n * 100, { sign: opts.sign ?? false, dp: opts.dp ?? 1 }); }
+function fixed(v, dp = 1) { const n = num(v); return n === null ? "—" : nf(dp, dp).format(n); }
+function price(v) {
+  const n = num(v);
+  if (n === null) return "—";
+  if (n >= 1 || n === 0) return usd(n);
+  return "$" + n.toPrecision(4);
+}
+const TIER_TONE = { hot: "neg", focus: "warn", watch: "" };
+const STAGE_TONE = { ignition: "accent", building: "pos", peak: "warn", fading: "neg" };
+function tokenLabel(t) {
+  const name = t.cashtag ? "$" + t.cashtag : t.symbol || String(t.token_key || "?").replace(/^[a-z]+:/, "").slice(0, 10) + "…";
+  return el("span", { class: "asset", title: t.token_key || "" }, coin(t.cashtag || t.symbol || t.token_key), name);
+}
+function collectorState(c) {
+  if (!c || !c.present) return { label: "Not running", tone: "neg", detail: (c && c.message) || "no heartbeat" };
+  if (c.error) return { label: "Unreadable", tone: "neg", detail: c.error };
+  if (c.stale) return { label: "Stale", tone: "neg", detail: c.message || "heartbeat older than 5 min" };
+  if (c.healthy) return { label: "Healthy", tone: "pos", detail: "heartbeat " + ago(isoMs(c.updated_at_ms)) };
+  return { label: pretty(c.status), tone: c.status === "backoff" ? "warn" : "neg", detail: "heartbeat " + ago(isoMs(c.updated_at_ms)) };
+}
+function tractionChart(token, now, opts = {}) {
+  const host = el("div", { class: "chart" });
+  host.draw = (W) => {
+    const H = opts.height || 180, P = { l: 34, r: 34, t: 16, b: 22 };
+    const iw = Math.max(20, W - P.l - P.r), ih = H - P.t - P.b;
+    const t0 = now - 6 * HOUR_MS, t1 = now;
+    const X = (t) => P.l + Math.max(0, Math.min(1, (t - t0) / (t1 - t0))) * iw;
+    const Y = (v) => P.t + (1 - Math.max(0, Math.min(100, v)) / 100) * ih;
+    const svg = sv("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
+    for (const [v, name] of [[0, ""], [20, "watch"], [40, "focus"], [60, "hot"], [100, ""]]) {
+      svg.append(sv("line", { x1: P.l, x2: W - P.r, y1: Y(v), y2: Y(v), class: v === 0 ? "zero" : name ? "tier-line" : "grid-line" }));
+      svg.append(sv("text", { x: P.l - 6, y: Y(v) + 4, class: "axis", "text-anchor": "end" }, String(v)));
+      if (name) svg.append(sv("text", { x: P.l + 4, y: Y(v) - 3, class: "axis" }, name));
+    }
+    for (const v of [0.4, 0.7, 1]) svg.append(sv("text", { x: W - P.r + 6, y: Y(v * 100) + 4, class: "axis" }, v.toFixed(1)));
+    for (const [t, label] of [[t0, "−6h"], [t0 + 3 * HOUR_MS, "−3h"], [t1, "now"]]) {
+      svg.append(sv("text", { x: X(t), y: H - 6, class: "axis", "text-anchor": t === t0 ? "start" : t === t1 ? "end" : "middle" }, label));
+    }
+    const pts = token.points || [];
+    // A gap over 5 minutes means the token fell below watch; the line breaks there.
+    const path = (val) => pts.map((p, i) => (i === 0 || p.ts_ms - pts[i - 1].ts_ms > 5 * 60e3 ? "M" : "L") + X(p.ts_ms).toFixed(1) + "," + Y(val(p)).toFixed(1)).join(" ");
+    if (pts.length) {
+      svg.append(sv("path", { d: path((p) => num(p.exhaustion) * 100), class: "line exh" }));
+      svg.append(sv("path", { d: path((p) => num(p.traction)), class: "line accent" }));
+    }
+    for (const s of token.stage_changes || []) {
+      svg.append(sv("line", { x1: X(s.ts_ms), x2: X(s.ts_ms), y1: P.t, y2: P.t + ih, class: "stage-mark" }));
+      svg.append(sv("text", { x: X(s.ts_ms) + 3, y: P.t - 4, class: "stage-label" }, s.to));
+    }
+    for (const c of token.tier_changes || []) {
+      const p = pts.find((q) => q.ts_ms === c.ts_ms);
+      if (p) svg.append(sv("circle", { cx: X(p.ts_ms), cy: Y(num(p.traction)), r: 3.5, class: "dot " + ({ hot: "neg", focus: "accent" }[c.to] || "") }));
+    }
+    const guide = sv("line", { y1: P.t, y2: P.t + ih, class: "guide", visibility: "hidden" });
+    svg.append(guide);
+    const hit = sv("rect", { x: P.l, y: P.t, width: iw, height: ih, fill: "transparent" });
+    hit.addEventListener("mousemove", (e) => {
+      if (!pts.length) return;
+      const box = svg.getBoundingClientRect();
+      const t = t0 + ((e.clientX - box.left - P.l) / iw) * (t1 - t0);
+      let best = pts[0];
+      for (const p of pts) if (Math.abs(p.ts_ms - t) < Math.abs(best.ts_ms - t)) best = p;
+      guide.setAttribute("x1", X(best.ts_ms)); guide.setAttribute("x2", X(best.ts_ms)); guide.setAttribute("visibility", "visible");
+      showTip(e, [stamp(isoMs(best.ts_ms)), "Traction " + fixed(best.traction) + " · " + best.tier, "Exhaustion " + fixed(best.exhaustion, 2),
+        best.stage ? "Stage " + best.stage : null]);
+    });
+    hit.addEventListener("mouseleave", () => { guide.setAttribute("visibility", "hidden"); hideTip(); });
+    svg.append(hit);
+    host.replaceChildren(svg);
+  };
+  return host;
+}
+function haikuTake(token) {
+  const h = token.haiku, last = token.haiku_last_call;
+  const lastNote = last && (!h || last.ts_ms > h.ts_ms) && last.status !== "ok"
+    ? el("div", { class: "small warn" }, "Latest call " + ago(isoMs(last.ts_ms)) + ": " + pretty(last.status) + (last.error ? " · " + last.error : "")) : null;
+  if (!h || !h.verdict) return el("div", { class: "take" }, el("div", { class: "small muted" }, "No Haiku take yet."), lastNote);
+  const v = h.verdict, rq = v.reply_quality;
+  return el("div", { class: "take" },
+    el("div", { class: "feed-meta" }, el("b", null, "Haiku"), chip(pretty(v.traction_stage), STAGE_TONE[v.traction_stage] || ""),
+      chip("conviction " + fixed(v.conviction, 2), num(v.conviction) >= 0.6 ? "pos" : ""), chip(pretty(v.catalyst_type)),
+      el("span", { title: stamp(isoMs(h.ts_ms)) }, ago(isoMs(h.ts_ms)) + " · " + pretty(h.trigger))),
+    el("div", { class: "quote" }, v.narrative_summary || "No narrative."),
+    el("div", { class: "feed-meta" }, "Risk: shill " + fixed(v.shill_risk, 2), el("span", { class: "sep" }, "·"), "bot " + fixed(v.bot_risk, 2),
+      el("span", { class: "sep" }, "·"), "coordination " + fixed(v.coordination_risk, 2),
+      rq ? el("span", null, el("span", { class: "sep" }, " · "), "replies organic " + frac(rq.organic_share, { dp: 0 }) + " / bot " + frac(rq.bot_share, { dp: 0 }) + " / warning " + frac(rq.warning_share, { dp: 0 })) : null),
+    (v.rug_red_flags || []).length || (v.exhaustion_flags || []).length ? el("div", { class: "feed-meta" },
+      (v.rug_red_flags || []).map((f) => chip(pretty(f), "neg")), (v.exhaustion_flags || []).map((f) => chip(pretty(f), "warn"))) : null,
+    (v.reasons || []).length ? el("ul", null, v.reasons.map((r) => el("li", null, r))) : null,
+    lastNote);
+}
+function tokenCard(token, now) {
+  const head = el("div", { class: "token-head" }, tokenLabel(token), chip(token.venue), token.tier ? chip(pretty(token.tier), TIER_TONE[token.tier]) : null,
+    token.stage ? chip(pretty(token.stage), STAGE_TONE[token.stage]) : null, token.current ? null : chip("cooled", ""),
+    el("span", { class: "val" }, "traction " + fixed(token.traction) + " · exhaustion " + fixed(token.exhaustion, 2)));
+  const flags = (token.exhaustion_flags || []).length || (token.rug_precursors || []).length ? el("div", { class: "feed-meta" },
+    (token.rug_precursors || []).map((f) => chip("Rug: " + pretty(f), "neg")), (token.exhaustion_flags || []).map((f) => chip(pretty(f), "warn"))) : null;
+  return el("section", { class: "card" }, el("div", { class: "card-body grid", style: "gap:8px" }, head, flags,
+    token.points && token.points.length ? tractionChart(token, now) : el("div", { class: "small muted" }, "No traction rows in the last 6h."),
+    haikuTake(token)));
+}
+function signalsTable(rows) {
+  return table([["Detected"], ["Token"], ["Venue"], ["Traction", "r"], ["Price", "r"], ["Floor"], ["Haiku"], ["Conviction", "r"]], rows.map((s) =>
+    el("tr", null,
+      el("td", { class: "nw muted", title: s.detection_id }, stamp(isoMs(s.detected_at_ms))),
+      el("td", null, tokenLabel(s)),
+      el("td", null, chip(s.venue)),
+      el("td", { class: "r" }, fixed(s.traction)),
+      el("td", { class: "r" }, price(s.price_usd)),
+      el("td", null, s.floor_passed ? chip("Passed", "pos") : chip("Failed", "neg")),
+      el("td", { class: "nw" }, s.haiku_arm ? chip("Haiku arm", "accent") : chip(pretty(s.haiku_status), s.haiku_status === "ok" ? "" : "warn"),
+        s.stage ? " " : null, s.stage ? chip(pretty(s.stage), STAGE_TONE[s.stage]) : null),
+      el("td", { class: "r" }, fixed(s.conviction, 2)))));
+}
+function armTable(arms) {
+  const rows = [];
+  for (const arm of ["deterministic", "haiku"]) {
+    const exits = (arms && arms[arm]) || {};
+    const keys = [...EXIT_ARMS.filter(([k]) => k in exits), ...Object.keys(exits).filter((k) => !EXIT_ARMS.some(([e]) => e === k)).map((k) => [k, pretty(k)])];
+    for (const [key, label] of keys) {
+      const r = exits[key] || {};
+      rows.push(el("tr", null, el("td", { class: "nw" }, el("b", null, pretty(arm))), el("td", { class: "nw" }, label, key === "peak_upper_bound" ? el("span", { class: "faint" }, " · not expected") : null),
+        el("td", { class: "r" }, String(r.trades ?? "—")), el("td", { class: "r" }, signed(r.total_net_usd)),
+        el("td", { class: "r" }, el("span", { class: tone(r.mean_net_return) }, frac(r.mean_net_return, { sign: true }))),
+        el("td", { class: "r" }, el("span", { class: tone(r.median_net_return) }, frac(r.median_net_return, { sign: true }))),
+        el("td", { class: "r" }, frac(r.win_rate, { dp: 0 })), el("td", { class: "r" }, signed(r.total_net_usd_drop_top2))));
+    }
+  }
+  if (!rows.length) return empty("No paper trades", "Arms fill in once floor-passing signals have exits.");
+  return table([["Arm"], ["Exit"], ["Trades", "r"], ["Total", "r"], ["Mean", "r"], ["Median", "r"], ["Win rate", "r"], ["Total w/o top 2", "r"]], rows);
+}
+function venueReport(name, v) {
+  if (!v || v.signals === undefined) return card(pretty(name), empty("No data for this venue", "The weekly report has no " + name + " signals yet."));
+  const gate = v.gate || {};
+  const curve = (v.equity_curve || []).map((p) => ({ y: num(p.cumulative_net_usd) || 0, label: shortDate(isoMs(p.ts_ms)),
+    tone: tone(p.cumulative_net_usd), tip: [usd(p.cumulative_net_usd, { sign: true }) + " paper total", stamp(isoMs(p.ts_ms))] }));
+  return el("section", { class: "card" },
+    el("div", { class: "card-head" }, el("h2", null, pretty(name)), chip(gate.passed ? "Gate passed" : "Gate not passed", gate.passed ? "pos" : "")),
+    el("div", { class: "card-body grid", style: "gap:14px" },
+      el("div", { class: "facts" }, fact("Signals", String(v.signals)), fact("Floor passed", String(v.floor_passed ?? "—")),
+        fact("Hit rate", frac(v.hit_rate)), fact("Rug rate", frac(v.rug_rate)), fact("Median lead time", v.median_lead_time_minutes === null || v.median_lead_time_minutes === undefined ? "—" : fixed(v.median_lead_time_minutes) + " min"),
+        fact("Late share", frac(v.late_share)), fact("LLM spend", usd(v.llm_spend_usd))),
+      el("div", { class: "grid halves", style: "align-items:start" },
+        el("div", null, el("div", { class: "small muted", style: "margin-bottom:4px" }, "Paper equity · deterministic arm, rule exits, after friction"),
+          curve.length ? lineChart(curve, { height: 200 }) : empty("No closed paper trades", "")),
+        el("div", null, el("div", { class: "small muted", style: "margin-bottom:4px" }, "Pre-registered gate (all must hold)"),
+          (gate.criteria || []).length ? el("div", { class: "checks card", style: "box-shadow:none" }, gate.criteria.map((c) =>
+            check(c.passed ? "pos" : "neg", pretty(c.name), String(c.value ?? "—") + " · needs " + String(c.threshold ?? "—"))))
+            : el("div", { class: "small muted" }, "No gate criteria in the report."))),
+      el("div", { class: "card", style: "box-shadow:none" }, el("div", { class: "card-body flush" }, armTable(v.arms)))));
+}
+function signalsPage() {
+  const d = ui.data.signals;
+  const head = pageHead("X signals", "Pre-pump insighter, paper only: nothing on this page trades.", null);
+  if (!d) return el("div", { class: "grid" }, head, ui.errors.signals ? card(null, errorBox(ui.errors.signals)) : loadingView());
+  const now = num(d.generated_at_ms) || Date.now();
+  const c = d.collector || {}, focus = d.focus || {}, report = d.report;
+  const cs = collectorState(c);
+  const day = d.signals.filter((s) => now - num(s.detected_at_ms) <= 24 * HOUR_MS);
+
+  const kpis = el("div", { class: "grid kpis" },
+    kpi("Collector", cs.label, cs.detail, cs.tone),
+    kpi("Focus", focus.present ? String(focus.coins.length) : "—", focus.present ? "coins · list " + ago(isoMs(focus.generated_at_ms)) : focus.error || "engine not running"),
+    kpi("Signals 24h", String(day.length), day.length ? day.filter((s) => s.floor_passed).length + " passed the floor · " + day.filter((s) => s.haiku_arm).length + " Haiku arm" : "first hot token emits one"),
+    kpi("Weekly report", report ? report.date || "—" : "—", report ? Object.entries(report.venues || {}).map(([k, v]) => pretty(k) + ": " + (v && v.gate && v.gate.passed ? "gate passed" : "gate not passed")).join(" · ") : "no report yet"));
+
+  const collector = card("Collector", !c.present ? empty("Collector not running / no data yet", c.message || "")
+    : c.error ? errorBox(c.error)
+    : el("div", { class: "grid", style: "gap:12px" },
+      cs.tone === "pos" ? null : el("div", { class: "alert " + (cs.tone === "warn" ? "warn" : "neg") }, el("div", null, el("b", null, "Collector " + cs.label.toLowerCase()), el("span", null, cs.detail))),
+      el("div", { class: "facts" }, fact("Status", pretty(c.status)), fact("Heartbeat", duration(c.age_seconds) + " ago"),
+        fact("Pages last hour", String(c.pages_last_hour)), fact("Posts last hour", String(c.posts_last_hour)), fact("Replies last hour", String(c.replies_last_hour)),
+        fact("Backoff until", c.backoff_until_ms ? stamp(isoMs(c.backoff_until_ms)) + (c.backing_off ? "" : " (over)") : "—"),
+        fact("Camoufox", (c.camoufox_version || "—") + (c.browser_version ? " · " + c.browser_version : ""))),
+      c.last_error ? el("div", { class: "small neg" }, "Last error: " + c.last_error) : null), { hint: "unhealthy when the heartbeat is over 5 min old" });
+
+  const focusCard = card("Focus list", focus.error ? errorBox(focus.error) : !focus.present ? empty("Collector not running / no data yet", focus.message || "")
+    : focus.coins.length ? el("div", { class: "feed" }, focus.coins.map((f) => el("div", { class: "feed-item" },
+      el("div", { class: "token-head" }, tokenLabel(f), chip(pretty(f.tier), TIER_TONE[f.tier])),
+      el("div", { class: "small muted" }, "Searches: " + (f.search_queries || []).join(", ")))))
+    : empty("Nothing in focus", "No token is at focus or hot right now."),
+    { flush: focus.present && focus.coins.length > 0, hint: focus.present ? focus.resample_posts + " re-reads · " + focus.reply_sample_posts + " reply samples queued" : null });
+
+  const legend = el("div", { class: "legend-inline" }, el("span", null, el("span", { class: "sw", style: "background:var(--accent)" }), "traction (0-100, tiers 20/40/60)"),
+    el("span", null, el("span", { class: "sw", style: "background:var(--warn)" }), "exhaustion (0-1, scale-out 0.4/0.7)"),
+    el("span", null, el("span", { class: "sw", style: "background:var(--c5)" }), "stage change"));
+  const tokens = d.tokens.length ? el("div", { class: "grid halves" }, d.tokens.map((t) => tokenCard(t, now)))
+    : card(null, empty("No focus or hot tokens", d.tokens_message || ""));
+
+  const signals = card("Recent signals", d.signals.length ? signalsTable(d.signals) : empty("No signals yet", d.signals_message || ""),
+    { flush: d.signals.length > 0, hint: "newest " + d.signals.length + " · a signal is a token's first hot cycle" });
+
+  const reportBody = d.report_error ? card("Weekly report", errorBox(d.report_error))
+    : !report ? card("Weekly report", empty("No weekly report yet", d.report_message || ""))
+    : el("div", { class: "grid", style: "gap:16px" },
+      el("div", { class: "page-head" }, el("div", null, el("h1", { style: "font-size:16px" }, "Weekly report · " + (report.date || "—")),
+        el("p", null, "Generated " + stamp(isoMs(report.generated_at_ms)) + " · freeze date " + (report.freeze_date || "not set (burn-in)") + (report.markdown_path ? " · " + report.markdown_path : "")))),
+      ["binance", "solana"].map((k) => venueReport(k, (report.venues || {})[k])));
+
+  return el("div", { class: "grid" }, head, kpis, el("div", { class: "grid split", style: "align-items:start" }, collector, focusCard),
+    el("div", { class: "page-head" }, el("div", null, el("h1", { style: "font-size:16px" }, "Traction · last 6h"), el("p", null, "Focus/hot tokens with the latest Haiku take.")), legend),
+    tokens, signals, reportBody,
+    el("details", { class: "footnote" }, el("summary", null, "What this shows"),
+      el("p", null, "Paper evaluation of X chatter as a pre-pump signal (docs/signals/x-insighter-design.md). Traction scores X activity per token; a signal is a token's first hot cycle. Exhaustion flags drive simulated scale-out exits. The gate must pass on a venue before execution can even be proposed; nothing here places orders.")));
 }
 
 // ---------- data loading ----------

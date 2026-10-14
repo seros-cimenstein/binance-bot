@@ -11,6 +11,9 @@
 //!
 //! V2 records early Solana launches ([`dexscreener_launches`]), captures forward
 //! snapshots ([`snapshotter`]) and renders weekly outcome reports ([`v2_report`]).
+//!
+//! Phase 43 ([`x_insighter`]) turns X posts collected by the Camoufox sidecar into
+//! traction-scored, Haiku-assessed paper signals for Binance Spot and Solana.
 
 #![cfg_attr(
     test,
@@ -39,6 +42,7 @@ pub mod telegram_setup;
 pub mod v2_report;
 pub mod wallet_bootstrap;
 pub mod watchlist;
+pub mod x_insighter;
 
 pub use candidate::SignalCandidate;
 pub use error::SignalsError;

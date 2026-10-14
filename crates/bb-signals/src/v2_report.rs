@@ -291,7 +291,7 @@ pub fn compute_metrics(
 }
 
 /// Latest row per `(detection_id, offset)`; later rows win ties on `captured_at_ms`.
-fn latest_snapshots(snapshots: &[Object]) -> HashMap<(String, i64), &Object> {
+pub(crate) fn latest_snapshots(snapshots: &[Object]) -> HashMap<(String, i64), &Object> {
     let mut latest: HashMap<(String, i64), &Object> = HashMap::new();
     for snap in snapshots {
         let id = py_str(snap.get("detection_id"));
@@ -341,7 +341,7 @@ fn snapshot_completeness(
         .collect()
 }
 
-fn distribution(mut values: Vec<f64>, insufficient_threshold: usize) -> Distribution {
+pub(crate) fn distribution(mut values: Vec<f64>, insufficient_threshold: usize) -> Distribution {
     let n = values.len();
     if n < insufficient_threshold || n == 0 {
         return Distribution {
@@ -428,7 +428,7 @@ pub fn offset_label(offset: i64) -> String {
     }
 }
 
-fn fmt_pct(value: Option<f64>) -> String {
+pub(crate) fn fmt_pct(value: Option<f64>) -> String {
     value.map_or_else(|| "n/a".into(), |v| format!("{:.1}%", v * 100.0))
 }
 

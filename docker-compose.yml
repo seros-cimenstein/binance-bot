@@ -20,6 +20,8 @@
 #   main-bot-> legacy SMA bot (disabled in production)
 #   listing-sniper-live -> live momentum listing sniper (disabled in production)
 #   gui     -> cryptobot-gui read-only dashboard (also in paper/live/all)
+#   x-collector -> x-camoufox read-only X collector (Phase 43, own image, no bot secrets)
+#   x-insighter -> bb x-insighter paper daemon (Phase 43, needs X_INSIGHTER_ENABLED=true)
 #
 # Claude (omp) auth, once per data dir: either set ANTHROPIC_API_KEY in the env file, or
 #   docker compose run --rm -it claude-spot omp      # then /login inside omp, then exit
@@ -47,7 +49,7 @@ x-base: &base
     # bot-status / cash-distributor / capital-pool read fleet state from the volume.
     BOT_STATUS_DATA_DIR: /app/data
   stop_grace_period: 60s
-  logging:
+  logging: &logging
     driver: json-file
     options:
       max-size: "10m"
@@ -187,6 +189,47 @@ services:
     container_name: main-bot
     profiles: ["main-bot"]
     command: ["bb", "main"]
+
+  # ---------- PHASE 43 X INSIGHTER (paper only, no order path) ----------
+
+  # Read-only X collector (Camoufox) on a burner account. Own image and no env_file:
+  # it never sees the bot's secrets, only X_COLLECTOR_* below. Lists: x-accounts.txt and
+  # x-searches.txt in the data dir. One-time login: collectors/x-camoufox/README.md.
+  x-camoufox:
+    image: binance-bot-x-camoufox:latest
+    build:
+      context: collectors/x-camoufox
+      dockerfile: Dockerfile
+    container_name: x-camoufox
+    profiles: ["x-collector"]
+    restart: unless-stopped
+    volumes:
+      - ${BOT_DATA_DIR:-./docker-data}:/app/data
+    environment:
+      TZ: UTC
+      X_COLLECTOR_DATA_DIR: /app/data
+      X_COLLECTOR_ACCOUNTS_FILE: /app/data/x-accounts.txt
+      X_COLLECTOR_SEARCHES_FILE: /app/data/x-searches.txt
+      X_COLLECTOR_PROFILE_DIR: /app/data/x-camoufox-profile
+      X_COLLECTOR_MAX_PAGES_PER_HOUR: ${X_COLLECTOR_MAX_PAGES_PER_HOUR:-120}
+      X_COLLECTOR_MAX_REPLIES_PER_HOUR: ${X_COLLECTOR_MAX_REPLIES_PER_HOUR:-400}
+      X_COLLECTOR_POLL_SECONDS: ${X_COLLECTOR_POLL_SECONDS:-300}
+      X_COLLECTOR_FOCUS_POLL_SECONDS: ${X_COLLECTOR_FOCUS_POLL_SECONDS:-180}
+      X_COLLECTOR_HEADLESS: ${X_COLLECTOR_HEADLESS:-true}
+    # Firefox needs more shared memory than Docker's 64 MB default.
+    shm_size: "1gb"
+    stop_grace_period: 30s
+    logging: *logging
+
+  # Phase 43 engine: reads the collector files, scores traction, asks Claude Haiku via omp
+  # (same image, data volume and omp credentials under /app/data/omp-agent as claude-spot)
+  # and writes paper signals. Set X_INSIGHTER_ENABLED=true in the env file; while it is
+  # unset the daemon exits with a message.
+  x-insighter:
+    <<: *base
+    container_name: x-insighter
+    profiles: ["x-insighter"]
+    command: ["bb", "x-insighter", "--daemon"]
 
   # ---------- DASHBOARD ----------
 

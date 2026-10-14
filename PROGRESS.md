@@ -5,6 +5,108 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-14: Deployed the bb-trader failover to the Pi (source rsynced, image
+  built on the Pi; rollback tags `binance-bot:pre-fallback-20261013` and
+  `binance-bot:fallback-v1-20261014`; `.env.docker` backup
+  `.env.docker.bak-20261013-prefallback`; `.env.docker` now has
+  `CLAUDE_SPOT_FALLBACK_MODELS=openai-codex/gpt-6.1-sol:low`). Overnight before
+  the deploy, omp's own fallback kept the old binary running: 119 cycles, 0
+  timeouts, 7 routes (LDO, OP, PENDLE round trips; FIL bought 04:42, sold
+  05:00); wallet $19.02 -> $18.61. First start on the new binary stalled:
+  the session had grown on gpt-6.1-sol's larger window and resumed on Haiku
+  at 130% of its 100K window; compacting on Haiku hung for omp's 600s
+  compaction timeout, then the trader moved on and the 05:00 cycle completed
+  on gpt-6.1-sol (audit `model` field correct). Fix: a context at or above
+  100% of the current model's window is compacted on the next fallback
+  first, and trader compactions are capped at 180s (`COMPACT_TIMEOUT`).
+  Test `context_over_the_primary_window_compacts_on_the_fallback_first`;
+  bb-trader 66 tests and clippy pass.
+- 2026-10-13 (later): bb-trader-owned model failover for Claude Spot (repo
+  only, not deployed). New env: `CLAUDE_SPOT_FALLBACK_MODELS`
+  (`provider/model-id[:thinking]` list, default empty = unchanged behavior),
+  `CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS` (150), `CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS`
+  (1800), `CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3). A turn that times out,
+  errors, crashes or ends rate/usage-limited is retried once per remaining
+  model (`set_model` + `set_thinking_level`), never when the failed attempt
+  called `execute_route` (omp tool events or the bot's own host-call counter)
+  or recorded `end_cycle`, or on shutdown; an unsettled turn is aborted and
+  checked idle first. A failed compaction switches to the next model and
+  compacts there. After the cooldown the next cycle returns to the primary,
+  compacting on the fallback first when the context exceeds the primary's
+  window threshold. Cycle rows now record the model that produced the final
+  assistant message (also when omp's own `retry.fallbackChains` switched),
+  failed `attempts` and `fallback_active` (additive fields); a turn that
+  failed on every model holds with "brain unavailable on all models (no
+  orders placed)". Telegram notices after the audit row: switch to a fallback,
+  back on primary, and one brain-down alert after N consecutive all-model
+  failures (counter `brain_down_cycles` in the agent state file).
+  Verification: `cargo clippy --workspace --all-targets -- -D warnings` and
+  `cargo test --workspace` passed (bb-trader 65 tests, incl. new failover,
+  route-blocks-retry, cooldown return, compaction failover, no-fallback,
+  all-models-failed, config and brain-down tests). To enable on the Pi: set
+  `CLAUDE_SPOT_FALLBACK_MODELS=openai-codex/gpt-6.1-sol:low`.
+- 2026-10-13 (later): Claude Spot outage and fallback. From 17:24 UTC every
+  cycle held with "Claude timed out after 300s": the Pi's single Anthropic
+  login (user) was at 100% of its 5h and 97% of its 7d usage, so
+  compaction and turns got 429s. No orders were affected (a timeout holds).
+  Fix, live on the Pi: a separate Codex device login (serefcimen15, Plus) in
+  the container's omp store, and `docker-data/omp-agent/config.yml` with
+  `retry.fallbackChains: anthropic/claude-haiku-5-5 -> openai-codex/gpt-6.1-sol:low`
+  plus `usageAwareFallback`. `CODEX.md` records the operator decision.
+  Verified: `omp -p` on the fallback model from the container answered; after
+  `docker compose restart claude-spot` the 19:32 UTC cycle completed on
+  gpt-6.1-sol (session JSONL: Haiku 429 error, `model_change`, completed).
+  Still open: compaction keeps failing on Haiku (context 90%), the audit row
+  records the configured model instead of the one that answered, and no
+  alert fires when the brain is down; a bb-trader-level fallback is being
+  built for these. Note: the Pi's Anthropic login is shared with workstation
+  omp use, so heavy agent work here drains the trader's quota.
+- 2026-10-13 (later): Phase 43 collector verified against live X with a
+  burner account (`--login` headful on the workstation, profile in
+  `~/.local/share/x-collector-live/`). Real runs: searches (20 + 19 posts),
+  `$WIF` focus search (19), `@solana` timeline (28), engagement re-read and
+  20 sampled replies/quotes, all with real follower counts and account ages;
+  `bb x-insighter --once` on the 110 real posts resolved `$WIF` to Binance at
+  tier watch. Two X changes found and fixed: user counters moved to
+  `relationship_counts.followers` (followers were all 0), and the profile
+  query is now `UserOriginalsTimeline` (was `UserTweets`; both accepted).
+  Trimmed, author-redacted real payloads now back the parser tests
+  (`tests/fixtures/real_*.json`, `test_parse_real.py`; collector pytest 86
+  passed). The guard blocks only X's own telemetry POSTs (`flow/viewer`,
+  `viewer_context`, push-permission PUT, `promoted_content/log`); pages still
+  render. Side effect: the first launch had no browser installed and camoufox
+  cleaned `~/.cache/camoufox`; it now holds 156.0.1-beta.36, the build every
+  local camoufox project pins (0.5.8). Still open: Pi 5 arm64 build.
+- 2026-10-13 (later): Phase 43 built, paper only, not yet deployed. Gate 0
+  closed: venue = both (Binance Spot and Solana, scored and gated
+  separately), and `docs/signals/x-insighter-design.md` pre-registers schemas,
+  traction/exhaustion formulas, exits, friction and the gate, plus a dated
+  "Implementation clarifications" section fixed before any data. Added:
+  - `collectors/x-camoufox/` (uv, `camoufox[geoip]==0.5.8`): read-only
+    GraphQL-intercepting collector; request filter aborts every non-GET X API
+    call and DM/bookmark/notification reads; pacing, backoff, heartbeat.
+  - `bb-signals` `x_insighter`: `bb x-insighter` engine (resolution, features,
+    traction, tiers/focus, exhaustion, rug precursors, Haiku via omp with
+    `submit_verdict` validation, thinking off, daily cost cap), `bb
+    x-insighter-snapshotter` (Binance + Solana), `bb x-insighter-report`
+    (paper exits, ablation, exit quality, per-venue gate).
+  - `cryptobot-gui` Signals tab (`/api/signals`, read-only).
+  - Compose profiles `x-collector` / `x-insighter`, crontab lines (inert
+    without signals), `.env.example` entries; `X_INSIGHTER_ENABLED=false`
+    by default.
+  Verified: `cargo clippy --workspace --all-targets -- -D warnings` clean;
+  `cargo test --workspace` 932 passed; collector `uv run pytest` 82 passed;
+  smoke on synthetic posts: `bb x-insighter --once` against live public
+  Binance data resolved BONK/WIF (PEPE/DOGE excluded as top-20 volume, junk
+  tag unresolved), emitted hot signals, real Haiku verdicts via omp flagged
+  the templated burst as coordinated (~$0.023/call with thinking off, so the
+  $0.50 cap allows ~20 calls/day); snapshotter wrote Binance +5m rows; report
+  wrote md + latest.json; GUI parsed the real output. Not verified: real X
+  traffic/login under the request filter, arm64 build on the Pi 5.
+  Next: build the collector image on the Pi, `--login` the burner account,
+  write `x-accounts.txt` / `x-searches.txt`, enable both profiles with
+  `X_INSIGHTER_ENABLED=true`, run the 7-day burn-in, then set
+  `X_INSIGHTER_FREEZE_DATE` (design doc "Burn-in and freeze").
 - 2026-10-13: Planned Phase 43 (X pre-pump signal insighter: Camoufox
   collector, traction scoring with watch -> focus -> hot escalation, Haiku
   stage and exhaustion calls, exhaustion scale-out exits; paper-evaluated
@@ -40,8 +142,14 @@ the durable roadmap and use this file for the current working state.
   `cargo test --workspace` (870 passed), and a browser smoke run against a
   copy of the local data dir (no Binance credentials, so the wallet panel
   was empty). Note: the entries below predate the Rust port and still
-  cite Python modules and pytest commands.
-- 2026-05-30: Phase 43 calibration landed. Replaced the "hyper-aggressive"
+  cite Python modules and pytest commands. Their "Phase 43" / "Phase 44"
+  labels are not the roadmap phases of those numbers, and the Claude Spot
+  gates they describe (`CLAUDE_SPOT_PROVEN_EDGE`, `CLAUDE_SPOT_DECISION_MODE`
+  rules engine, friction caps) were later removed by operator decision; their
+  env vars are ignored (`crates/bb-trader/src/config.rs`). `CODEX.md` is
+  authoritative.
+- 2026-05-30: Legacy Python Claude Spot calibration (labelled "Phase 43" at
+  the time; not roadmap Phase 43) landed. Replaced the "hyper-aggressive"
   mission and "holding is for cowards" framing with a cost-aware mission,
   removed the `override_bps_limits` decision field and its bypass of the
   market-evidence gate, tightened `allow_negative_friction_bps` default
@@ -70,7 +178,9 @@ the durable roadmap and use this file for the current working state.
   stopped pending an explicit operator decision; even if restarted, the
   `CLAUDE_SPOT_PROVEN_EDGE` gate keeps live submission blocked until a
   positive backtest exists.
-- 2026-05-30: Phase 44 — funding-rate harvest research, runtime, and
+- 2026-05-30: Legacy Python funding-rate harvest (labelled "Phase 44" at the
+  time; not in the roadmap; since ported as `bb funding-arb` in
+  `crates/bb-strategies`) — research, runtime, and
   live executor. Added `src/funding_arb_backtest.py` (delta-neutral
   replay), `src/funding_arb.py` (settings, state, deterministic
   open/close/hold advisor, plan-only / paper / live cycle), and

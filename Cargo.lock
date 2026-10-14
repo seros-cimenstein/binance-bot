@@ -516,7 +516,9 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bb-binance",
  "bb-core",
+ "bb-omp",
  "chrono",
  "clap",
  "glass_pumpkin",
@@ -533,6 +535,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
  "wiremock",
 ]
@@ -1002,6 +1005,7 @@ dependencies = [
  "bb-binance",
  "bb-capital",
  "bb-core",
+ "bb-signals",
  "bb-trader",
  "chrono",
  "clap",

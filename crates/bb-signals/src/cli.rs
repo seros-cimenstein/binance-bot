@@ -58,6 +58,20 @@ pub enum Command {
         #[arg(long)]
         date: Option<String>,
     },
+    /// Run the Phase 43 X pre-pump insighter loop (paper only; needs X_INSIGHTER_ENABLED=true).
+    XInsighter(DaemonArgs),
+    /// Capture due Phase 43 x-signal snapshots (Binance and Solana).
+    XInsighterSnapshotter {
+        /// Accepted for cron readability (the command always runs once).
+        #[arg(long)]
+        once: bool,
+    },
+    /// Write the Phase 43 weekly paper report and gate verdict.
+    XInsighterReport {
+        /// Report date, defaults to UTC today.
+        #[arg(long)]
+        date: Option<String>,
+    },
 }
 
 const DEXSCREENER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -131,6 +145,15 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
             let report_date = date.unwrap_or_else(|| bb_core::time::utc_date(bb_core::time::now()));
             let path = crate::v2_report::generate(&settings, &report_date, now_ms)?;
             tracing::info!(path = %path.display(), "Wrote V2 signal report");
+        }
+        Command::XInsighter(args) => {
+            return crate::x_insighter::engine::run_cli(args.once).await;
+        }
+        Command::XInsighterSnapshotter { once: _ } => {
+            crate::x_insighter::snapshots::run_cli().await?;
+        }
+        Command::XInsighterReport { date } => {
+            crate::x_insighter::report::run_cli(date).await?;
         }
     }
     Ok(ExitCode::SUCCESS)

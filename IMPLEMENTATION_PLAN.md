@@ -774,11 +774,14 @@ Gate 0, decisions before code:
   Phase 35 "no browser automation for X" rule: read-only, burner account, no
   posting or engaging. The operator owns the X Terms of Service risk,
   burner-account bans and login challenges.
-- [ ] Pick the target venue first, because it decides the market join:
+- [x] Pick the target venue first, because it decides the market join:
   Binance Spot-listed coins (tradeable through the existing executor) or
   on-chain Solana launches (DexScreener / Jupiter; needs a Solana wallet the
-  bot cannot fund, since withdrawals stay hard-blocked).
-- [ ] Pre-register the success criteria and friction model in
+  bot cannot fund, since withdrawals stay hard-blocked). Operator decision
+  (2026-10-13): both, paper-scored side by side. Each token resolves to
+  whichever market exists, every report and the gate are split per venue, and
+  the execution phase still picks one venue.
+- [x] Pre-register the success criteria and friction model in
   `docs/signals/x-insighter-design.md` before collecting data.
 
 Collector:
@@ -787,51 +790,53 @@ Collector:
   Python/Playwright only) in its own container and compose profile
   `x-collector`, outside the `bb` image (the browser is ~650 MB). Pin a
   known-good Camoufox release and verify the `lin.arm64` binary on the Pi 5
-  (64-bit OS; the 16 KB-page kernel may need `kernel8.img`).
-- [ ] Sources: a curated account list (callers, KOLs, launchpad trackers) plus
+  (64-bit OS; the 16 KB-page kernel may need `kernel8.img`). Built and pinned
+  (`camoufox[geoip]==0.5.8`, browser 156.0.1-beta.36; image built and
+  launched on amd64, 2026-10-13). Open: arm64 build and run on the Pi 5.
+- [x] Sources: a curated account list (callers, KOLs, launchpad trackers) plus
   cashtag and contract-address searches. Dedicated burner account with its
   session on the data volume; jittered polling, a hard pages-per-hour cap,
   backoff on login walls and rate limits, and a heartbeat for the dashboard.
-- [ ] Append-only `data/x-posts.jsonl` in `bb-social`'s privacy-reduced shape:
+- [x] Append-only `data/x-posts.jsonl` in `bb-social`'s privacy-reduced shape:
   hashed author id (public handle kept only for curated accounts), excerpt,
   cashtags, Solana/EVM contract addresses, author follower count and account
   age, post time, first-seen time, and every visible engagement meter:
   replies, reposts, quotes, likes, bookmarks and views.
-- [ ] Engagement re-sampling: re-read the counters of each focused coin's top
+- [x] Engagement re-sampling: re-read the counters of each focused coin's top
   posts on a schedule (e.g. +5m, +15m, +30m, +1h, +3h) into
   `data/x-engagement.jsonl`, so the meters become velocities instead of one
   snapshot.
-- [ ] Reply and quote sampling for focused coins: collect the newest replies
+- [x] Reply and quote sampling for focused coins: collect the newest replies
   and quote posts under their top posts (capped per post and per hour), with
   each replier's hashed id, follower count and account age, for the reply
   quality checks below.
 
 Features:
 
-- [ ] Rust aggregator in `bb-signals` that turns posts into per-token windows:
+- [x] Rust aggregator in `bb-signals` that turns posts into per-token windows:
   mention velocity and acceleration (5m vs 1h baseline), unique authors,
   curated-author hits, engagement velocity, first-seen time, and coordination
   flags (near-duplicate text, fresh accounts, same-minute bursts).
-- [ ] Resolve each token to a market (Binance symbol, or Solana mint via
+- [x] Resolve each token to a market (Binance symbol, or Solana mint via
   DexScreener) and attach a detection-time snapshot: price, liquidity,
   volume, FDV, pair age, 5m/1h change, so "already pumped" is visible.
 
 Haiku insighter:
 
-- [ ] Claude Haiku through omp RPC with no tools, run only on candidate
+- [x] Claude Haiku through omp RPC with no tools, run only on candidate
   windows that pass deterministic pre-filters, never on every post. Strict
   JSON out: token, catalyst type, narrative summary, traction stage,
   exhaustion flags, shill / bot / coordination risk, rug red flags,
   conviction 0-1, reasons.
-- [ ] Post text is untrusted data in the prompt (prompt injection via tweets).
-- [ ] Hard daily cost cap `X_INSIGHTER_MAX_DAILY_LLM_COST_USD` (default 0.50);
+- [x] Post text is untrusted data in the prompt (prompt injection via tweets).
+- [x] Hard daily cost cap `X_INSIGHTER_MAX_DAILY_LLM_COST_USD` (default 0.50);
   log tokens and cost per call.
-- [ ] Append each scored candidate to `data/x-signals.jsonl`: detection id,
+- [x] Append each scored candidate to `data/x-signals.jsonl`: detection id,
   features, market snapshot, Haiku verdict, prompt version.
 
 Traction, focus and exhaustion:
 
-- [ ] Traction score per coin, recomputed every window and kept as history in
+- [x] Traction score per coin, recomputed every window and kept as history in
   `data/x-traction.jsonl`. Social side: mention velocity and acceleration,
   unique-author growth, spread from small to large accounts, curated-author
   hits, and the engagement meters as velocities: reply, repost, quote, like,
@@ -840,22 +845,22 @@ Traction, focus and exhaustion:
   discount meters from fresh or follower-less accounts. Market side: price,
   volume and liquidity trend, plus holder growth for Solana mints when
   cheaply available.
-- [ ] Reply quality, scored by Haiku on the sampled replies: organic
+- [x] Reply quality, scored by Haiku on the sampled replies: organic
   (questions, real discussion, distinct repliers) vs bot / shill ("LFG",
   rocket spam, copy-paste, fresh accounts) vs warnings ("rug", "honeypot",
   "can't sell", "dev sold"). Report the organic share and any warnings per
   coin; a high organic share strengthens traction, a high bot share does not
   count toward it.
-- [ ] Haiku labels the traction stage on every re-score: `ignition` (first
+- [x] Haiku labels the traction stage on every re-score: `ignition` (first
   credible mentions), `building` (accelerating, broadening authors), `peak`
   (euphoria, saturation) or `fading`, with the reasons it saw. Stage changes
   are logged.
-- [ ] Focus escalation: coins move watch -> focus -> hot as traction rises.
+- [x] Focus escalation: coins move watch -> focus -> hot as traction rises.
   Focused coins get targeted cashtag / contract searches every few minutes,
   1-minute market snapshots and a Haiku re-score on material change; they
   drop back when traction fades. Cap the focused set (e.g. 5 coins) and its
   Haiku spend so attention goes to the strongest few.
-- [ ] Exhaustion ("too much traction") detector as the assumed peak: mention
+- [x] Exhaustion ("too much traction") detector as the assumed peak: mention
   velocity turning down after a spike, engagement saturating (likes and
   reposts flattening while views keep climbing, replies-to-likes shifting
   toward complaints or argument), late-stage spread (large generic accounts,
@@ -865,7 +870,7 @@ Traction, focus and exhaustion:
   precursors where available (liquidity pulled, LP unlocked, dev or
   top-holder wallets selling, concentration rising). Output an exhaustion
   score with the flags that triggered it.
-- [ ] Deterministic exit rules, with Haiku as one input: scale out as the
+- [x] Deterministic exit rules, with Haiku as one input: scale out as the
   exhaustion score crosses thresholds (e.g. half at the first, the rest at
   the second), exit in full on any rug precursor, and keep trailing, hard and
   time stops as backstops. "Assumed peak" means the exhaustion signal; the
@@ -873,16 +878,16 @@ Traction, focus and exhaustion:
 
 Evaluation, paper only:
 
-- [ ] Snapshot every x-signal with the V2 snapshotter at +5m, +15m, +1h, +6h,
+- [x] Snapshot every x-signal with the V2 snapshotter at +5m, +15m, +1h, +6h,
   +24h, +3d and +7d (price, liquidity, pair existence).
-- [ ] Weekly report: lead time (signal before or after the move), hit rate
+- [x] Weekly report: lead time (signal before or after the move), hit rate
   (+X% before -Y% within 6h), rug rate, path returns, and friction-adjusted
   paper P&L under scheduled exits and rule exits (take-profit ladder,
   trailing stop, time stop). "Sold at the peak" is shown only as an upper
   bound, never as expected return.
-- [ ] Ablation: deterministic features alone vs features plus Haiku's
+- [x] Ablation: deterministic features alone vs features plus Haiku's
   verdict, so Haiku has to earn its cost.
-- [ ] Exit quality: peak capture ratio (realized gain / best gain available
+- [x] Exit quality: peak capture ratio (realized gain / best gain available
   from entry), how often the exhaustion exit fired before vs after the actual
   peak, how often it got out before the rug proxy, and exhaustion exits vs a
   trailing-stop-only baseline on the same signals.
@@ -892,10 +897,12 @@ Evaluation, paper only:
   before a +30% move; exhaustion exits beat the trailing-stop-only baseline
   after friction. Friction: the audit's >= 7.2% round trip for ~$15 on
   Solana, or authenticated taker fees plus spread for Binance-listed coins.
+  The weekly report computes this verdict per venue; it stays open until the
+  data passes it (needs `X_INSIGHTER_FREEZE_DATE` set after burn-in).
 
 Dashboard:
 
-- [ ] `cryptobot-gui` Signals tab: live candidates with Haiku's take, the
+- [x] `cryptobot-gui` Signals tab: live candidates with Haiku's take, the
   focused coins with their traction curve, stage changes and exhaustion
   score, collector health, hit and rug rates, the weekly report and the
   paper equity curve.

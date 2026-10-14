@@ -367,6 +367,19 @@ Cost control (not a trading gate): `CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD`
 `anthropic/claude-haiku-5-5`; use provider-qualified ids, a bare `haiku-5.5`
 can resolve to another provider), `CLAUDE_SPOT_THINKING` (default `high`).
 
+Model failover: `CLAUDE_SPOT_FALLBACK_MODELS` (comma list of
+`provider/model-id[:thinking]`, default empty = off; the approved fallback is
+`openai-codex/gpt-6.1-sol:low`), `CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS` (150,
+primary per-attempt timeout while fallbacks exist),
+`CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS` (1800) and
+`CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3, 0 = never). A failed turn is retried
+on the next model only when the failed attempt made no `execute_route` call
+and recorded no `end_cycle`; a failed compaction moves to the next model and
+compacts there. Model switches and brain outages are Telegram notices sent
+after the cycle's audit row; they change nothing in the hard-safety list
+below. A turn that failed on every model holds with
+`brain unavailable on all models (no orders placed)` as its reason.
+
 ### Hard safety (always on, fail closed)
 
 - Live arming: `CLAUDE_SPOT_ENABLED=true`,

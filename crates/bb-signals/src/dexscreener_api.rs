@@ -58,6 +58,25 @@ impl DexScreenerApi {
         }
     }
 
+    /// `GET /latest/dex/search?q=<query>`: object entries of `pairs` (all chains).
+    pub async fn search_pairs(&self, query: &str) -> Result<Vec<Object>, SignalsError> {
+        let base = format!("{}/latest/dex/search", self.base_url);
+        let url = reqwest::Url::parse_with_params(&base, &[("q", query)])
+            .map_err(|e| SignalsError::Malformed(format!("DexScreener search url: {e}")))?;
+        let Value::Object(mut data) = self.get_json(url.as_str()).await? else {
+            return Err(SignalsError::Malformed(
+                "DexScreener search response was not an object".into(),
+            ));
+        };
+        match data.remove("pairs") {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(items)) => Ok(objects(items)),
+            Some(_) => Err(SignalsError::Malformed(
+                "DexScreener search pairs list malformed".into(),
+            )),
+        }
+    }
+
     async fn get_json(&self, url: &str) -> Result<Value, SignalsError> {
         let resp = self
             .http
@@ -69,5 +88,37 @@ impl DexScreenerApi {
         resp.json::<Value>()
             .await
             .map_err(|e| SignalsError::http(url, e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn search_pairs_encodes_query_and_tolerates_null_pairs() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/latest/dex/search"))
+            .and(query_param("q", "PEPE"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "schemaVersion": "1.0.0",
+                "pairs": [{"chainId": "solana", "baseToken": {"symbol": "PEPE"}}, 7]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/latest/dex/search"))
+            .and(query_param("q", "$NONE&x"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"pairs": null})))
+            .mount(&server)
+            .await;
+        let api = DexScreenerApi::with_base_url(reqwest::Client::new(), server.uri());
+        let pairs = api.search_pairs("PEPE").await.unwrap();
+        assert_eq!(pairs.len(), 1);
+        assert!(api.search_pairs("$NONE&x").await.unwrap().is_empty());
     }
 }

@@ -79,6 +79,16 @@ driven project.
   tools; `execute_route` is the only order path. Claude Spot must not call
   margin, futures, universal-transfer, withdrawal, or prediction write
   endpoints.
+- Claude Spot model fallback (operator decision 2026-10-13): when the primary
+  model (`CLAUDE_SPOT_MODEL`, `anthropic/claude-haiku-5-5`) is rate- or
+  usage-limited, omp may switch that turn to `openai-codex/gpt-6.1-sol` with
+  thinking `low` (`retry.fallbackChains` in the Pi's
+  `omp-agent/config.yml`) and returns to the primary when its cooldown ends.
+  The fallback model is the trader for that turn: the same host tools, the
+  same `execute_route` path and every hard-safety item below apply unchanged.
+  The fallback uses its own Codex login on the Pi (device flow), not a copied
+  token. Adding another fallback model or provider needs a new operator
+  decision.
 - Claude Spot has no trading guardrails, by operator decision. The edge /
   market-evidence minimum, friction cap, speculative mode, loss-streak limit,
   trade cooldown, daily trade cap, proven-edge gate, rules-engine decision mode,

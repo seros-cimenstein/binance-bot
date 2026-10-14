@@ -27,6 +27,11 @@
 # TODO Phase 2 enable on Pi: V2 weekly evaluation report — Sundays 00:45 UTC.
 # 45  0  *  *  0      cd /app && bb signals-v2-report
 
+# Phase 43 X insighter (paper only): x-signal snapshots every minute, weekly report +
+# gate verdict Sundays 01:00 UTC. Inert until the x-insighter daemon writes signals.
+*  *  *  *  *        cd /app && bb x-insighter-snapshotter --once
+0  1  *  *  0        cd /app && bb x-insighter-report
+
 # Daily SQLite backups — 23:15 / 23:30 UTC (~ 02:15 / 02:30 Europe/Istanbul next day)
 15  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=14 bash scripts/backup_db.sh
 30  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=35 BINANCE_BOT_DB_SETTING_KEY=POOL_DB_PATH BINANCE_BOT_DB_DEFAULT_PATH=data/pool-paper.db bash scripts/backup_db.sh

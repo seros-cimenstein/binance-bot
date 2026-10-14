@@ -1,6 +1,6 @@
 [package]
 name = "bb-signals"
-description = "Token signal detectors: DexScreener, smart-money wallets, Telegram channels, V2 launch snapshots and reports."
+description = "Token signal detectors: DexScreener, smart-money wallets, Telegram channels, V2 launch snapshots and reports, X pre-pump insighter."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,9 @@ workspace = true
 
 [dependencies]
 bb-core.workspace = true
+bb-binance.workspace = true
+bb-omp.workspace = true
+tokio-util.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 serde.workspace = true

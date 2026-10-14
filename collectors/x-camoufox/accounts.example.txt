@@ -1,0 +1,14 @@
+# Curated X accounts for the Phase 43 collector: one handle per line, with or
+# without "@". Lines starting with "#" are comments.
+#
+# EXAMPLES ONLY. Replace every line below with launch-tracker / early-call
+# accounts you have vetted yourself, then save the file as
+# ${BOT_DATA_DIR}/x-accounts.txt (or point X_COLLECTOR_ACCOUNTS_FILE at it).
+# Handles of curated accounts are the only handles the collector stores.
+#
+# Pacing: every account is one page load per poll (default every 5 min +20-40%
+# jitter) and all page loads share X_COLLECTOR_MAX_PAGES_PER_HOUR=120, so keep
+# accounts + searches to roughly 10 lines.
+example_launch_tracker
+example_dex_alerts
+example_onchain_caller

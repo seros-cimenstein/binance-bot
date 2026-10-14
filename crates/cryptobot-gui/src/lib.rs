@@ -11,6 +11,8 @@
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
 //! - `GET /api/fleet`: `bb bot-status --json` bots (activity, trades, P&L).
+//! - `GET /api/signals`: Phase 43 X insighter (paper only): collector health, focus, traction
+//!   curves, Haiku takes, recent signals and the weekly report ([`signals`]).
 //!
 //! Every request must address `localhost`, `127.0.0.1` or `[::1]` in its `Host` header, so a
 //! web page that rebinds its DNS name to 127.0.0.1 cannot read the data.
@@ -18,6 +20,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod history;
+pub mod signals;
 pub mod wallet;
 
 use std::path::PathBuf;
@@ -32,6 +35,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use bb_binance::BinanceClient;
 use bb_capital::status::{collect_snapshot, render_json};
+use bb_signals::x_insighter::schema::XPaths;
 use bb_trader::audit::failed_route_halt;
 use bb_trader::config::{
     DEFAULT_AUDIT_PATH, DEFAULT_JOURNAL_PATH, DEFAULT_STATE_PATH, DEFAULT_STOP_PATH,
@@ -41,6 +45,7 @@ use bb_trader::memory::load_audit_rows;
 use serde_json::{Value, json};
 
 use crate::history::{ParsedAudit, build_trades, parse_audit};
+use crate::signals::SignalsCache;
 use crate::wallet::WalletView;
 
 /// Newest cycle summaries sent to the page.
@@ -64,7 +69,8 @@ pub struct ClaudeSpotFiles {
 impl ClaudeSpotFiles {
     /// From `CLAUDE_SPOT_{AUDIT,JOURNAL,STATE,STOP}_PATH`.
     pub fn from_env() -> Self {
-        let path = |name: &str, default: &str| PathBuf::from(bb_core::env::string(&[name], default));
+        let path =
+            |name: &str, default: &str| PathBuf::from(bb_core::env::string(&[name], default));
         Self {
             audit_path: path("CLAUDE_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
             journal_path: path("CLAUDE_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
@@ -93,16 +99,25 @@ pub struct AppState {
     /// Held across the Binance read so concurrent requests share one fetch.
     wallet_cache: tokio::sync::Mutex<Option<(Instant, Arc<WalletView>)>>,
     audit_cache: Mutex<Option<AuditCache>>,
+    /// Phase 43 files, in the fleet data dir.
+    x_paths: XPaths,
+    signals_cache: Mutex<SignalsCache>,
 }
 
 impl AppState {
-    pub fn new(data_dir: PathBuf, claude_spot: ClaudeSpotFiles, client: Option<BinanceClient>) -> Self {
+    pub fn new(
+        data_dir: PathBuf,
+        claude_spot: ClaudeSpotFiles,
+        client: Option<BinanceClient>,
+    ) -> Self {
         Self {
+            x_paths: XPaths::in_dir(&data_dir),
             data_dir,
             claude_spot,
             client,
             wallet_cache: tokio::sync::Mutex::new(None),
             audit_cache: Mutex::new(None),
+            signals_cache: Mutex::new(SignalsCache::default()),
         }
     }
 
@@ -123,7 +138,10 @@ impl AppState {
         let meta = std::fs::metadata(path).ok();
         let len = meta.as_ref().map_or(0, std::fs::Metadata::len);
         let modified = meta.as_ref().and_then(|m| m.modified().ok());
-        let mut cache = self.audit_cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut cache = self
+            .audit_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if let Some(hit) = cache.as_ref()
             && hit.len == len
             && hit.modified == modified
@@ -138,6 +156,14 @@ impl AppState {
         });
         parsed
     }
+
+    fn signals(&self) -> Value {
+        let mut cache = self
+            .signals_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        signals::signals_view(&mut cache, &self.x_paths, bb_core::time::now_ms())
+    }
 }
 
 /// The dashboard: GET routes only, behind the localhost `Host` check.
@@ -148,6 +174,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/history", get(history_handler))
         .route("/api/wallet", get(wallet_handler))
         .route("/api/fleet", get(fleet))
+        .route("/api/signals", get(signals_handler))
         .layer(middleware::from_fn(localhost_only))
         .with_state(Arc::new(state))
 }
@@ -218,6 +245,10 @@ async fn fleet(State(app): State<Arc<AppState>>) -> Response {
     json_response(view)
 }
 
+async fn signals_handler(State(app): State<Arc<AppState>>) -> Response {
+    blocking_json(move || app.signals()).await
+}
+
 async fn blocking_json(work: impl FnOnce() -> Value + Send + 'static) -> Response {
     match tokio::task::spawn_blocking(work).await {
         Ok(view) => json_response(view),
@@ -283,7 +314,11 @@ pub fn status_view(files: &ClaudeSpotFiles) -> Value {
 
 /// Trades (oldest first) with open positions marked from the wallet.
 pub fn history_view(audit: &ParsedAudit, wallet: &WalletView) -> Value {
-    let trades = build_trades(&audit.routes, |asset| wallet.mark(asset), bb_core::time::now());
+    let trades = build_trades(
+        &audit.routes,
+        |asset| wallet.mark(asset),
+        bb_core::time::now(),
+    );
     json!({
         "trades": trades,
         "failed_routes": audit.failed,
@@ -357,7 +392,12 @@ mod tests {
 
         assert_eq!(view["stop_active"], json!(true));
         assert!(view["halt"].as_str().unwrap().contains("operator review"));
-        let cycles: Vec<&Value> = view["cycles"].as_array().unwrap().iter().map(|c| &c["timestamp"]).collect();
+        let cycles: Vec<&Value> = view["cycles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| &c["timestamp"])
+            .collect();
         assert_eq!(cycles, [&json!("t4"), &json!("t2")]);
     }
 

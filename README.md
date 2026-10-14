@@ -109,12 +109,28 @@ Choose the model and thinking level with `CLAUDE_SPOT_MODEL` (default
 `anthropic/claude-haiku-5-5`; always use provider-qualified ids) and
 `CLAUDE_SPOT_THINKING` (default `high`).
 
+Model failover (bot-owned, independent of omp's `retry.fallbackChains`):
+`CLAUDE_SPOT_FALLBACK_MODELS` is a comma list of `provider/model-id[:thinking]`
+(default empty = no failover). While fallbacks exist the primary gets
+`CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS` (150) per attempt. A turn that times
+out, errors, crashes or hits a rate/usage limit is retried once per remaining
+model, but never when the failed attempt called `execute_route` (orders may
+exist) or already recorded `end_cycle`; a failed compaction also moves to the
+next model. After `CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS` (1800) the next
+cycle returns to the primary, compacting first if the context exceeds the
+primary's window threshold. Cycle rows record the model that produced the
+outcome, the failed `attempts` and `fallback_active`. Telegram gets one
+message per switch to a fallback (also when omp switched by itself), one when
+back on the primary, and one when `CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3)
+consecutive cycles failed on every model (counter persisted in the agent state
+file).
+
 omp needs Claude credentials: either `ANTHROPIC_API_KEY`, or a one-time
 interactive `omp` login (stored under `PI_CODING_AGENT_DIR`).
 
 ## Dashboard (`cryptobot-gui`)
 
-A read-only web page for the fleet, in five tabs that refresh every 30 s:
+A read-only web page for the fleet, in six tabs that refresh every 30 s:
 
 - **Overview:** portfolio value and 24h change, Claude's P&L and win rate, the
   open position, Claude's status (running / idle / stopped by the stop file /
@@ -130,6 +146,12 @@ A read-only web page for the fleet, in five tabs that refresh every 30 s:
 - **Claude:** cycles with Claude's summaries, tool calls and cost, and its
   journal.
 - **Fleet:** every bot from `bb bot-status` with activity and P&L.
+- **Signals:** the Phase 43 X insighter (paper only): collector health (stale
+  after 5 min without a heartbeat), the focus list, 6h traction and exhaustion
+  curves of focus/hot tokens with stage changes and the latest Haiku take, the
+  newest 50 signals, and the weekly report (per-venue hit, rug and late rates,
+  lead time, arm P&L, gate criteria, paper equity curve). It reads the `x-*`
+  files in `--data-dir`; the growing JSONL files are tailed incrementally.
 
 Trade results come from the route quotes the trader logs: each submitted route
 opens a trade in the coin it bought, which closes when Claude later sells that
@@ -148,9 +170,10 @@ ssh -L 8787:localhost:8787 <bot-host>          # view a remote box from your lap
 
 - **Read-only.** GET routes only. It reads the Claude Spot files
   (`CLAUDE_SPOT_AUDIT_PATH`, `_JOURNAL_PATH`, `_STATE_PATH`, `_STOP_PATH`,
-  relative to the working directory like the trader), the fleet files under
-  `BOT_STATUS_DATA_DIR`, and Binance through signed GETs (account, 24h
-  tickers, wallet totals, API-key restrictions; one read is reused for 20 s).
+  relative to the working directory like the trader), the fleet and X
+  insighter files under `BOT_STATUS_DATA_DIR`, and Binance through signed GETs
+  (account, 24h tickers, wallet totals, API-key restrictions; one read is
+  reused for 20 s).
   It never writes a file or calls an order endpoint. Stopping the trader is
   still `touch` on the stop file.
 - **Localhost only.** It listens on `127.0.0.1:8787` (`--bind` /
