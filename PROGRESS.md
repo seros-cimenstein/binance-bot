@@ -5,6 +5,17 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-15: Dashboard reading fixes (operator: truncated details, journal
+  closing by itself). Cause: the 30 s refresh rebuilt the page and the
+  journal's open state lived only on the DOM element. Now long texts
+  (journal, latest journal note, fallback errors) have "Read more / Show
+  less" kept in `ui.expanded` across refreshes; tool rows open to their
+  full arguments (also kept); the refresh is held while text is selected
+  on the page and applied when the selection clears; Cycles and Journal
+  page with "Show older" (30 / 20 at a time; `JOURNAL_LIMIT` 50 -> 150).
+  Checked in Chromium on the Pi mirror: an opened journal entry and tool
+  row stayed open through `load()`, a selection held the rebuild and it
+  ran once cleared. GUI tests 23 passed, clippy clean.
 - 2026-10-15: Dashboard on the Pi's live data (Phase 46, repo + laptop
   only, Pi untouched). Cause of "wallet/Claude/history look unimplemented":
   the `cryptobot-gui` fish command ran the Oct 13 release binary in

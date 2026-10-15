@@ -54,8 +54,8 @@ use crate::wallet::WalletView;
 
 /// Newest cycle summaries sent to the page.
 pub const CYCLE_LIMIT: usize = 120;
-/// Newest journal entries sent to the page.
-pub const JOURNAL_LIMIT: usize = 50;
+/// Newest journal entries sent to the page (it shows 20 and pages through the rest).
+pub const JOURNAL_LIMIT: usize = 150;
 /// How long one Binance wallet read is reused (the page polls every 30 s).
 pub const WALLET_TTL: Duration = Duration::from_secs(20);
 

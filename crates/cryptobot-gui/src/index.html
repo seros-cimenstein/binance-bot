@@ -182,6 +182,11 @@
   .feed-meta .sep { color: var(--faint); }
   .feed-text { white-space: pre-wrap; word-break: break-word; }
   .clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+  .more { border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; font-weight: 500; cursor: pointer; justify-self: start; }
+  .more[hidden] { display: none; }
+  .older { margin: 0; padding: 10px 16px; border: 0; border-top: 1px solid var(--border); background: none; width: 100%; text-align: center;
+           color: var(--accent); font-weight: 500; cursor: pointer; }
+  .older:hover { background: var(--surface-2); }
 
   .quote { padding: 14px 16px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 10px 10px 0;
            white-space: pre-wrap; word-break: break-word; }
@@ -198,6 +203,9 @@
   .tool-list { display: grid; gap: 3px; font-size: 12px; }
   .tool-row { display: grid; grid-template-columns: 18px minmax(110px, max-content) minmax(0, 1fr) auto; gap: 10px; align-items: baseline; }
   .tool-row .args { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tool-row.click { cursor: pointer; }
+  .tool-row.click:hover .args { color: var(--fg); }
+  .tool-row.open .args { white-space: pre-wrap; word-break: break-word; overflow: visible; color: var(--fg); }
   .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .rules { margin: 0; padding-left: 18px; }
@@ -261,7 +269,7 @@ const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/ap
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
-const ui = { tab: "overview", range: "all", hideDust: true, expanded: new Set(), data: {}, errors: {}, loadedAt: null, loading: false };
+const ui = { tab: "overview", range: "all", hideDust: true, expanded: new Set(), shown: {}, pendingRender: false, data: {}, errors: {}, loadedAt: null, loading: false };
 
 // ---------- DOM helpers ----------
 function el(tag, attrs, ...kids) {
@@ -646,9 +654,52 @@ function render() {
   renderHeader();
   const view = document.getElementById("view");
   const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, claude: claudePage, exits: exitsPage, fleet: fleetPage, signals: signalsPage };
+  ui.pendingRender = false;
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
   drawCharts();
+  markOverflow();
+}
+// The refresh rebuilds the page; while the reader has text selected in it, hold the new page
+// back so the selection (and the spot being read) stays put.
+function readingSelection() {
+  const sel = getSelection();
+  return !!sel && !sel.isCollapsed && document.getElementById("view").contains(sel.anchorNode);
+}
+function refreshView() { if (readingSelection()) { ui.pendingRender = true; renderHeader(); } else render(); }
+document.addEventListener("selectionchange", () => { if (ui.pendingRender && !readingSelection()) render(); });
+
+// Long text clamped to 3 lines with a "Read more" toggle. The open state lives in ui.expanded,
+// so the 30 s refresh keeps it; toggling only flips this element, the page is not rebuilt.
+function longText(key, text, cls = "feed-text") {
+  const body = el("div", { class: cls + (ui.expanded.has(key) ? "" : " clamp") }, text);
+  const btn = el("button", { class: "more", type: "button", "data-more": "" }, ui.expanded.has(key) ? "Show less" : "Read more");
+  const flip = (e) => {
+    e.stopPropagation();
+    if (String(getSelection())) return;
+    const open = !ui.expanded.has(key);
+    if (open) ui.expanded.add(key); else ui.expanded.delete(key);
+    body.classList.toggle("clamp", !open);
+    btn.textContent = open ? "Show less" : "Read more";
+  };
+  body.addEventListener("click", flip);
+  btn.addEventListener("click", flip);
+  return el("div", { class: "grid", style: "gap:2px" }, body, btn);
+}
+// Hide "Read more" where the clamped text already fits.
+function markOverflow() {
+  for (const btn of document.querySelectorAll("#view [data-more]")) {
+    const body = btn.previousElementSibling;
+    btn.hidden = body.classList.contains("clamp") && body.scrollHeight <= body.clientHeight + 1;
+  }
+}
+// "Show older" paging for long feeds; the count survives refreshes.
+function shownCount(key, base) { return ui.shown[key] || base; }
+function olderButton(key, base, total) {
+  const shown = shownCount(key, base);
+  if (shown >= total) return null;
+  return el("button", { class: "older", type: "button", onclick: () => { ui.shown[key] = shown + base; render(); } },
+    "Show older (" + Math.min(base, total - shown) + " more of " + (total - shown) + ")");
 }
 
 // ---------- Overview ----------
@@ -695,7 +746,7 @@ function overviewPage() {
       lastCycle.error ? el("div", { class: "neg small" }, lastCycle.error) : null,
       status.journal && status.journal[0] ? el("div", { class: "grid", style: "gap:4px;margin-top:4px" },
         el("div", { class: "small muted" }, "Latest journal note · " + ago(status.journal[0].timestamp)),
-        el("div", { class: "feed-text clamp", onclick: (e) => e.currentTarget.classList.toggle("clamp") }, status.journal[0].text)) : null)
+        longText("journal:" + status.journal[0].timestamp, status.journal[0].text)) : null)
     : claudeEmpty("No cycles yet", "Claude's reasoning shows up here after its first cycle."), { action: el("a", { href: "#claude", class: "small", style: "color:var(--accent);text-decoration:none" }, "All cycles →") });
 
   const recent = [...trades].reverse().slice(0, 5);
@@ -940,13 +991,24 @@ function cycleFailed(c) { const a = c.agent || {}; return !!c.error || (!!a.turn
 function cycleKey(c) { return "cycle:" + (c.cycle_id || c.timestamp); }
 function cycleDetail(c) {
   const a = c.agent || {}, u = a.usage || {};
-  const tools = (a.tool_calls || []).map((t, i) => el("div", { class: "tool-row" },
-    el("span", { class: "faint num" }, String(i + 1)),
-    el("b", { class: t.is_error ? "neg" : null }, t.name + (t.is_error ? " (error)" : "")),
-    el("span", { class: "args code", title: argText(t.args) }, argText(t.args)),
-    el("span", { class: "faint num" }, num(t.ms) === null ? "" : num(t.ms) >= 1000 ? fixed(num(t.ms) / 1000, 1) + " s" : t.ms + " ms")));
-  const attempts = (a.attempts || []).map((at) => el("div", { class: "small" }, chip(shortModel(at.model), "warn"), " ", pretty(at.status), ": ",
-    el("span", { class: "muted" }, String(at.error || "").slice(0, 300))));
+  const key = cycleKey(c);
+  const tools = (a.tool_calls || []).map((t, i) => {
+    const toolKey = key + ":tool:" + i, args = argText(t.args);
+    const row = el("div", { class: "tool-row click" + (ui.expanded.has(toolKey) ? " open" : ""), title: "click to show the full arguments",
+      onclick: () => {
+        if (String(getSelection())) return;
+        if (ui.expanded.has(toolKey)) ui.expanded.delete(toolKey); else ui.expanded.add(toolKey);
+        row.classList.toggle("open", ui.expanded.has(toolKey));
+      } },
+      el("span", { class: "faint num" }, String(i + 1)),
+      el("b", { class: t.is_error ? "neg" : null }, t.name + (t.is_error ? " (error)" : "")),
+      el("span", { class: "args code" }, args),
+      el("span", { class: "faint num" }, num(t.ms) === null ? "" : num(t.ms) >= 1000 ? fixed(num(t.ms) / 1000, 1) + " s" : t.ms + " ms"));
+    return row;
+  });
+  const attempts = (a.attempts || []).map((at, i) => el("div", { class: "grid small", style: "gap:2px" },
+    el("div", null, chip(shortModel(at.model), "warn"), " ", pretty(at.status)),
+    at.error ? longText(key + ":attempt:" + i, String(at.error), "feed-text muted") : null));
   return el("div", { class: "cycle-detail", onclick: (e) => e.stopPropagation() },
     el("div", { class: "facts" },
       fact("Brain", shortModel(a.model) + (a.thinking ? " · " + a.thinking : "")),
@@ -1016,10 +1078,11 @@ function claudePage() {
   const cost = card("Cost per cycle", costBars.length ? barChart(costBars, { height: 150 }) : empty("No cycles yet", ""), { hint: "red: the cycle failed" });
 
   const sep = () => el("span", { class: "sep" }, "·");
-  const feed = card("Cycles", st.cycles.length ? el("div", { class: "feed" }, st.cycles.slice(0, 60).map((c) => {
+  const feed = card("Cycles", st.cycles.length ? el("div", { class: "feed" }, st.cycles.slice(0, shownCount("cycles", 30)).map((c) => {
     const a = c.agent || {}, usage = a.usage || {};
     const key = cycleKey(c), open = ui.expanded.has(key);
-    return el("div", { class: "feed-item click", title: open ? "" : "click for details", onclick: () => { open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } },
+    return el("div", { class: "feed-item click", title: open ? "" : "click for details",
+      onclick: () => { if (String(getSelection())) return; open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } },
       el("div", { class: "feed-meta" }, actionChip(c), cycleFailed(c) ? chip(a.turn_status && a.turn_status !== "completed" ? pretty(a.turn_status) : "Error", "neg") : null,
         el("span", { title: stamp(c.timestamp) }, ago(c.timestamp)), sep(), el("span", null, shortModel(a.model)), sep(),
         el("span", null, (a.tool_calls || []).length + " tools"), sep(), el("span", null, usd(usage.cost_usd)),
@@ -1027,12 +1090,12 @@ function claudePage() {
       el("div", { class: "feed-text" + (open ? "" : " clamp") }, cycleSummary(c) || "No summary."),
       c.error ? el("div", { class: "small neg" + (open ? "" : " clamp") }, c.error) : null,
       open ? cycleDetail(c) : null);
-  })) : empty("No cycles yet", "Claude's first cycle shows up within a few minutes of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
+  }), olderButton("cycles", 30, st.cycles.length)) : empty("No cycles yet", "Claude's first cycle shows up within a few minutes of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
 
   const journal = card("Journal", st.journal_error ? errorBox(st.journal_error) : st.journal.length
-    ? el("div", { class: "feed" }, st.journal.slice(0, 30).map((j) => el("div", { class: "feed-item" },
-      el("div", { class: "feed-meta" }, el("span", { title: stamp(j.timestamp) }, ago(j.timestamp))),
-      el("div", { class: "feed-text clamp", onclick: (e) => e.currentTarget.classList.toggle("clamp") }, j.text))))
+    ? el("div", { class: "feed" }, st.journal.slice(0, shownCount("journal", 20)).map((j) => el("div", { class: "feed-item" },
+      el("div", { class: "feed-meta" }, el("span", { title: stamp(j.timestamp) }, ago(j.timestamp)), el("span", { class: "sep" }, "·"), el("span", null, stamp(j.timestamp))),
+      longText("journal:" + j.timestamp, j.text))), olderButton("journal", 20, st.journal.length))
     : empty("Empty journal", "Claude writes its theses here so they survive restarts."), { flush: st.journal.length > 0, hint: "Claude's own notes" });
 
   return el("div", { class: "grid" }, head, kpis, el("div", { class: "grid split" }, cost, brainsCard(st)), el("div", { class: "grid split" }, feed, journal));
@@ -1397,7 +1460,7 @@ async function load() {
   ui.loadedAt = Date.now();
   ui.loading = false;
   button.classList.remove("spin");
-  render();
+  refreshView();
 }
 function route() {
   const tab = location.hash.replace(/^#/, "");
@@ -1405,7 +1468,7 @@ function route() {
   render();
 }
 let resizeTimer = null;
-addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawCharts, 120); });
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { drawCharts(); markOverflow(); }, 120); });
 addEventListener("hashchange", () => { route(); scrollTo({ top: 0 }); });
 document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - (ui.loadedAt || 0) > REFRESH_MS) load(); });
 document.getElementById("refresh").addEventListener("click", load);
