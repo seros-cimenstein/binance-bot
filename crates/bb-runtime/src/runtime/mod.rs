@@ -166,7 +166,6 @@ impl StreamAlerts {
 struct Built {
     exchange: Arc<dyn Exchange>,
     order_manager: Arc<OrderManager>,
-    risk_guard: Arc<RiskGuard>,
     /// Per-symbol (client, strategy) in `TRADING_SYMBOLS` order.
     symbols: Vec<SymbolRuntime>,
     feed: Arc<dyn CandleSource>,
@@ -285,23 +284,16 @@ impl BotRuntime {
             Some(db.clone()),
         ));
         order_manager.restore_from_db()?;
-        let risk_guard = Arc::new(RiskGuard::new(
-            RiskConfig {
-                max_total_exposure_usd: s.max_total_exposure_usd,
-                daily_drawdown_limit_pct: s.daily_drawdown_limit_pct,
-                min_balance_usdt: s.min_balance_usdt,
-                allowed_leverage: s.allowed_leverage,
-                max_open_orders: s.max_open_orders,
-                max_price_deviation_pct: s.max_price_deviation_pct,
-                ..RiskConfig::new(s.max_position_size_usd, s.daily_loss_limit_usd)
-            },
-            Some(db.clone()),
-        )?);
-        risk_guard.restore_daily_loss_from_db()?;
-        let portfolio: Arc<dyn PortfolioSource> = Arc::new(PortfolioSnapshotService::new(
-            order_manager.clone(),
-            Some(risk_guard.clone()),
-        ));
+        let risk_guard = Arc::new(RiskGuard::new(RiskConfig {
+            max_total_exposure_usd: s.max_total_exposure_usd,
+            min_balance_usdt: s.min_balance_usdt,
+            allowed_leverage: s.allowed_leverage,
+            max_open_orders: s.max_open_orders,
+            max_price_deviation_pct: s.max_price_deviation_pct,
+            ..RiskConfig::new(s.max_position_size_usd)
+        })?);
+        let portfolio: Arc<dyn PortfolioSource> =
+            Arc::new(PortfolioSnapshotService::new(order_manager.clone()));
 
         let mut symbols = Vec::with_capacity(s.trading_symbols.len());
         for symbol in &s.trading_symbols {
@@ -345,7 +337,6 @@ impl BotRuntime {
         let built = Built {
             exchange: components.exchange,
             order_manager,
-            risk_guard,
             symbols,
             feed: components.feed,
             execution,
@@ -393,7 +384,6 @@ impl BotRuntime {
             active_order_ids = ?active.iter().map(|o| o.id.as_str()).collect::<Vec<_>>(),
             position_count = positions.len(),
             position_symbols = ?positions.iter().map(|p| p.symbol.as_str()).collect::<Vec<_>>(),
-            current_daily_loss = %built.risk_guard.current_daily_loss(),
             "Startup recovery audit"
         );
         Ok(())

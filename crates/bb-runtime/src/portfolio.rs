@@ -10,11 +10,11 @@ use rust_decimal_macros::dec;
 
 use crate::exchange::{Exchange, ExchangeError};
 use crate::orders::OrderManager;
-use crate::risk::{PortfolioState, RiskGuard};
+use crate::risk::PortfolioState;
 
 pub const DEFAULT_QUOTE_ASSET: &str = "USDT";
 
-/// Combined account balance, position, order and PnL state.
+/// Combined account balance, position and order state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PortfolioSnapshot {
     pub balances_free: BTreeMap<String, Decimal>,
@@ -23,8 +23,6 @@ pub struct PortfolioSnapshot {
     pub available_balance_usdt: Decimal,
     pub total_balance_usdt: Decimal,
     pub total_equity_usdt: Decimal,
-    pub realized_pnl_today_usdt: Decimal,
-    pub unrealized_pnl_today_usdt: Decimal,
     /// Signed USDT exposure per symbol.
     pub positions: BTreeMap<String, Decimal>,
     pub total_exposure_usdt: Decimal,
@@ -32,13 +30,11 @@ pub struct PortfolioSnapshot {
 }
 
 impl PortfolioSnapshot {
-    /// The snapshot in the structured shape accepted by [`RiskGuard`].
+    /// The snapshot in the structured shape accepted by [`crate::risk::RiskGuard`].
     pub fn to_risk_state(&self) -> PortfolioState {
         PortfolioState {
             total_equity_usdt: self.total_equity_usdt,
             available_balance_usdt: self.available_balance_usdt,
-            realized_pnl_today_usdt: self.realized_pnl_today_usdt,
-            unrealized_pnl_today_usdt: self.unrealized_pnl_today_usdt,
             positions: self.positions.clone(),
             total_exposure_usdt: self.total_exposure_usdt,
             open_orders_count: self.open_orders_count,
@@ -63,19 +59,17 @@ pub trait PortfolioSource: Send + Sync {
     ) -> Result<PortfolioSnapshot, PortfolioError>;
 }
 
-/// Builds snapshots from exchange balances and local order/risk state.
+/// Builds snapshots from exchange balances and local order state.
 #[derive(Debug, Clone)]
 pub struct PortfolioSnapshotService {
     order_manager: Arc<OrderManager>,
-    risk_guard: Option<Arc<RiskGuard>>,
     quote_asset: String,
 }
 
 impl PortfolioSnapshotService {
-    pub fn new(order_manager: Arc<OrderManager>, risk_guard: Option<Arc<RiskGuard>>) -> Self {
+    pub fn new(order_manager: Arc<OrderManager>) -> Self {
         Self {
             order_manager,
-            risk_guard,
             quote_asset: DEFAULT_QUOTE_ASSET.to_owned(),
         }
     }
@@ -132,11 +126,6 @@ impl PortfolioSource for PortfolioSnapshotService {
             unrealized += position.unrealized_pnl;
         }
         let total_exposure: Decimal = positions.values().map(|v| v.abs()).sum();
-        let realized = -self
-            .risk_guard
-            .as_ref()
-            .map(|g| g.current_daily_loss())
-            .unwrap_or_default();
         let total_equity = total_quote + total_exposure + unrealized;
         let open_orders_count = self
             .order_manager
@@ -151,8 +140,6 @@ impl PortfolioSource for PortfolioSnapshotService {
             available_balance_usdt: available,
             total_balance_usdt: total_quote,
             total_equity_usdt: total_equity.max(Decimal::ZERO),
-            realized_pnl_today_usdt: realized,
-            unrealized_pnl_today_usdt: unrealized,
             positions,
             total_exposure_usdt: total_exposure,
             open_orders_count,

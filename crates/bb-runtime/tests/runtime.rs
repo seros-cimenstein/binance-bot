@@ -136,7 +136,7 @@ async fn strategy_order_client_can_bypass_sizing_for_position_closes() {
 
 #[tokio::test]
 async fn strategy_order_client_applies_expanded_risk_rules_and_alerts() {
-    let base = RiskConfig::new(dec!(10000), dec!(10000));
+    let base = RiskConfig::new(dec!(10000));
     let buy = |amount| StrategyOrder::market("BTC/USDT", OrderSide::Buy, amount);
     let cases = [
         (
@@ -184,18 +184,6 @@ async fn strategy_order_client_applies_expanded_risk_rules_and_alerts() {
         ),
         (
             RiskConfig {
-                daily_drawdown_limit_pct: Some(dec!(5)),
-                ..base.clone()
-            },
-            PortfolioSnapshot {
-                realized_pnl_today_usdt: dec!(-60),
-                ..cash(dec!(1000), dec!(1000))
-            },
-            buy(dec!(0.1)),
-            "daily drawdown breached",
-        ),
-        (
-            RiskConfig {
                 max_price_deviation_pct: Some(dec!(5)),
                 ..base.clone()
             },
@@ -212,7 +200,7 @@ async fn strategy_order_client_applies_expanded_risk_rules_and_alerts() {
         let exchange = FakeExchange::new();
         let (transport, alerter) = CapturingTransport::alerter();
         let client = StrategyOrderClient::new(manager(&exchange))
-            .with_risk_guard(Arc::new(RiskGuard::new(config, None).unwrap()))
+            .with_risk_guard(Arc::new(RiskGuard::new(config).unwrap()))
             .with_alerter(Some(alerter))
             .with_portfolio(StaticPortfolio::new(snapshot));
         client.update_last_price(dec!(100));

@@ -44,8 +44,7 @@ async fn test_pipeline_buy_and_sell_at_82000_with_two_alerts() {
     let exchange = FakeExchange::new();
     let (transport, alerter) = CapturingTransport::alerter();
     let order_manager = Arc::new(OrderManager::new(exchange.clone(), None));
-    let risk_guard =
-        Arc::new(RiskGuard::new(RiskConfig::new(dec!(50000), dec!(10000)), None).unwrap());
+    let risk_guard = Arc::new(RiskGuard::new(RiskConfig::new(dec!(50000))).unwrap());
     let client = Arc::new(
         StrategyOrderClient::new(order_manager.clone())
             .with_risk_guard(risk_guard)
@@ -182,7 +181,6 @@ async fn runtime_pipeline_with_fake_exchange_websocket_telegram_and_sqlite() {
     settings.slow_period = 6;
     settings.order_size = dec!(0.001);
     settings.max_position_size_usd = dec!(50000);
-    settings.daily_loss_limit_usd = dec!(10000);
     settings.order_update_mode = OrderUpdateMode::Websocket;
     let settings = settings.validate().unwrap();
 

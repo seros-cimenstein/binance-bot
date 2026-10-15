@@ -27,7 +27,6 @@ fn from_env_parses_aliases_and_normalizes_values() {
         ("MAX_ORDER_NOTIONAL_USD", "250"),
         ("MIN_BALANCE_USDT", "50"),
         ("MAX_TOTAL_EXPOSURE_USD", "2000"),
-        ("DAILY_DRAWDOWN_LIMIT_PCT", "5"),
         ("ALLOWED_LEVERAGE", "1"),
         ("MAX_OPEN_ORDERS", "3"),
         ("MAX_PRICE_DEVIATION_PCT", "1.5"),
@@ -43,7 +42,6 @@ fn from_env_parses_aliases_and_normalizes_values() {
         ("ORDER_UPDATE_MODE", " websocket "),
         ("WS_ALERT_COOLDOWN_SECONDS", "45"),
         ("MAX_POSITION_SIZE_USD", "1000"),
-        ("DAILY_LOSS_LIMIT_USD", "125"),
         ("TELEGRAM_BOT_TOKEN", " token "),
         ("TELEGRAM_CHAT_ID", " chat "),
         ("DB_PATH", " tmp/orders.db "),
@@ -67,7 +65,6 @@ fn from_env_parses_aliases_and_normalizes_values() {
     );
     assert_eq!(s.min_balance_usdt, dec!(50));
     assert_eq!(s.max_total_exposure_usd, Some(dec!(2000)));
-    assert_eq!(s.daily_drawdown_limit_pct, Some(dec!(5)));
     assert_eq!(s.allowed_leverage, Some(dec!(1)));
     assert_eq!(s.max_open_orders, Some(3));
     assert_eq!(s.max_price_deviation_pct, Some(dec!(1.5)));
@@ -80,10 +77,7 @@ fn from_env_parses_aliases_and_normalizes_values() {
     assert_eq!(s.order_update_mode, OrderUpdateMode::Websocket);
     assert_eq!(s.strategy_name, "demo-sma");
     assert!((s.ws_alert_cooldown_seconds - 45.0).abs() < f64::EPSILON);
-    assert_eq!(
-        (s.max_position_size_usd, s.daily_loss_limit_usd),
-        (dec!(1000), dec!(125))
-    );
+    assert_eq!(s.max_position_size_usd, dec!(1000));
     assert_eq!(
         (s.telegram_bot_token.as_str(), s.telegram_chat_id.as_str()),
         ("token", "chat")
@@ -125,10 +119,6 @@ fn from_env_rejects_invalid_values() {
         (
             &[("MAX_TOTAL_EXPOSURE_USD", "nan")],
             "MAX_TOTAL_EXPOSURE_USD must be a number",
-        ),
-        (
-            &[("DAILY_DRAWDOWN_LIMIT_PCT", "0")],
-            "daily_drawdown_limit_pct must be greater",
         ),
         (
             &[("ALLOWED_LEVERAGE", "0")],
@@ -210,17 +200,6 @@ fn settings_constructor_validates_values() {
     assert_eq!(
         blank_symbol.validate().unwrap_err().to_string(),
         "trading_symbol must not be blank"
-    );
-    let zero_loss = Settings {
-        daily_loss_limit_usd: dec!(0),
-        ..Settings::defaults("key", "secret")
-    };
-    assert!(
-        zero_loss
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .starts_with("daily_loss_limit_usd must be greater")
     );
     let blank_strategy = Settings {
         strategy_name: " ".into(),

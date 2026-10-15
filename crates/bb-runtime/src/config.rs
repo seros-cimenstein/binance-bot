@@ -21,7 +21,6 @@ pub const DEFAULT_FEED_QUEUE_MAXSIZE: usize = 1_000;
 pub const DEFAULT_STRATEGY: &str = "demo-sma";
 pub const DEFAULT_WS_ALERT_COOLDOWN_SECONDS: f64 = 300.0;
 pub const DEFAULT_MAX_POSITION_SIZE_USD: Decimal = dec!(500.0);
-pub const DEFAULT_DAILY_LOSS_LIMIT_USD: Decimal = dec!(100.0);
 pub const DEFAULT_DB_PATH: &str = "data/bot.db";
 
 /// Python raised `RuntimeError(message)` for every configuration problem.
@@ -131,7 +130,6 @@ pub struct Settings {
     pub max_order_notional_usd: Decimal,
     pub min_balance_usdt: Decimal,
     pub max_total_exposure_usd: Option<Decimal>,
-    pub daily_drawdown_limit_pct: Option<Decimal>,
     pub allowed_leverage: Option<Decimal>,
     pub max_open_orders: Option<i64>,
     pub max_price_deviation_pct: Option<Decimal>,
@@ -147,7 +145,6 @@ pub struct Settings {
     pub order_update_mode: OrderUpdateMode,
     pub ws_alert_cooldown_seconds: f64,
     pub max_position_size_usd: Decimal,
-    pub daily_loss_limit_usd: Decimal,
     pub telegram_bot_token: String,
     pub telegram_chat_id: String,
     pub db_path: String,
@@ -171,7 +168,6 @@ impl Settings {
             max_order_notional_usd: Decimal::ZERO,
             min_balance_usdt: Decimal::ZERO,
             max_total_exposure_usd: None,
-            daily_drawdown_limit_pct: None,
             allowed_leverage: None,
             max_open_orders: None,
             max_price_deviation_pct: None,
@@ -187,7 +183,6 @@ impl Settings {
             order_update_mode: OrderUpdateMode::Disabled,
             ws_alert_cooldown_seconds: DEFAULT_WS_ALERT_COOLDOWN_SECONDS,
             max_position_size_usd: DEFAULT_MAX_POSITION_SIZE_USD,
-            daily_loss_limit_usd: DEFAULT_DAILY_LOSS_LIMIT_USD,
             telegram_bot_token: String::new(),
             telegram_chat_id: String::new(),
             db_path: DEFAULT_DB_PATH.to_owned(),
@@ -254,7 +249,6 @@ impl Settings {
         at_least(self.max_order_notional_usd, "max_order_notional_usd")?;
         at_least(self.min_balance_usdt, "min_balance_usdt")?;
         optional_greater(self.max_total_exposure_usd, "max_total_exposure_usd")?;
-        optional_greater(self.daily_drawdown_limit_pct, "daily_drawdown_limit_pct")?;
         optional_greater(self.allowed_leverage, "allowed_leverage")?;
         if self.max_open_orders.is_some_and(|n| n <= 0) {
             return Err(SettingsError::new(
@@ -298,7 +292,6 @@ impl Settings {
             ));
         }
         greater(self.max_position_size_usd, "max_position_size_usd")?;
-        greater(self.daily_loss_limit_usd, "daily_loss_limit_usd")?;
         Ok(self)
     }
 
@@ -335,7 +328,6 @@ impl Settings {
             max_order_notional_usd: env.decimal(&["MAX_ORDER_NOTIONAL_USD"], Decimal::ZERO)?,
             min_balance_usdt: env.decimal(&["MIN_BALANCE_USDT"], Decimal::ZERO)?,
             max_total_exposure_usd: env.optional_decimal("MAX_TOTAL_EXPOSURE_USD")?,
-            daily_drawdown_limit_pct: env.optional_decimal("DAILY_DRAWDOWN_LIMIT_PCT")?,
             allowed_leverage: env.optional_decimal("ALLOWED_LEVERAGE")?,
             max_open_orders: env.optional_int("MAX_OPEN_ORDERS")?,
             max_price_deviation_pct: env.optional_decimal("MAX_PRICE_DEVIATION_PCT")?,
@@ -356,8 +348,6 @@ impl Settings {
             )?,
             max_position_size_usd: env
                 .decimal(&["MAX_POSITION_SIZE_USD"], DEFAULT_MAX_POSITION_SIZE_USD)?,
-            daily_loss_limit_usd: env
-                .decimal(&["DAILY_LOSS_LIMIT_USD"], DEFAULT_DAILY_LOSS_LIMIT_USD)?,
             telegram_bot_token: env.str(&["TELEGRAM_BOT_TOKEN"], ""),
             telegram_chat_id: env.str(&["TELEGRAM_CHAT_ID"], ""),
             db_path: env.str(&["DB_PATH"], DEFAULT_DB_PATH),

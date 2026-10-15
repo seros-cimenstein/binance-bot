@@ -947,7 +947,7 @@ function fleetPage() {
 
 // ---------- Signals (Phase 43 X insighter, paper only) ----------
 const HOUR_MS = 3600e3;
-const EXIT_ARMS = [["rule_exits", "Rule exits"], ["trailing_only", "Trailing only"], ["scheduled_15m", "Scheduled +15m"],
+const EXIT_ARMS = [["rule_exits", "Rule exits"], ["hold_24h", "Hold 24h"], ["scheduled_15m", "Scheduled +15m"],
   ["scheduled_1h", "Scheduled +1h"], ["scheduled_6h", "Scheduled +6h"], ["peak_upper_bound", "Peak (upper bound)"]];
 function isoMs(t) { return num(t) === null ? null : new Date(num(t)).toISOString(); }
 function frac(v, opts = {}) { const n = num(v); return n === null ? "—" : pct(n * 100, { sign: opts.sign ?? false, dp: opts.dp ?? 1 }); }

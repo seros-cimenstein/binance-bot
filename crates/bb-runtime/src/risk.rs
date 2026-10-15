@@ -1,7 +1,4 @@
 //! Port of `src/risk/guard.py`: pre-trade risk checks.
-//!
-//! The legacy `data/go_off.flag` bypass of the daily loss check is not
-//! ported: the daily loss limit is always enforced.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -10,11 +7,8 @@ use parking_lot::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use bb_core::Decimal;
-use chrono::NaiveDate;
 use rust_decimal_macros::dec;
 use serde_json::{Value, json};
-
-use crate::db::{OrderDb, OrderDbError};
 
 /// An order violated a configured risk limit.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -40,18 +34,14 @@ pub enum RiskError {
     Breach(#[from] RiskBreachError),
     #[error("invalid risk configuration: {0}")]
     Config(String),
-    #[error(transparent)]
-    Db(#[from] OrderDbError),
 }
 
 /// Validated runtime settings for [`RiskGuard`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct RiskConfig {
     pub max_position_size_usd: Decimal,
-    pub daily_loss_limit_usd: Decimal,
     pub duplicate_window_seconds: f64,
     pub max_total_exposure_usd: Option<Decimal>,
-    pub daily_drawdown_limit_pct: Option<Decimal>,
     pub min_balance_usdt: Decimal,
     pub allowed_leverage: Option<Decimal>,
     pub max_open_orders: Option<i64>,
@@ -59,14 +49,12 @@ pub struct RiskConfig {
 }
 
 impl RiskConfig {
-    /// Python field defaults for everything but the two required limits.
-    pub fn new(max_position_size_usd: Decimal, daily_loss_limit_usd: Decimal) -> Self {
+    /// Python field defaults for everything but the required position limit.
+    pub fn new(max_position_size_usd: Decimal) -> Self {
         Self {
             max_position_size_usd,
-            daily_loss_limit_usd,
             duplicate_window_seconds: 60.0,
             max_total_exposure_usd: None,
-            daily_drawdown_limit_pct: None,
             min_balance_usdt: Decimal::ZERO,
             allowed_leverage: None,
             max_open_orders: None,
@@ -84,7 +72,6 @@ impl RiskConfig {
             }
         };
         gt(self.max_position_size_usd, "max_position_size_usd")?;
-        gt(self.daily_loss_limit_usd, "daily_loss_limit_usd")?;
         if !self.duplicate_window_seconds.is_finite() {
             return Err(RiskError::Config(
                 "risk threshold must be a finite number".into(),
@@ -97,9 +84,6 @@ impl RiskConfig {
         }
         if let Some(v) = self.max_total_exposure_usd {
             gt(v, "max_total_exposure_usd")?;
-        }
-        if let Some(v) = self.daily_drawdown_limit_pct {
-            gt(v, "daily_drawdown_limit_pct")?;
         }
         if self.min_balance_usdt < Decimal::ZERO {
             return Err(RiskError::Config(
@@ -128,7 +112,6 @@ impl RiskConfig {
     /// Whether any portfolio-aware check is configured (`_should_use_structured_risk`).
     pub fn uses_structured_checks(&self) -> bool {
         self.max_total_exposure_usd.is_some()
-            || self.daily_drawdown_limit_pct.is_some()
             || self.allowed_leverage.is_some()
             || self.max_open_orders.is_some()
             || self.max_price_deviation_pct.is_some()
@@ -185,8 +168,6 @@ impl OrderRequest {
 pub struct PortfolioState {
     pub total_equity_usdt: Decimal,
     pub available_balance_usdt: Decimal,
-    pub realized_pnl_today_usdt: Decimal,
-    pub unrealized_pnl_today_usdt: Decimal,
     /// Signed USDT exposure per symbol.
     pub positions: BTreeMap<String, Decimal>,
     pub total_exposure_usdt: Decimal,
@@ -200,10 +181,9 @@ pub struct MarketData {
     pub mark_price: Decimal,
 }
 
-/// Monotonic clock and UTC calendar used by the guard (injectable for tests).
+/// Monotonic clock used by the guard (injectable for tests).
 pub trait RiskClock: Send + Sync {
     fn monotonic(&self) -> Instant;
-    fn utc_date(&self) -> NaiveDate;
 }
 
 #[derive(Debug, Default)]
@@ -213,25 +193,18 @@ impl RiskClock for SystemClock {
     fn monotonic(&self) -> Instant {
         Instant::now()
     }
-
-    fn utc_date(&self) -> NaiveDate {
-        bb_core::time::now().date_naive()
-    }
 }
 
 type DuplicateKey = (String, String, Decimal);
 
 struct GuardState {
-    current_daily_loss: Decimal,
-    loss_window_date: NaiveDate,
     duplicate_orders: HashMap<DuplicateKey, Instant>,
     duplicate_events: VecDeque<(Instant, DuplicateKey)>,
 }
 
-/// Validates orders against position, loss, exposure and duplicate limits.
+/// Validates orders against position, exposure and duplicate limits.
 pub struct RiskGuard {
     config: RiskConfig,
-    db: Option<Arc<OrderDb>>,
     clock: Arc<dyn RiskClock>,
     state: Mutex<GuardState>,
 }
@@ -247,24 +220,16 @@ impl std::fmt::Debug for RiskGuard {
 const FLOAT_TOLERANCE: Decimal = dec!(0.000000001);
 
 impl RiskGuard {
-    pub fn new(config: RiskConfig, db: Option<Arc<OrderDb>>) -> Result<Self, RiskError> {
-        Self::with_clock(config, db, Arc::new(SystemClock))
+    pub fn new(config: RiskConfig) -> Result<Self, RiskError> {
+        Self::with_clock(config, Arc::new(SystemClock))
     }
 
-    pub fn with_clock(
-        config: RiskConfig,
-        db: Option<Arc<OrderDb>>,
-        clock: Arc<dyn RiskClock>,
-    ) -> Result<Self, RiskError> {
+    pub fn with_clock(config: RiskConfig, clock: Arc<dyn RiskClock>) -> Result<Self, RiskError> {
         config.validate()?;
-        let today = clock.utc_date();
         Ok(Self {
             config,
-            db,
             clock,
             state: Mutex::new(GuardState {
-                current_daily_loss: Decimal::ZERO,
-                loss_window_date: today,
                 duplicate_orders: HashMap::new(),
                 duplicate_events: VecDeque::new(),
             }),
@@ -279,30 +244,7 @@ impl RiskGuard {
         self.state.lock()
     }
 
-    /// Reload today's accumulated loss from persistent storage on startup.
-    pub fn restore_daily_loss_from_db(&self) -> Result<(), RiskError> {
-        let Some(db) = &self.db else {
-            return Ok(());
-        };
-        let today = self.clock.utc_date();
-        let loss = db.load_daily_loss(&today.to_string())?;
-        {
-            let mut st = self.lock();
-            st.current_daily_loss = loss;
-            st.loss_window_date = today;
-        }
-        tracing::info!(component = "risk_guard", date = %today, restored_loss = %loss, "Daily loss restored from database");
-        Ok(())
-    }
-
-    /// Realized loss accumulated for the active UTC day.
-    pub fn current_daily_loss(&self) -> Decimal {
-        let mut st = self.lock();
-        self.reset_daily_loss_if_needed(&mut st);
-        st.current_daily_loss
-    }
-
-    /// Simple validation: position size, daily loss and duplicate window.
+    /// Simple validation: position size and duplicate window.
     pub fn validate_order(&self, check: &OrderCheck) -> Result<(), RiskBreachError> {
         let context = json!({
             "symbol": check.symbol,
@@ -327,7 +269,6 @@ impl RiskGuard {
                 check.current_position,
                 &check.side,
             )?;
-            self.check_daily_loss()?;
             self.check_duplicate_order(&check.symbol, &check.side, check.amount)
         })();
         log_result(&context, &result);
@@ -370,12 +311,10 @@ impl RiskGuard {
                 current_position,
             )?;
             self.check_position_exposure(order, portfolio)?;
-            self.check_daily_drawdown(portfolio)?;
             self.check_minimum_balance(order, portfolio)?;
             self.check_leverage(order)?;
             self.check_max_open_orders(portfolio)?;
             self.check_price_deviation(order, market)?;
-            self.check_daily_loss()?;
             self.check_duplicate_order(&order.symbol, &order.side, order.amount)
         })();
         log_result(&context, &result);
@@ -416,58 +355,6 @@ impl RiskGuard {
                 ),
                 context,
             ));
-        }
-        Ok(())
-    }
-
-    /// Whether today's realized loss limit is exhausted (resets at 00:00 UTC).
-    pub fn check_daily_loss(&self) -> Result<(), RiskBreachError> {
-        let (loss, date) = {
-            let mut st = self.lock();
-            self.reset_daily_loss_if_needed(&mut st);
-            (st.current_daily_loss, st.loss_window_date)
-        };
-        if loss >= self.config.daily_loss_limit_usd {
-            let context = json!({
-                "current_daily_loss": loss,
-                "daily_loss_limit_usd": self.config.daily_loss_limit_usd,
-                "loss_window_date": date.to_string(),
-            });
-            tracing::error!(component = "risk_guard", context = %context, "Daily loss limit breached");
-            return Err(RiskBreachError::new(
-                format!(
-                    "daily loss limit breached: {} USD has reached or exceeded {} USD",
-                    f8(loss),
-                    f8(self.config.daily_loss_limit_usd)
-                ),
-                context,
-            ));
-        }
-        Ok(())
-    }
-
-    /// Apply realized PnL from a closed trade; only losses accumulate.
-    pub fn update_realized_pnl(&self, pnl: Decimal) -> Result<(), RiskError> {
-        let (increment, current, date) = {
-            let mut st = self.lock();
-            self.reset_daily_loss_if_needed(&mut st);
-            let increment = if pnl < Decimal::ZERO {
-                pnl.abs()
-            } else {
-                Decimal::ZERO
-            };
-            st.current_daily_loss += increment;
-            (increment, st.current_daily_loss, st.loss_window_date)
-        };
-        if let Some(db) = &self.db
-            && increment > Decimal::ZERO
-        {
-            db.upsert_daily_loss(&date.to_string(), current)?;
-        }
-        if self.current_daily_loss() >= self.config.daily_loss_limit_usd {
-            tracing::warn!(component = "risk_guard", %pnl, loss_increment = %increment, current_daily_loss = %current, "Realized PnL applied to risk guard");
-        } else {
-            tracing::info!(component = "risk_guard", %pnl, loss_increment = %increment, current_daily_loss = %current, "Realized PnL applied to risk guard");
         }
         Ok(())
     }
@@ -591,38 +478,6 @@ impl RiskGuard {
         Ok(())
     }
 
-    fn check_daily_drawdown(&self, portfolio: &PortfolioState) -> Result<(), RiskBreachError> {
-        let Some(limit) = self.config.daily_drawdown_limit_pct else {
-            return Ok(());
-        };
-        let pnl = portfolio.realized_pnl_today_usdt + portfolio.unrealized_pnl_today_usdt;
-        let loss = if pnl < Decimal::ZERO {
-            pnl.abs()
-        } else {
-            Decimal::ZERO
-        };
-        let drawdown = loss / portfolio.total_equity_usdt * dec!(100);
-        if drawdown > limit {
-            let context = json!({
-                "daily_pnl_usdt": pnl,
-                "daily_loss_usdt": loss,
-                "total_equity_usdt": portfolio.total_equity_usdt,
-                "daily_drawdown_pct": drawdown,
-                "daily_drawdown_limit_pct": limit,
-            });
-            tracing::error!(component = "risk_guard", context = %context, "Daily drawdown breached");
-            return Err(RiskBreachError::new(
-                format!(
-                    "daily drawdown breached: {}% exceeds {}%",
-                    f8(drawdown),
-                    f8(limit)
-                ),
-                context,
-            ));
-        }
-        Ok(())
-    }
-
     fn check_minimum_balance(
         &self,
         order: &OrderRequest,
@@ -717,24 +572,6 @@ impl RiskGuard {
             ));
         }
         Ok(())
-    }
-
-    fn reset_daily_loss_if_needed(&self, st: &mut GuardState) {
-        let today = self.clock.utc_date();
-        if today == st.loss_window_date {
-            return;
-        }
-        let previous_date = st.loss_window_date;
-        let previous_loss = st.current_daily_loss;
-        st.current_daily_loss = Decimal::ZERO;
-        st.loss_window_date = today;
-        tracing::info!(
-            component = "risk_guard",
-            previous_loss_window_date = %previous_date,
-            loss_window_date = %today,
-            previous_daily_loss = %previous_loss,
-            "Daily loss counter reset"
-        );
     }
 }
 

@@ -1,7 +1,7 @@
 //! Legacy strategy runtime (port of `src/main.py` and its component graph).
 //!
 //! - [`config`]: full environment-backed `Settings` (`src/config.py`).
-//! - [`db`]: SQLite order/fill/daily-loss store (`src/db.py`, identical schema).
+//! - [`db`]: SQLite order/fill store (`src/db.py` orders/fills schema).
 //! - [`orders`]: order models, lifecycle manager, payload parsing and sizing.
 //! - [`risk`]: pre-trade `RiskGuard` (`src/risk/guard.py`).
 //! - [`portfolio`]: account + local state snapshots (`src/portfolio/snapshot.py`).

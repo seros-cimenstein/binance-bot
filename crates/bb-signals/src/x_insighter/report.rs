@@ -70,7 +70,7 @@ const SCHEDULED_EXITS: [(&str, i64); 3] = [
 ];
 const ARM_KEYS: [&str; 6] = [
     "rule_exits",
-    "trailing_only",
+    "hold_24h",
     "scheduled_15m",
     "scheduled_1h",
     "scheduled_6h",
@@ -286,8 +286,6 @@ pub enum ExitReason {
     ExhaustionScaleOut,
     ExhaustionFull,
     RugPrecursor,
-    HardStop,
-    TrailingStop,
     TimeStop,
     Scheduled,
     Peak,
@@ -363,8 +361,8 @@ pub const RULE_EXITS: ExitRules = ExitRules {
     exhaustion: true,
     rug_precursors: true,
 };
-/// `trailing_only`: trailing, hard and time stops only.
-pub const TRAILING_ONLY: ExitRules = ExitRules {
+/// `hold_24h`: same entries, 24h time stop only (baseline).
+pub const HOLD_24H: ExitRules = ExitRules {
     exhaustion: false,
     rug_precursors: false,
 };
@@ -378,18 +376,10 @@ pub struct Entry {
     pub liquidity: Option<f64>,
 }
 
-const fn stops(venue: Venue) -> (f64, f64) {
-    // (trailing below peak, hard stop below entry)
-    match venue {
-        Venue::Solana => (0.25, 0.30),
-        Venue::Binance => (0.10, 0.12),
-    }
-}
-
 /// Walk the observed path in time order and apply the exit rules. Each
 /// decision uses only the rows up to its own timestamp; fills are at the price
 /// of the row that triggers (the last observed price when that row has none).
-/// Precedence on one row: rug precursor, hard stop, trailing stop, exhaustion.
+/// Precedence on one row: rug precursor, then exhaustion.
 pub fn simulate_exits(
     entry: &Entry,
     path: &[Observation],
@@ -397,11 +387,9 @@ pub fn simulate_exits(
     friction: &Friction,
     now_ms: i64,
 ) -> SimOutcome {
-    let (trailing, hard) = stops(entry.venue);
     let mut remaining = 1.0_f64;
     let mut scaled_out = false;
     let mut last_price = entry.price;
-    let mut peak = entry.price;
     let mut max_liquidity = entry.liquidity.unwrap_or(0.0);
     let mut observed_any = false;
     let mut legs: Vec<ExitLeg> = Vec::new();
@@ -421,7 +409,6 @@ pub fn simulate_exits(
         let price = o.observed_price();
         if let Some(p) = price {
             last_price = p;
-            peak = peak.max(p);
             observed_any = true;
         }
         if rules.rug_precursors {
@@ -443,30 +430,6 @@ pub fn simulate_exits(
         }
         if let Some(l) = o.liquidity {
             max_liquidity = max_liquidity.max(l);
-        }
-        if price.is_some() {
-            if last_price <= entry.price * (1.0 - hard) {
-                exit(
-                    &mut legs,
-                    o.ts_ms,
-                    remaining,
-                    last_price,
-                    ExitReason::HardStop,
-                );
-                remaining = 0.0;
-                break;
-            }
-            if last_price <= peak * (1.0 - trailing) {
-                exit(
-                    &mut legs,
-                    o.ts_ms,
-                    remaining,
-                    last_price,
-                    ExitReason::TrailingStop,
-                );
-                remaining = 0.0;
-                break;
-            }
         }
         if rules.exhaustion
             && let Some(x) = o.exhaustion
@@ -692,7 +655,7 @@ pub struct SignalEval<'a> {
     pub rug: RugOutcome,
     pub path_returns: Vec<(i64, f64)>,
     pub rule_exits: SimOutcome,
-    pub trailing_only: SimOutcome,
+    pub hold_24h: SimOutcome,
     pub scheduled: [Option<Trade>; 3],
     pub peak: SimOutcome,
     /// Best observed price / entry within 24h and its time.
@@ -703,7 +666,7 @@ impl SignalEval<'_> {
     fn arm_trade(&self, key: &str) -> Option<&Trade> {
         match key {
             "rule_exits" => self.rule_exits.trade(),
-            "trailing_only" => self.trailing_only.trade(),
+            "hold_24h" => self.hold_24h.trade(),
             "peak_upper_bound" => self.peak.trade(),
             other => SCHEDULED_EXITS
                 .iter()
@@ -824,7 +787,7 @@ fn evaluate_signal<'a>(
             rug,
             path_returns: Vec::new(),
             rule_exits: SimOutcome::NoPath,
-            trailing_only: SimOutcome::NoPath,
+            hold_24h: SimOutcome::NoPath,
             scheduled: [None, None, None],
             peak: SimOutcome::NoPath,
             observed_peak: None,
@@ -848,7 +811,7 @@ fn evaluate_signal<'a>(
         rug,
         path_returns,
         rule_exits: simulate_exits(&entry, path, RULE_EXITS, &friction, now_ms),
-        trailing_only: simulate_exits(&entry, path, TRAILING_ONLY, &friction, now_ms),
+        hold_24h: simulate_exits(&entry, path, HOLD_24H, &friction, now_ms),
         scheduled: SCHEDULED_EXITS
             .map(|(_, offset)| scheduled_trade(&entry, snapshot_at(offset), &friction)),
         peak: peak_trade(&entry, path, &friction, now_ms),
@@ -912,14 +875,14 @@ fn exit_stats(evals: &[&SignalEval<'_>], key: &str) -> ArmStats {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ExitQuality {
     pub rule_capture: Option<f64>,
-    pub trailing_capture: Option<f64>,
+    pub hold_capture: Option<f64>,
     pub exhaustion_before_peak: usize,
     pub exhaustion_after_peak: usize,
     pub rug_signals_closed: usize,
     pub rug_exited_before: usize,
     pub paired_trades: usize,
     pub rule_mean: Option<f64>,
-    pub trailing_mean: Option<f64>,
+    pub hold_mean: Option<f64>,
 }
 
 /// Realized gross gain / best gain available, summed over trades whose peak
@@ -940,26 +903,26 @@ fn capture(
     (best > 0.0).then(|| realized / best)
 }
 
-/// `rule_exits` vs `trailing_only` mean net return on signals closed in both.
+/// `rule_exits` vs `hold_24h` mean net return on signals closed in both.
 fn paired_means(evals: &[&SignalEval<'_>]) -> (usize, Option<f64>, Option<f64>) {
     let pairs: Vec<(f64, f64)> = evals
         .iter()
         .filter_map(|e| {
             Some((
                 e.rule_exits.trade()?.net_return,
-                e.trailing_only.trade()?.net_return,
+                e.hold_24h.trade()?.net_return,
             ))
         })
         .collect();
     let rule: Vec<f64> = pairs.iter().map(|p| p.0).collect();
-    let trailing: Vec<f64> = pairs.iter().map(|p| p.1).collect();
-    (pairs.len(), mean(&rule), mean(&trailing))
+    let hold: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+    (pairs.len(), mean(&rule), mean(&hold))
 }
 
 fn exit_quality(evals: &[&SignalEval<'_>]) -> ExitQuality {
     let mut q = ExitQuality {
         rule_capture: capture(evals, |e| e.rule_exits.trade().map(|t| t.gross_ratio)),
-        trailing_capture: capture(evals, |e| e.trailing_only.trade().map(|t| t.gross_ratio)),
+        hold_capture: capture(evals, |e| e.hold_24h.trade().map(|t| t.gross_ratio)),
         ..ExitQuality::default()
     };
     for e in evals {
@@ -982,7 +945,7 @@ fn exit_quality(evals: &[&SignalEval<'_>]) -> ExitQuality {
             }
         }
     }
-    (q.paired_trades, q.rule_mean, q.trailing_mean) = paired_means(evals);
+    (q.paired_trades, q.rule_mean, q.hold_mean) = paired_means(evals);
     q
 }
 
@@ -1158,10 +1121,7 @@ const THRESHOLDS: [(&str, &str); 5] = [
     ("rule_exits_pnl", "> $0 / > $0 after dropping top 2"),
     ("rug_rate", "< 45.3%"),
     ("median_lead_time", ">= 10 min"),
-    (
-        "rule_exits_vs_trailing",
-        "rule_exits mean > trailing_only mean",
-    ),
+    ("rule_exits_vs_hold", "rule_exits mean > hold_24h mean"),
 ];
 
 /// Gate verdict for one venue over signals detected on/after the freeze date.
@@ -1214,7 +1174,7 @@ pub fn gate_verdict(
         )
     };
     let gated: &[&SignalEval<'_>] = if haiku_gated { &haiku } else { &det };
-    let (_, rule_mean, trailing_mean) = paired_means(gated);
+    let (_, rule_mean, hold_mean) = paired_means(gated);
     let rug_rate = summary.rug_rate();
     let lead = summary.median_lead_minutes();
 
@@ -1249,10 +1209,10 @@ pub fn gate_verdict(
                 "{}{} vs {}",
                 if haiku_gated { "haiku arm: " } else { "" },
                 fmt_pct(rule_mean),
-                fmt_pct(trailing_mean)
+                fmt_pct(hold_mean)
             ),
             THRESHOLDS[4].1,
-            matches!((rule_mean, trailing_mean), (Some(r), Some(t)) if r > t),
+            matches!((rule_mean, hold_mean), (Some(r), Some(h)) if r > h),
         ),
     ];
     GateVerdict {
@@ -1674,9 +1634,9 @@ fn render_venue(v: &VenueReport, lines: &mut Vec<String>) {
         "### Exit Quality (deterministic arm)".into(),
         String::new(),
         format!(
-            "- Peak capture ratio (gross realized gain / best gain within 24h): rule_exits {}, trailing_only {}",
+            "- Peak capture ratio (gross realized gain / best gain within 24h): rule_exits {}, hold_24h {}",
             fmt_pct(q.rule_capture),
-            fmt_pct(q.trailing_capture)
+            fmt_pct(q.hold_capture)
         ),
         format!(
             "- Exhaustion exits before the observed peak: {} ({}/{}); after: {} ({}/{})",
@@ -1694,10 +1654,10 @@ fn render_venue(v: &VenueReport, lines: &mut Vec<String>) {
             q.rug_signals_closed
         ),
         format!(
-            "- Mean net return on the same {} signals: rule_exits {} vs trailing_only {}",
+            "- Mean net return on the same {} signals: rule_exits {} vs hold_24h {}",
             q.paired_trades,
             fmt_pct(q.rule_mean),
-            fmt_pct(q.trailing_mean)
+            fmt_pct(q.hold_mean)
         ),
     ]);
 
@@ -1778,7 +1738,7 @@ pub fn render_markdown(venues: &[VenueReport], config: &ReportConfig) -> String 
         format!(
             "- Friction: Solana ${PAPER_NOTIONAL_USD:.2} notional, ${SOLANA_ROUND_TRIP_FIXED_USD:.2} round-trip fixed, 2% entry and 2% exit slippage; Binance {fee_line} + half the detection spread + 5 bps slippage per side, ${PAPER_NOTIONAL_USD:.2} notional."
         ),
-        "- Exits: rule_exits = exhaustion scale-out (50% at >= 0.4, rest at >= 0.7), any rug precursor, trailing stop (Solana 25%, Binance 10% below peak), hard stop (-30% / -12%), 24h time stop; trailing_only = trailing, hard and time stops; scheduled = full exit at the +15m / +1h / +6h snapshot. Fills at the price of the triggering row; a gone market without a price fills at 0.".into(),
+        "- Exits: rule_exits = exhaustion scale-out (50% at >= 0.4, rest at >= 0.7), any rug precursor, 24h time stop; hold_24h = 24h time stop only; scheduled = full exit at the +15m / +1h / +6h snapshot. No price stops. Fills at the price of the triggering row; a gone market without a price fills at 0.".into(),
         "- `peak_upper_bound` is an upper bound, never expected return.".into(),
         String::new(),
     ];
@@ -1889,13 +1849,13 @@ mod tests {
     fn rows_after_the_exit_decision_do_not_change_the_result() {
         let e = entry(Venue::Solana);
         let f = Friction::solana();
-        let path = vec![tick(5, 1.1), tick(10, 0.69)];
+        let path = vec![tick(5, 1.1), exhaustion(10, 0.75, Some(0.69))];
         let base = simulate_exits(&e, &path, RULE_EXITS, &f, LATER);
         let mut future = path.clone();
         future.extend([exhaustion(11, 0.95, Some(0.7)), tick(20, 5.0)]);
         assert_eq!(simulate_exits(&e, &future, RULE_EXITS, &f, LATER), base);
         let trade = closed(base);
-        assert_eq!(reasons(&trade), vec![ExitReason::HardStop]);
+        assert_eq!(reasons(&trade), vec![ExitReason::ExhaustionFull]);
         assert_eq!(trade.exit_ms, T0 + 10 * MIN);
 
         // The scale-out fill is the price known at that row, not a later spike.
@@ -1930,52 +1890,26 @@ mod tests {
         approx(trade.net_return, net);
         approx(trade.net_usd(&f), net * 15.63);
 
-        // trailing_only ignores exhaustion and rides to the time stop.
-        let base = closed(simulate_exits(&e, &path, TRAILING_ONLY, &f, LATER));
+        // hold_24h ignores exhaustion and rides to the time stop.
+        let base = closed(simulate_exits(&e, &path, HOLD_24H, &f, LATER));
         assert_eq!(reasons(&base), vec![ExitReason::TimeStop]);
         assert_eq!(base.exit_ms, T0 + DAY_MS);
         approx(base.gross_ratio, 1.5);
     }
 
     #[test]
-    fn stop_precedence_on_crafted_paths() {
-        let f = Friction::binance(BINANCE_DEFAULT_TAKER, None);
-        let bin = entry(Venue::Binance);
-        // Trailing 10% below the 1.10 peak fires before the -12% hard stop.
-        let t = closed(simulate_exits(
-            &bin,
-            &[tick(1, 1.1), tick(2, 0.98)],
-            RULE_EXITS,
-            &f,
-            LATER,
-        ));
-        assert_eq!(reasons(&t), vec![ExitReason::TrailingStop]);
-        approx(t.gross_ratio, 0.98);
-        // One row breaching both: the hard stop wins.
-        let t = closed(simulate_exits(
-            &bin,
-            &[tick(1, 0.87)],
-            TRAILING_ONLY,
-            &f,
-            LATER,
-        ));
-        assert_eq!(reasons(&t), vec![ExitReason::HardStop]);
-
-        // Solana trailing boundary: 1.25 * 0.75 = 0.9375 exits, 0.9376 does not.
+    fn time_stop_fills_at_last_price_within_24h() {
+        // No price stops: a deep drawdown rides to the time stop, which fills at
+        // the last price seen at or before +24h.
         let sol = entry(Venue::Solana);
         let s = Friction::solana();
-        let t = closed(simulate_exits(
-            &sol,
-            &[tick(1, 1.25), tick(2, 0.9375)],
-            RULE_EXITS,
-            &s,
-            LATER,
-        ));
-        assert_eq!(reasons(&t), vec![ExitReason::TrailingStop]);
-        let path = vec![tick(1, 1.25), tick(2, 0.9376), tick(25 * 60, 0.1)];
-        let t = closed(simulate_exits(&sol, &path, RULE_EXITS, &s, LATER));
-        assert_eq!(reasons(&t), vec![ExitReason::TimeStop]);
-        approx(t.gross_ratio, 0.9376);
+        let path = vec![tick(1, 1.25), tick(2, 0.5), tick(25 * 60, 0.1)];
+        for rules in [RULE_EXITS, HOLD_24H] {
+            let t = closed(simulate_exits(&sol, &path, rules, &s, LATER));
+            assert_eq!(reasons(&t), vec![ExitReason::TimeStop]);
+            assert_eq!(t.exit_ms, T0 + DAY_MS);
+            approx(t.gross_ratio, 0.5);
+        }
 
         // Time stop needs the 24h horizon to have passed and an observed price.
         assert_eq!(

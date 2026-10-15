@@ -1,15 +1,15 @@
-//! Port of `src/db.py`: SQLite persistence for orders, fills and daily loss.
+//! Port of `src/db.py`: SQLite persistence for orders and fills.
 //!
-//! The schema is byte-for-byte the Python one so an existing `data/bot.db`
-//! opens unchanged. Money columns are SQLite `REAL` (as written by Python);
-//! values are converted at this boundary only.
+//! The orders/fills schema is byte-for-byte the Python one so an existing
+//! `data/bot.db` opens unchanged. Money columns are SQLite `REAL` (as written
+//! by Python); values are converted at this boundary only.
 
 use parking_lot::{Mutex, MutexGuard};
 use std::path::Path;
 use std::str::FromStr;
 
 use bb_core::Decimal;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 
 use crate::orders::models::{Fill, Order, OrderSide, OrderStatus, OrderType};
 use crate::orders::payload::{iso_naive, parse_iso_datetime};
@@ -42,11 +42,6 @@ CREATE TABLE IF NOT EXISTS fills (
     PRIMARY KEY (id, order_id),
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS daily_loss (
-    date TEXT PRIMARY KEY,
-    loss_usd REAL NOT NULL
-);
 ";
 
 #[derive(Debug, thiserror::Error)]
@@ -71,15 +66,13 @@ pub enum OrderDbError {
     },
     #[error("failed to load orders from database")]
     LoadOrders(#[source] rusqlite::Error),
-    #[error("failed to load daily loss from database")]
-    LoadDailyLoss(#[source] rusqlite::Error),
     #[error("invalid {field} value {value:?} in order database")]
     Corrupt { field: &'static str, value: String },
     #[error("order database write failed")]
     Write(#[source] rusqlite::Error),
 }
 
-/// Thread-safe SQLite store for orders, fills and daily loss.
+/// Thread-safe SQLite store for orders and fills.
 #[derive(Debug)]
 pub struct OrderDb {
     conn: Mutex<Connection>,
@@ -259,30 +252,6 @@ impl OrderDb {
             })
             .collect()
     }
-
-    pub fn upsert_daily_loss(&self, date: &str, loss_usd: Decimal) -> Result<(), OrderDbError> {
-        self.conn()
-            .execute(
-                "INSERT OR REPLACE INTO daily_loss (date, loss_usd) VALUES (?, ?)",
-                params![date, real(loss_usd)],
-            )
-            .map(|_| ())
-            .map_err(OrderDbError::Write)
-    }
-
-    /// Loss recorded for `date` (`YYYY-MM-DD`), 0 when absent.
-    pub fn load_daily_loss(&self, date: &str) -> Result<Decimal, OrderDbError> {
-        let loss: Option<f64> = self
-            .conn()
-            .query_row(
-                "SELECT loss_usd FROM daily_loss WHERE date = ?",
-                params![date],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(OrderDbError::LoadDailyLoss)?;
-        loss.map_or(Ok(Decimal::ZERO), |l| decimal("loss_usd", l))
-    }
 }
 
 struct RawFill {
@@ -386,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn orders_fills_and_daily_loss_round_trip() {
+    fn orders_and_fills_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = OrderDb::open(dir.path().join("bot.db")).unwrap();
         let mut order = Order::new(
@@ -421,9 +390,5 @@ mod tests {
 
         db.delete_order("1").unwrap();
         assert!(db.load_orders().unwrap().is_empty());
-
-        assert_eq!(db.load_daily_loss("2026-01-01").unwrap(), dec!(0));
-        db.upsert_daily_loss("2026-01-01", dec!(12.5)).unwrap();
-        assert_eq!(db.load_daily_loss("2026-01-01").unwrap(), dec!(12.5));
     }
 }

@@ -408,14 +408,12 @@ the path.
 |---|---|---|
 | Exhaustion scale-out | sell 50% when exhaustion >= 0.4, the rest when >= 0.7 | same |
 | Rug precursor | exit 100% | exit 100% |
-| Trailing stop | 25% below peak since entry | 10% below peak since entry |
-| Hard stop | -30% from entry | -12% from entry |
 | Time stop | 24h | 24h |
 
 Arms reported per venue:
 
 - `rule_exits`: all rules above (the gated arm).
-- `trailing_only`: same entries; trailing, hard and time stops only (baseline).
+- `hold_24h`: same entries; 24h time stop only (baseline).
 - `scheduled`: exit in full at +15m, +1h and +6h (three rows).
 - `peak_upper_bound`: exit at the best observed price; shown only as an upper
   bound, never as expected return.
@@ -444,7 +442,7 @@ per venue and per arm (deterministic, haiku):
 - Exit quality: peak capture ratio (realized gain / best gain available from
   entry), share of exhaustion exits that fired before vs after the observed
   peak, share of rug-proxy signals exited before the rug snapshot, and
-  `rule_exits` vs `trailing_only` mean net return.
+  `rule_exits` vs `hold_24h` mean net return.
 - Gate verdict per venue (below), with each criterion's value.
 
 `x-insighter-report-latest.json` (atomic rewrite; read by the dashboard):
@@ -479,7 +477,7 @@ All must hold on signals detected after the freeze date:
    arm only after subtracting its LLM spend.)
 3. Rug rate below 45.3%.
 4. Median lead time >= 10 min before a +30% move.
-5. `rule_exits` mean net return > `trailing_only` mean net return after
+5. `rule_exits` mean net return > `hold_24h` mean net return after
    friction, on the same signals.
 
 Passing the gate allows asking for execution approval; it approves nothing.
@@ -509,9 +507,9 @@ pre-registration.
   pair-gone / not-trading precursor, so an API error never looks like a rug.
 - The time stop fills at the last price seen at or before +24h; the peak upper
   bound uses the same window. Snapshots are timed by capture time. On a single
-  row, exits are checked in the order rug precursor, hard stop, trailing stop,
-  exhaustion. Trades younger than 24h are open; signals with no price after
-  entry are "no path". Both are excluded from P&L.
+  row, exits are checked in the order rug precursor, exhaustion. Trades younger
+  than 24h are open; signals with no price after entry are "no path". Both are
+  excluded from P&L.
 - Venue-level hit rate, rug rate and lead time use floor-passing signals. Rug
   rate counts only signals with at least one snapshot. Peak capture ratio is
   summed realized gross gain divided by summed best available gain.
@@ -534,6 +532,9 @@ pre-registration.
   read queries (e.g. `Viewer`) while loading a page and an allowlist would make
   the search and timeline pages load empty. Read-only remains enforced: every
   non-GET GraphQL and REST call is aborted.
+- 2026-10-14 (operator decision, before burn-in/freeze): hard stops and
+  trailing stops removed from all exit arms; baseline arm `trailing_only`
+  replaced by `hold_24h`.
 
 ## Operations
 
@@ -565,4 +566,4 @@ promoting pumps, any change to Claude Spot, any execution path.
   signals from cashtag-only resolution with rug rate far above mint-resolved
   ones; report splits by resolution rule.
 - Exhaustion exits fire too early on real runners. Failure signal: peak capture
-  ratio below the trailing-only baseline.
+  ratio below the `hold_24h` baseline.
