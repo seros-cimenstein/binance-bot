@@ -107,12 +107,23 @@ Docker: `docker compose ps`, `docker compose logs -f <service>`, and
 
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
 profiles `gui`/`paper`/`live`/`all`) serves the same fleet view plus Claude
-Spot trades, cycles, journal, stop-file and failed-route-halt state at
+Spot trades, cycles (brain, tools, cost per cycle), journal, exit plans
+(Exits tab), stop-file and failed-route-halt state at
 `http://localhost:8787` on the Docker host. It is published on `127.0.0.1`
 only and mounts the data dir read-only. From another machine:
 `ssh -L 8787:localhost:8787 <host>`. On a systemd host,
 `scripts/setup_user_deploy.sh` installs it next to `bb`; run
 `cd ~/.local/share/binance-bot && bin/cryptobot-gui`.
+
+Laptop on the Pi's live data: `scripts/cryptobot_gui_pi.sh --open` (the
+`cryptobot-gui` fish command). It rsyncs the Pi's `docker-data` into
+`~/.cache/binance-bot/pi-data` every 30 s (omp logins, the Claude session and
+the Telegram session are not copied; nothing is written on the Pi), maps the
+trader's file paths and the exit-plan settings from the Pi's `.env.docker`,
+and runs the local release build against the mirror with the laptop's
+read-only keys for the wallet. Started without Pi data, the page says so
+instead of showing empty tabs. Overrides: `PI_HOST`, `PI_DATA_DIR`,
+`PI_ENV_FILE`, `MIRROR_DIR`, `MIRROR_SECONDS`.
 
 Run one foreground read-only/paper evaluation cycle when diagnosing catalog or
 valuation behavior:

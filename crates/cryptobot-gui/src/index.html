@@ -190,6 +190,25 @@
   details.footnote summary { cursor: pointer; color: var(--accent); }
   details.footnote p { margin: 6px 0 0; max-width: 820px; }
 
+  .feed-item.click { cursor: pointer; }
+  .feed-item.click:hover { background: var(--surface-2); }
+  .feed-item.click .cycle-detail { cursor: auto; }
+  .cycle-detail { display: grid; gap: 12px; padding: 12px; border-radius: 10px; background: var(--surface-2); }
+  .cycle-detail .facts { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+  .tool-list { display: grid; gap: 3px; font-size: 12px; }
+  .tool-row { display: grid; grid-template-columns: 18px minmax(110px, max-content) minmax(0, 1fr) auto; gap: 10px; align-items: baseline; }
+  .tool-row .args { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .rules { margin: 0; padding-left: 18px; }
+  .ladder { position: relative; height: 52px; margin: 2px 8px; }
+  .ladder-track { position: absolute; left: 0; right: 0; top: 22px; height: 4px; border-radius: 2px; background: var(--surface-2); }
+  .ladder-mark { position: absolute; top: 16px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 2px;
+                 font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+  .ladder-mark.up { top: 0; flex-direction: column-reverse; }
+  .ladder-mark::before { content: ""; width: 3px; height: 16px; border-radius: 2px; background: currentColor; }
+  .ladder-mark.neg { color: var(--neg); } .ladder-mark.pos { color: var(--pos); } .ladder-mark.accent { color: var(--accent); }
+
   .tip { position: fixed; z-index: 50; pointer-events: none; background: var(--fg); color: var(--bg); padding: 7px 10px; border-radius: 8px;
          font-size: 12px; max-width: 280px; box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
   .tip .tt { font-weight: 650; margin-bottom: 2px; }
@@ -216,6 +235,7 @@
       <a href="#history" data-tab="history">History</a>
       <a href="#wallet" data-tab="wallet">Wallet</a>
       <a href="#claude" data-tab="claude">Claude</a>
+      <a href="#exits" data-tab="exits">Exits</a>
       <a href="#fleet" data-tab="fleet">Fleet</a>
       <a href="#signals" data-tab="signals">Signals</a>
     </nav>
@@ -236,8 +256,8 @@
 // textContent / createTextNode; nothing is parsed as HTML.
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
-const TABS = ["overview", "history", "wallet", "claude", "fleet", "signals"];
-const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", fleet: "/api/fleet", signals: "/api/signals" };
+const TABS = ["overview", "history", "wallet", "claude", "exits", "fleet", "signals"];
+const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", fleet: "/api/fleet", exits: "/api/exits", signals: "/api/signals" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
@@ -509,17 +529,31 @@ function drawCharts() {
 }
 
 // ---------- derived data ----------
+// The cycle cadence comes from the data: the upper quartile of the gaps between the newest
+// cycles (restarts and brain retries make some gaps short; the configured cadence is the long ones).
+function cycleInterval(cycles) {
+  const ts = cycles.slice(0, 13).map((c) => ms(c.timestamp)).filter((t) => t !== null);
+  const gaps = [];
+  for (let i = 1; i < ts.length; i++) gaps.push(ts[i - 1] - ts[i]);
+  gaps.sort((a, b) => a - b);
+  return gaps.length >= 3 ? gaps[Math.floor(0.75 * (gaps.length - 1))] / 1000 : null;
+}
+function noClaudeData() { const st = ui.data.status; return !!(st && st.source && !st.source.audit_present); }
+const NO_DATA = ["No Claude Spot data on this computer", "See the note at the top of the page."];
+function claudeEmpty(title, text) { return noClaudeData() ? empty(...NO_DATA) : empty(title, text); }
 function claudeState() {
   const st = ui.data.status;
   if (!st) return { label: ui.errors.status ? "Unknown" : "Loading", tone: "", detail: ui.errors.status || "" };
+  if (noClaudeData()) return { label: "No data", tone: "warn", detail: "No Claude Spot audit log at " + st.source.audit_path };
   if (st.stop_active) return { label: "Stopped", tone: "neg", detail: "Emergency stop file present: " + st.stop_path };
   if (st.halt) return { label: "Halted", tone: "neg", detail: st.halt };
   const last = st.agent && st.agent.last_cycle ? st.agent.last_cycle.finished_at : null;
   if (!last) return { label: "Waiting", tone: "", detail: "No Claude cycle recorded yet" };
   const age = (Date.now() - ms(last)) / 1000;
-  // The daemon runs a cycle every 4 minutes.
-  if (age <= 900) return { label: "Running", tone: "pos", detail: "Last cycle " + ago(last) };
-  return { label: "Idle", tone: "warn", detail: "Last cycle " + ago(last) };
+  const every = cycleInterval(st.cycles || []) ?? 1200;
+  const detail = "Last cycle " + ago(last) + " · every ~" + duration(every);
+  if (age <= every * 1.5 + 120) return { label: "Running", tone: "pos", detail };
+  return { label: "Idle", tone: "warn", detail };
 }
 const RANGES = [["24h", "24h", 864e5], ["7d", "7d", 6048e5], ["30d", "30d", 2592e6], ["all", "All", Infinity]];
 function tradesInRange(trades) {
@@ -580,6 +614,8 @@ function equityPoints(s) {
 function alerts() {
   const items = [];
   const st = ui.data.status;
+  if (noClaudeData()) items.push(["warn", "No Claude Spot data on this computer",
+    "Nothing at " + st.source.audit_path + ". The live trader runs on the Pi, so History, Claude and Exits stay empty here. Start the dashboard with scripts/cryptobot_gui_pi.sh: it mirrors the Pi's data dir (read-only) and opens this page on it."]);
   if (st && st.stop_active) items.push(["neg", "Emergency stop is on", "Claude Spot won't trade while " + st.stop_path + " exists. Delete it to resume."]);
   if (st && st.halt) items.push(["neg", "Live trading halted", st.halt + ". Review, then run bb claude-spot --mark-failed-route-reviewed."]);
   if (st && st.audit_error) items.push(["neg", "Audit log unreadable", st.audit_error]);
@@ -601,13 +637,15 @@ function renderHeader() {
   for (const a of document.querySelectorAll("#tabs a")) {
     if (a.dataset.tab === ui.tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
-  document.getElementById("updated").textContent = ui.loadedAt ? "Updated " + new Date(ui.loadedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+  const src = ui.data.status && ui.data.status.source;
+  document.getElementById("updated").textContent = ui.loadedAt ? "Updated " + new Date(ui.loadedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    + (src && src.audit_modified ? " · trader wrote " + ago(src.audit_modified) : "") : "";
 }
 
 function render() {
   renderHeader();
   const view = document.getElementById("view");
-  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, claude: claudePage, fleet: fleetPage, signals: signalsPage };
+  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, claude: claudePage, exits: exitsPage, fleet: fleetPage, signals: signalsPage };
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
   drawCharts();
@@ -616,11 +654,13 @@ function render() {
 // ---------- Overview ----------
 function overviewPage() {
   const { wallet, history, status } = ui.data;
-  if (!wallet && !history && !status) return loadingView();
+  // Wait for the three fast views (not the slow fleet), so no card claims "no trades" early.
+  if (["wallet", "history", "status"].some((k) => !(k in ui.data) && !(k in ui.errors))) return loadingView();
   const trades = history ? history.trades : [];
   const s = stats(trades);
   const state = claudeState();
   const openTrade = [...trades].reverse().find((t) => t.status === "open");
+  const openPlan = openTrade && ui.data.exits ? ui.data.exits.active.find((a) => a.asset === openTrade.destination_asset) : null;
   const lastCycle = status && status.cycles && status.cycles[0];
   const agent = status ? status.agent || {} : {};
   const change = wallet && !wallet.error ? num(wallet.change_24h_usdt) : null;
@@ -632,16 +672,18 @@ function overviewPage() {
       change === null ? (wallet && wallet.error ? "wallet unavailable" : "") : el("span", null, el("b", { class: tone(change) }, usd(change, { sign: true }) + " (" + pct(changePct) + ")"), " last 24h")),
     kpi("Claude P&L", s.realized.length || s.open.length ? usd(s.net + s.unrealized, { sign: true }) : "—",
       s.decided.length ? el("span", null, el("b", null, pct(s.winRate, { sign: false, dp: 0 })), " win rate · " + s.wins.length + "W / " + s.losses.length + "L")
-        : "no closed trades yet", s.realized.length || s.open.length ? tone(s.net + s.unrealized) : null),
+        : noClaudeData() ? "no Claude Spot data here" : "no closed trades yet", s.realized.length || s.open.length ? tone(s.net + s.unrealized) : null),
     kpi("Open position", openTrade ? openTrade.destination_asset : "None",
-      openTrade ? el("span", null, el("b", { class: tone(openTrade.pnl_usdt) }, usd(openTrade.pnl_usdt, { sign: true }) + " (" + pct(openTrade.pnl_pct) + ")"), " · held " + duration(openTrade.hold_seconds))
-        : "Claude is in cash or between trades"),
+      openTrade ? el("span", null, el("b", { class: tone(openTrade.pnl_usdt) }, usd(openTrade.pnl_usdt, { sign: true }) + " (" + pct(openTrade.pnl_pct) + ")"), " · held " + duration(openTrade.hold_seconds),
+        openPlan ? el("span", null, " · ", el("a", { href: "#exits", style: "color:var(--accent);text-decoration:none" },
+          num(openPlan.sell_line) !== null ? "sell line " + px(openPlan.sell_line) : "exit plan " + openPlan.spec)) : "")
+        : noClaudeData() ? "no Claude Spot data here" : "Claude is in cash or between trades"),
     kpi("Claude", state.label, el("span", null, state.detail, agent.cycle_count ? " · " + agent.cycle_count + " cycles" : "",
       num(agent.llm_cost_usd) ? " · " + usd(agent.llm_cost_usd) + " LLM today" : ""), state.tone || null));
 
   const points = equityPoints(s);
   const equity = card("Cumulative P&L", points.length >= 1 ? lineChart(points, { height: 230 })
-    : empty("No trades yet", "The curve starts with Claude's first closed trade."), { hint: s.realized.length ? s.realized.length + " realized trades" : null });
+    : claudeEmpty("No trades yet", "The curve starts with Claude's first closed trade."), { hint: s.realized.length ? s.realized.length + " realized trades" : null });
 
   const holdings = wallet && !wallet.error ? wallet.holdings.filter((h) => num(h.value_usdt) >= DUST_USDT) : [];
   const allocation = card("Allocation", wallet && wallet.error ? errorBox(wallet.error)
@@ -654,11 +696,11 @@ function overviewPage() {
       status.journal && status.journal[0] ? el("div", { class: "grid", style: "gap:4px;margin-top:4px" },
         el("div", { class: "small muted" }, "Latest journal note · " + ago(status.journal[0].timestamp)),
         el("div", { class: "feed-text clamp", onclick: (e) => e.currentTarget.classList.toggle("clamp") }, status.journal[0].text)) : null)
-    : empty("No cycles yet", "Claude's reasoning shows up here after its first cycle."), { action: el("a", { href: "#claude", class: "small", style: "color:var(--accent);text-decoration:none" }, "All cycles →") });
+    : claudeEmpty("No cycles yet", "Claude's reasoning shows up here after its first cycle."), { action: el("a", { href: "#claude", class: "small", style: "color:var(--accent);text-decoration:none" }, "All cycles →") });
 
   const recent = [...trades].reverse().slice(0, 5);
   const recentCard = card("Recent trades", recent.length ? tradeTable(recent, { compact: true })
-    : empty("No trades yet", "Trades appear here as soon as Claude executes one."), { flush: recent.length > 0,
+    : claudeEmpty("No trades yet", "Trades appear here as soon as Claude executes one."), { flush: recent.length > 0,
     action: el("a", { href: "#history", class: "small", style: "color:var(--accent);text-decoration:none" }, "Full history →") });
 
   return el("div", { class: "grid" }, kpis, el("div", { class: "grid split" }, equity, allocation), el("div", { class: "grid halves" }, thinking, recentCard));
@@ -690,8 +732,8 @@ function historyPage() {
   const trades = tradesInRange(history.trades);
   const s = stats(trades);
   if (!trades.length) {
-    return el("div", { class: "grid" }, head, card(null, empty(history.trades.length ? "No trades in this range" : "No trades yet",
-      history.trades.length ? "Pick a longer range to see older trades." : "Claude's history was reset. Charts fill in as it trades.")), failedRoutesCard(history));
+    return el("div", { class: "grid" }, head, card(null, history.trades.length ? empty("No trades in this range", "Pick a longer range to see older trades.")
+      : claudeEmpty("No trades yet", "Charts fill in as soon as Claude executes its first route.")), failedRoutesCard(history));
   }
 
   const pf = s.profitFactor === null ? "—" : s.profitFactor === Infinity ? "∞" : nf(2, 2).format(s.profitFactor);
@@ -703,7 +745,7 @@ function historyPage() {
         s.streak && s.streak.n > 1 ? " · " + s.streak.n + " " + (s.streak.status === "win" ? "wins" : "losses") + " in a row" : "")),
     kpi("Avg win / loss", el("span", null, el("span", { class: "pos" }, s.avgWin === null ? "—" : usd(s.avgWin, { sign: true })), el("span", { class: "faint" }, " / "),
       el("span", { class: "neg" }, s.avgLoss === null ? "—" : usd(s.avgLoss))), "Profit factor " + pf + (s.profitFactor !== null ? " (above 1 = winning)" : "")),
-    kpi("Fees & spread", usd(s.fees), "Avg hold " + duration(s.avgHold) + " · " + s.count + " trades"));
+    kpi("Exchange fees", usd(s.fees), "Avg hold " + duration(s.avgHold) + " · " + s.count + " trades"));
 
   const points = equityPoints(s);
   const equity = card("Cumulative P&L", lineChart(points, { height: 260 }), { hint: "each dot is a trade" });
@@ -741,7 +783,7 @@ function historyPage() {
     card("Trades", tradeTable([...trades].reverse(), { expandable: true }), { flush: true, hint: "click a row for Claude's reasoning" }),
     failedRoutesCard(history),
     el("details", { class: "footnote" }, el("summary", null, "How results are calculated"),
-      el("p", null, "Each route Claude submits opens a trade in the coin it bought. The trade closes when Claude later sells that coin. Cost is the USDT value Claude gave up; the result is what the coins were worth when sold (or right now, if still held) minus that cost, so fees and spread are included and the trade results add up to the whole run. Values are the bot's USDT quotes at execution time, not exchange statements. Moves into stablecoins count toward net P&L but not toward wins and losses.")));
+      el("p", null, "Each route Claude submits opens a trade in the coin it bought. The trade closes when that coin is sold, by Claude or by its exit plan. Cost is what the exchange filled the buy for; the result is what the coins fetched when sold (or are worth right now, if still held) minus that cost and the exchange fees of both orders. So spread and slippage are in the fill prices and the trade results add up to the whole run. Fees paid in BNB are valued at today's BNB price. Parking in stablecoins costs nothing and counts toward neither wins nor losses. Routes without fill data (or quoted in another coin than USDT) use the bot's quote at execution time instead, with fees inside the quote.")));
 }
 function assetCard(trades) {
   const groups = new Map();
@@ -773,7 +815,7 @@ function tradeTable(trades, opts = {}) {
   for (const t of trades) {
     const key = tradeKey(t);
     if (opts.compact) {
-      rows.push(el("tr", null, el("td", null, routeLabel(t)), el("td", null, resultChip(t)),
+      rows.push(el("tr", null, el("td", null, routeLabel(t)), el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
         el("td", { class: "r" }, signed(t.pnl_usdt)), el("td", { class: "r muted", title: stamp(t.opened_at) }, ago(t.opened_at))));
       continue;
     }
@@ -781,7 +823,7 @@ function tradeTable(trades, opts = {}) {
     rows.push(el("tr", { class: opts.expandable ? "click" : null, onclick: opts.expandable ? () => { open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } : null },
       el("td", { class: "nw muted" }, stamp(t.opened_at)),
       el("td", null, routeLabel(t)),
-      el("td", null, resultChip(t)),
+      el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
       el("td", { class: "r" }, usd(t.cost_usdt)),
       el("td", { class: "r" }, signed(t.pnl_usdt)),
       el("td", { class: "r" }, el("span", { class: tone(t.pnl_pct) }, pct(t.pnl_pct))),
@@ -791,8 +833,9 @@ function tradeTable(trades, opts = {}) {
       rows.push(el("tr", { class: "detail" }, el("td", { colspan: 8 }, el("div", { class: "grid", style: "gap:6px;padding:6px 0" },
         el("div", { class: "feed-text" }, t.reason || "No reasoning recorded for this route."),
         el("div", { class: "feed-meta" },
-          el("span", null, "Closed " + (t.closed_at ? stamp(t.closed_at) : t.status === "open" ? "— still held" : "—")),
+          el("span", null, "Closed " + (t.closed_at ? stamp(t.closed_at) + (t.closed_by_plan ? " by its exit plan" : "") : t.status === "open" ? "— still held" : "—")),
           el("span", { class: "sep" }, "·"), el("span", null, "Exit value " + usd(t.exit_usdt)),
+          t.valuation === "quotes" ? [el("span", { class: "sep" }, "·"), el("span", { class: "warn" }, "valued from the quote, no fill data")] : null,
           el("span", { class: "sep" }, "·"), el("span", null, t.legs + " order" + (t.legs === 1 ? "" : "s")),
           el("span", { class: "sep" }, "·"), el("span", { class: "faint" }, t.route_id))))));
     }
@@ -885,38 +928,105 @@ function accountCard(wallet) {
 function fact(k, v) { return el("div", { class: "fact" }, el("div", { class: "k" }, k), el("div", { class: "v" }, v)); }
 
 // ---------- Claude ----------
+function shortModel(model) { return String(model || "unknown").replace(/^.*\//, ""); }
+function compactNum(v) { const n = num(v); return n === null ? "—" : new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n); }
+function argText(args) {
+  if (args === null || args === undefined) return "";
+  if (typeof args !== "object") return String(args);
+  return Object.entries(args).map(([k, v]) => k + "=" + (Array.isArray(v) ? v.join(",") : v !== null && typeof v === "object" ? JSON.stringify(v) : String(v))).join("  ");
+}
+function cycleAction(c) { return ((c.agent && c.agent.end_cycle && c.agent.end_cycle.action) || "").toLowerCase(); }
+function cycleFailed(c) { const a = c.agent || {}; return !!c.error || (!!a.turn_status && a.turn_status !== "completed"); }
+function cycleKey(c) { return "cycle:" + (c.cycle_id || c.timestamp); }
+function cycleDetail(c) {
+  const a = c.agent || {}, u = a.usage || {};
+  const tools = (a.tool_calls || []).map((t, i) => el("div", { class: "tool-row" },
+    el("span", { class: "faint num" }, String(i + 1)),
+    el("b", { class: t.is_error ? "neg" : null }, t.name + (t.is_error ? " (error)" : "")),
+    el("span", { class: "args code", title: argText(t.args) }, argText(t.args)),
+    el("span", { class: "faint num" }, num(t.ms) === null ? "" : num(t.ms) >= 1000 ? fixed(num(t.ms) / 1000, 1) + " s" : t.ms + " ms")));
+  const attempts = (a.attempts || []).map((at) => el("div", { class: "small" }, chip(shortModel(at.model), "warn"), " ", pretty(at.status), ": ",
+    el("span", { class: "muted" }, String(at.error || "").slice(0, 300))));
+  return el("div", { class: "cycle-detail", onclick: (e) => e.stopPropagation() },
+    el("div", { class: "facts" },
+      fact("Brain", shortModel(a.model) + (a.thinking ? " · " + a.thinking : "")),
+      fact("Turn", a.turn_status ? pretty(a.turn_status) : "—"),
+      fact("Prompt", c.prompt_version || "—"),
+      fact("Routes quoted", c.candidate_route_count === null || c.candidate_route_count === undefined ? "—" : String(c.candidate_route_count)),
+      fact("Tokens in / cached / out", compactNum(u.input) + " / " + compactNum(u.cache_read) + " / " + compactNum(u.output)),
+      fact("Cost", usd(u.cost_usd))),
+    attempts.length ? el("div", { class: "grid", style: "gap:4px" }, el("div", { class: "small muted" }, "Brains that failed before this one answered"), attempts) : null,
+    tools.length ? el("div", { class: "grid", style: "gap:4px" }, el("div", { class: "small muted" }, tools.length + " tool calls, in order"), el("div", { class: "tool-list" }, tools))
+      : el("div", { class: "small muted" }, "No tool calls."),
+    c.cycle_id ? el("div", { class: "small faint code" }, c.cycle_id) : null);
+}
+function brainsCard(st) {
+  const groups = new Map();
+  for (const c of st.cycles) {
+    const a = c.agent || {};
+    const g = groups.get(a.model || "unknown") || { model: a.model || "unknown", n: 0, failed: 0, cost: 0 };
+    g.n++; g.cost += num(a.usage && a.usage.cost_usd) || 0;
+    if (cycleFailed(c)) g.failed++;
+    groups.set(g.model, g);
+  }
+  const rows = [...groups.values()].sort((x, y) => y.n - x.n);
+  const tools = new Map();
+  for (const c of st.cycles) for (const t of (c.agent && c.agent.tool_calls) || []) tools.set(t.name, (tools.get(t.name) || 0) + 1);
+  const latest = st.cycles[0] && st.cycles[0].agent;
+  const notes = [];
+  if (latest && latest.fallback_active) notes.push(chip("Fallback brain answering now", "warn"));
+  if (num(st.agent && st.agent.brain_down_cycles)) notes.push(chip(st.agent.brain_down_cycles + " cycles in a row with no brain", "neg"));
+  if (!rows.length) return card("Brains", claudeEmpty("No cycles yet", ""));
+  return card("Brains", el("div", { class: "grid", style: "gap:12px" },
+    notes.length ? el("div", { class: "chips" }, notes) : null,
+    el("div", { style: "margin:0 -16px" }, table([["Brain"], ["Cycles", "r"], ["Failed", "r"], ["Avg cost", "r"]], rows.map((g) => el("tr", null,
+      el("td", null, el("b", null, shortModel(g.model))),
+      el("td", { class: "r" }, el("div", { class: "bar-cell" }, String(g.n),
+        el("div", { class: "bar-track", style: "width:50px" }, el("div", { class: "bar-fill", style: "width:" + Math.max(3, (g.n / st.cycles.length) * 100) + "%" })))),
+      el("td", { class: "r" + (g.failed ? " neg" : " muted") }, String(g.failed)),
+      el("td", { class: "r muted" }, usd(g.cost / g.n)))))),
+    tools.size ? el("div", { class: "grid", style: "gap:6px" }, el("div", { class: "small muted" }, "Tools used"),
+      el("div", { class: "chips" }, [...tools].sort((x, y) => y[1] - x[1]).map(([name, n]) => chip(name + " · " + n)))) : null),
+    { hint: "last " + st.cycles.length + " cycles" });
+}
 function claudePage() {
   const st = ui.data.status;
-  const head = pageHead("Claude", "What the trader is doing and why.", null);
+  const head = pageHead("Claude", "What the trader is doing and why. Click a cycle for its brain, tools and cost.", null);
   if (!st) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
+  if (noClaudeData()) return el("div", { class: "grid" }, head, card(null, empty(...NO_DATA)));
   const state = claudeState();
   const agent = st.agent || {};
   const latest = st.cycles[0];
   const model = latest && latest.agent ? latest.agent.model : "";
-  const traded = st.cycles.filter((c) => ["traded", "rebalance"].includes(((c.agent && c.agent.end_cycle && c.agent.end_cycle.action) || "").toLowerCase())).length;
+  const traded = st.cycles.filter((c) => ["traded", "rebalance"].includes(cycleAction(c))).length;
+  const failed = st.cycles.filter(cycleFailed).length;
 
   const kpis = el("div", { class: "grid kpis" },
     kpi("Status", state.label, state.detail, state.tone || null),
     kpi("Cycles", agent.cycle_count ? String(agent.cycle_count) : "0", latest ? "since the fresh start · last " + ago(latest.timestamp) : "since the fresh start"),
-    kpi("Trade decisions", st.cycles.length ? pct((traded / st.cycles.length) * 100, { sign: false, dp: 0 }) : "—", "of the last " + st.cycles.length + " cycles traded"),
-    kpi("LLM cost today", usd(agent.llm_cost_usd), model ? model.replace(/^.*\//, "") + (latest.agent.thinking ? " · " + latest.agent.thinking + " thinking" : "") : ""));
+    kpi("Trade decisions", st.cycles.length ? pct((traded / st.cycles.length) * 100, { sign: false, dp: 0 }) : "—",
+      el("span", null, traded + " of the last " + st.cycles.length + " cycles traded", failed ? el("span", null, " · ", el("b", { class: "neg" }, failed + " failed")) : "")),
+    kpi("LLM cost today", usd(agent.llm_cost_usd), model ? shortModel(model) + (latest.agent.thinking ? " · " + latest.agent.thinking + " thinking" : "") : ""));
 
   const costBars = [...st.cycles].reverse().map((c) => {
-    const usage = (c.agent && c.agent.usage) || {};
-    return { y: num(usage.cost_usd) || 0, tone: "accent", label: "",
-      tip: [stamp(c.timestamp), usd(usage.cost_usd) + " · " + ((c.agent && c.agent.tool_calls) || []).length + " tool calls", (c.agent && c.agent.end_cycle ? pretty(c.agent.end_cycle.action) : "")] };
-  });
-  const cost = card("Cost per cycle", costBars.length ? barChart(costBars, { height: 150 }) : empty("No cycles yet", ""), { hint: "last " + costBars.length + " cycles" });
-
-  const feed = card("Cycles", st.cycles.length ? el("div", { class: "feed" }, st.cycles.slice(0, 40).map((c) => {
     const a = c.agent || {}, usage = a.usage || {};
-    const summary = cycleSummary(c);
-    const text = el("div", { class: "feed-text clamp", title: "click to expand", onclick: (e) => e.currentTarget.classList.toggle("clamp") }, summary || "No summary.");
-    return el("div", { class: "feed-item" },
-      el("div", { class: "feed-meta" }, actionChip(c), a.turn_status && a.turn_status !== "completed" ? chip(pretty(a.turn_status), "neg") : null,
-        el("span", { title: stamp(c.timestamp) }, ago(c.timestamp)), el("span", { class: "sep" }, "·"),
-        el("span", null, (a.tool_calls || []).length + " tools"), el("span", { class: "sep" }, "·"), el("span", null, usd(usage.cost_usd))),
-      text, c.error ? el("div", { class: "small neg" }, c.error) : null);
+    return { y: num(usage.cost_usd) || 0, tone: cycleFailed(c) ? "neg" : "accent", label: "",
+      tip: [stamp(c.timestamp), usd(usage.cost_usd) + " · " + (a.tool_calls || []).length + " tool calls · " + shortModel(a.model), cycleFailed(c) ? "failed: no decision" : pretty(cycleAction(c))] };
+  });
+  const cost = card("Cost per cycle", costBars.length ? barChart(costBars, { height: 150 }) : empty("No cycles yet", ""), { hint: "red: the cycle failed" });
+
+  const sep = () => el("span", { class: "sep" }, "·");
+  const feed = card("Cycles", st.cycles.length ? el("div", { class: "feed" }, st.cycles.slice(0, 60).map((c) => {
+    const a = c.agent || {}, usage = a.usage || {};
+    const key = cycleKey(c), open = ui.expanded.has(key);
+    return el("div", { class: "feed-item click", title: open ? "" : "click for details", onclick: () => { open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } },
+      el("div", { class: "feed-meta" }, actionChip(c), cycleFailed(c) ? chip(a.turn_status && a.turn_status !== "completed" ? pretty(a.turn_status) : "Error", "neg") : null,
+        el("span", { title: stamp(c.timestamp) }, ago(c.timestamp)), sep(), el("span", null, shortModel(a.model)), sep(),
+        el("span", null, (a.tool_calls || []).length + " tools"), sep(), el("span", null, usd(usage.cost_usd)),
+        el("span", { class: "faint", style: "margin-left:auto" }, open ? "▴" : "▾")),
+      el("div", { class: "feed-text" + (open ? "" : " clamp") }, cycleSummary(c) || "No summary."),
+      c.error ? el("div", { class: "small neg" + (open ? "" : " clamp") }, c.error) : null,
+      open ? cycleDetail(c) : null);
   })) : empty("No cycles yet", "Claude's first cycle shows up within a few minutes of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
 
   const journal = card("Journal", st.journal_error ? errorBox(st.journal_error) : st.journal.length
@@ -925,7 +1035,114 @@ function claudePage() {
       el("div", { class: "feed-text clamp", onclick: (e) => e.currentTarget.classList.toggle("clamp") }, j.text))))
     : empty("Empty journal", "Claude writes its theses here so they survive restarts."), { flush: st.journal.length > 0, hint: "Claude's own notes" });
 
-  return el("div", { class: "grid" }, head, kpis, cost, el("div", { class: "grid split" }, feed, journal));
+  return el("div", { class: "grid" }, head, kpis, el("div", { class: "grid split" }, cost, brainsCard(st)), el("div", { class: "grid split" }, feed, journal));
+}
+
+// ---------- Exits (Phase 45 exit plans) ----------
+// A coin price with enough digits to tell the bid from a sell line a fraction of a percent away.
+function px(v) {
+  const n = num(v);
+  if (n === null) return "—";
+  const dp = n >= 1000 || n === 0 ? 2 : Math.min(10, Math.max(2, 5 - Math.floor(Math.log10(Math.abs(n)))));
+  return "$" + nf(2, dp).format(n);
+}
+function share(f) { return num(f) === 1 ? "all" : pct(num(f) * 100, { sign: false, dp: 0 }); }
+// Plain-language rules of a plan spec (the exit_plan menu: trail, atr, part, stretch, slow, fade, deadline).
+function planRules(spec) {
+  const rules = [];
+  for (const part of String(spec || "").split(",").map((p) => p.trim()).filter(Boolean)) {
+    const [key, value = ""] = part.split("=");
+    const [a, b] = value.split(":");
+    if (key === "trail") rules.push("Sell all " + value + "% below the highest price since entry");
+    else if (key === "atr") rules.push("Sell all " + a + "× the average " + b + " candle range below the highest price since entry");
+    else if (key === "part") rules.push("Sell " + share(b) + " once at +" + a + "%");
+    else if (key === "stretch") rules.push("Sell " + share(b) + " when the price spikes " + a + " standard deviations above its 20-minute average (only above entry)");
+    else if (key === "slow") rules.push("Sell " + share(a) + " when the " + b + "-minute climb slows 3 minutes in a row (only above entry)");
+    else if (key === "fade") rules.push("After +" + a + "%, sell all when no new high prints for " + b + " minutes");
+    else if (key === "deadline") rules.push("Sell all " + duration(num(a) * 60) + " after entry");
+    else if (key === "hold") rules.push("Hold: no rule");
+    else rules.push(part);
+  }
+  return rules;
+}
+function ladder(a) {
+  const marks = [["Sell line", a.sell_line, "neg"], ["Entry", a.entry_price, ""], ["Bid", a.last_bid, "accent"], ["Peak", a.peak, "pos"]]
+    .map(([label, v, t]) => [label, num(v), t]).filter(([, v]) => v !== null).sort((x, y) => x[1] - y[1]);
+  if (marks.length < 2) return null;
+  const lo = marks[0][1], hi = marks[marks.length - 1][1];
+  const span = hi - lo || Math.abs(hi) * 0.01 || 1;
+  return el("div", { class: "ladder" }, el("div", { class: "ladder-track" }),
+    marks.map(([label, v, t], i) => el("div", { class: "ladder-mark " + t + (i % 2 ? " up" : ""), style: "left:" + (2 + ((v - lo) / span) * 96) + "%", title: label + " " + px(v) }, el("span", null, label))));
+}
+function activePlanCard(a, live) {
+  return card(null, el("div", { class: "grid", style: "gap:10px" },
+    el("div", { class: "token-head" }, assetLabel(a.asset), chip(a.source === "claude" ? "Claude's plan" : "Default plan", a.source === "claude" ? "accent" : ""),
+      el("span", { class: "code muted" }, a.spec), el("span", { class: "val", title: stamp(a.last_at) }, "bid checked " + ago(a.last_at))),
+    el("ul", { class: "rules" }, planRules(a.spec).map((r) => el("li", null, r))),
+    ladder(a),
+    el("div", { class: "facts" },
+      fact("Entry", px(a.entry_price)),
+      fact("Last bid", el("span", null, px(a.last_bid), " ", signed(a.gain_pct, pct))),
+      fact("Peak", px(a.peak) + " (" + pct(a.peak_gain_pct) + ")"),
+      fact("Sell line", a.sell_line === null ? "none (no trailing rule)" : px(a.sell_line)),
+      fact("Room above the line", a.room_to_sell_line_pct === null ? "—" : pct(a.room_to_sell_line_pct)),
+      fact("Still held", share(a.remaining))),
+    a.fills.length ? el("div", { class: "grid", style: "gap:4px" }, a.fills.map((f) => el("div", { class: "small" },
+      chip(live ? "Sold" : "Would sell", "warn"), " " + share(f.fraction) + " at " + px(f.price) + " · " + f.reason + " · " + stamp(f.at)))) : null));
+}
+const EXIT_EVENTS = { started: ["Watching", "accent"], would_sell: ["Plan fired", "warn"], sold: ["Sold", "pos"], sell_failed: ["Sell failed, retrying", "neg"],
+  sell_abandoned: ["Sell abandoned", "neg"], closed: ["Position closed", ""], rejected: ["Plan rejected", "neg"], cleared: ["Cleared", ""], orphaned: ["Orphaned", ""] };
+function exitEventText(e) {
+  if (e.event === "would_sell") return share(e.fraction) + " at " + px(e.price) + " · " + (e.reason || "");
+  if (e.event === "sold") return share(e.share) + " of what was held · " + (e.reason || "");
+  if (e.event === "closed") return "Claude alone " + pct(e.claude_alone_net_pct) + " · with plan " + pct(e.with_plan_net_pct) + " · plan vs Claude " + usd(e.plan_vs_claude_usdt, { sign: true });
+  if (e.event === "started") return "entry " + px(e.entry_price) + (num(e.trail_pct) !== null ? " · trail " + fixed(e.trail_pct, 2) + "%" : "") + (num(e.peak) !== null ? " · peak " + px(e.peak) : "");
+  if (e.event === "sell_failed" || e.event === "sell_abandoned") return (e.error || "") + (e.attempts ? " (attempt " + e.attempts + ")" : "");
+  return e.error || "";
+}
+function exitsPage() {
+  const ex = ui.data.exits;
+  const head = pageHead("Exit plans", "How open positions get sold between Claude's cycles.", null);
+  if (!ex) return el("div", { class: "grid" }, head, ui.errors.exits ? card(null, errorBox(ui.errors.exits)) : loadingView());
+  const s = ex.settings || {};
+  const live = !!s.live;
+  const mode = !s.configured ? ["Unknown", null, "exit-plan settings aren't set on this computer"]
+    : s.error ? ["Misconfigured", "neg", s.error]
+    : live ? ["Live", "pos", "the trader sells when a plan fires"] : ["Paper", "warn", "plans are only recorded, nothing is sold"];
+  const trades = ui.data.history ? ui.data.history.trades : [];
+  const planSells = trades.filter((t) => t.closed_by_plan);
+  const planPnl = planSells.reduce((acc, t) => acc + (num(t.pnl_usdt) || 0), 0);
+  const watchSub = ex.state_present ? (ex.stale ? "watch state " + ago(ex.updated_at) + ", not updating" : "bids checked " + ago(ex.updated_at)) : "no watch state file yet";
+  const kpis = el("div", { class: "grid kpis" },
+    kpi("Mode", mode[0], mode[2], mode[1]),
+    kpi("Default plan", s.default_plan || "None", s.default_plan ? el("span", null, planRules(s.default_plan).length + " rules · positions opened since " + stamp(s.default_plan_from))
+      : s.configured ? "only plans Claude sets run" : "unknown here"),
+    kpi("Watching", String(ex.active.length) + (ex.active.length === 1 ? " position" : " positions"), watchSub, ex.stale && ex.state_present ? "warn" : null),
+    live ? kpi("Plan sells", String(planSells.length), planSells.length ? el("span", null, signed(planPnl), " on the trades they closed") : "no position sold by a plan yet", planSells.length ? tone(planPnl) : null)
+      : kpi("Paper trial", String(ex.closed_trials) + " closed", ex.closed_trials ? el("span", null, "plan vs Claude ", signed(ex.plan_vs_claude_usdt)) : "no closed trial yet"));
+
+  const active = ex.active.length ? el("div", { class: "grid halves" }, ex.active.map((a) => activePlanCard(a, live)))
+    : card("Open positions", empty("Nothing to watch", noClaudeData() ? NO_DATA[1]
+      : "Claude holds no position with a plan. When it buys" + (s.default_plan ? ", the default plan " + s.default_plan + " (or the one Claude sets)" : ", the plan Claude sets") + " shows up here within seconds."));
+
+  const waiting = ex.waiting.length ? card("Waiting for the watcher", table([["Coin"], ["Plan"], ["Entry", "r"], ["Set", "r"]], ex.waiting.map((w) => el("tr", null,
+    el("td", null, assetLabel(w.asset)), el("td", { class: "code" }, w.spec), el("td", { class: "r" }, px(w.entry_price)), el("td", { class: "r muted", title: stamp(w.set_at) }, ago(w.set_at))))),
+    { flush: true, hint: "Claude set these; the watcher hasn't picked them up" }) : null;
+
+  const sells = planSells.length ? card("Trades closed by a plan", tradeTable([...planSells].reverse(), { expandable: true }), { flush: true }) : null;
+
+  const events = card("Watch log", ex.events_error ? errorBox(ex.events_error) : ex.events.length ? el("div", { class: "feed" }, ex.events.map((e) => {
+    const [label, t] = EXIT_EVENTS[e.event] || [pretty(e.event), ""];
+    return el("div", { class: "feed-item" }, el("div", { class: "feed-meta" }, chip(label, t), e.asset ? el("b", null, e.asset) : null,
+      e.spec ? el("span", { class: "code" }, e.spec) : null, e.at ? el("span", { title: stamp(e.at) }, ago(e.at)) : null),
+      exitEventText(e) ? el("div", { class: "small" }, exitEventText(e)) : null);
+  })) : empty("No events yet", "Starts, plan triggers, sells and closes are logged here."), { flush: ex.events.length > 0, hint: "newest first" });
+
+  return el("div", { class: "grid" }, head,
+    [ex.state_error, ex.book_error].filter(Boolean).map((e) => card(null, errorBox(e))),
+    kpis, active, waiting, sells, events,
+    el("details", { class: "footnote" }, el("summary", null, "How exit plans work"),
+      el("p", null, "Claude can pick a sell plan for each position from a fixed menu (follow the peak by percent or by candle range, take part at a gain, stretch above the 20-minute band, slowdown, momentum fade, deadline). Positions without one use the default plan. Between cycles the bot checks the bid every few seconds; when a rule fires it sells that share into USDT through the same checked order path as Claude's own trades. Exit plans only sell, never buy. The sell line is where the follow-the-peak rule sells; other rules fire on their own conditions.")));
 }
 
 // ---------- Fleet ----------
@@ -1164,9 +1381,14 @@ async function load() {
   const button = document.getElementById("refresh");
   button.classList.add("spin");
   const keys = Object.keys(ENDPOINTS);
+  // The fleet view reads every bot's ledgers and takes seconds; on the first load each
+  // section renders as soon as its own data arrives instead of waiting for the slowest.
   const results = await Promise.allSettled(keys.map((k) => fetch(ENDPOINTS[k], { cache: "no-store" }).then((r) => {
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();
+  }).then((value) => {
+    if (!(k in ui.data)) { ui.data[k] = value; render(); }
+    return value;
   })));
   results.forEach((r, i) => {
     if (r.status === "fulfilled") { ui.data[keys[i]] = r.value; delete ui.errors[keys[i]]; }

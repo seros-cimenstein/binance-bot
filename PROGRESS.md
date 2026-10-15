@@ -5,6 +5,51 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-15: Dashboard on the Pi's live data (Phase 46, repo + laptop
+  only, Pi untouched). Cause of "wallet/Claude/history look unimplemented":
+  the `cryptobot-gui` fish command ran the Oct 13 release binary in
+  `~/.local/share/binance-bot`, which has no Claude Spot files (the trader
+  writes them on the Pi), and the page said "history was reset". New
+  `scripts/cryptobot_gui_pi.sh`: rsync mirror of `pi-wired:binance-bot/
+  docker-data` into `~/.cache/binance-bot/pi-data` every 30 s (omp-agent,
+  claude-spot-session, `*.session`, archive excluded; `--delete` so a removed
+  stop file disappears), trader paths and the 4 exit-plan settings grepped
+  from the Pi's `.env.docker`, GUI run against the mirror; the fish function
+  now calls it with `--open`. GUI: `/api/status` `source` (audit present,
+  mtime) and richer cycle rows; no-data alert and empty states naming the
+  path; header "trader wrote Xm ago"; running/idle from the observed cycle
+  cadence (upper-quartile gap, was a fixed 4-minute assumption); Claude tab
+  brains card (cycles/failed/avg cost per model, fallback state, tool use)
+  and expandable cycles (brain, failed attempts, tokens, cost, prompt, every
+  tool call with args and time); new Exits tab + `/api/exits` (`exits.rs`:
+  settings, watched positions with sell line/bid/peak/fills and rules in
+  plain words, waiting plans, watch log, unreadable state/book reported);
+  History marks trades closed by an exit-plan sell (`cycle_id` `exit-plan`);
+  overview shows the open position's sell line; first load renders without
+  waiting for the 2.6 s fleet view. Verified: launcher against the Pi showed
+  the live ENA buy (11:56 UTC, default plan `atr=3:1h,stretch=2:1`, sell line
+  0.17516) on Overview/History/Exits, the wallet and 120 cycles; no-data page
+  checked from the runtime dir; exits page checked on a synthetic state with
+  fills/waiting/sell_failed events. `cargo clippy --workspace --all-targets
+  -D warnings` clean, `cargo test --workspace` 976 passed, `scripts/smoke.sh`
+  passed, release binary rebuilt. The Pi's `cryptobot-gui` compose service
+  is not running and its image has the old page; not rebuilt. The operator's
+  old `cryptobot-gui --open` (13:29 local) still held port 8787, so the fish
+  command reopened the old page; the launcher now stops a `cryptobot-gui` on
+  its port that is not reading the mirror (checked: it stopped pid 974356 and
+  took over 8787). First real exit-plan sell, seen in the dashboard: ENA
+  bought 11:56 UTC (53.07 for 9.93 USDT), the default plan's stretch rule
+  sold all of it at 12:15:54 UTC for 9.95 USDT (signal 0.1874). History P&L
+  now comes from the fills (`submitted_legs[].final_order`/`order`: cost,
+  filled, fees) instead of the quote: the quote's `source_value_usdt` is the
+  planned spend (e.g. 10 USDT) while the order is sized below it (9.934704),
+  so every trade looked ~0.06-0.1 USDT worse. Fees of both orders are
+  subtracted (BNB at the current wallet price); parking in USDT is 0; routes
+  without fills or with a non-USDT quote fall back to the quote. ENA trade:
+  +0.015921 before fees, +0.0010 after (win). All-time realized: -1.19 USDT
+  (was shown as -2.27); matches the USDT balance 15.57 -> 14.607 plus about
+  0.225 USDT of BNB fees. 2 wins / 9 losses. `cargo test --workspace` 979
+  passed, clippy clean.
 - 2026-10-15: Live exit plans (operator: "implement the winning one on top
   and make it live", chose live now over a paper week). New `exit_guard`
   runs between cycles inside the `claude-spot` daemon when

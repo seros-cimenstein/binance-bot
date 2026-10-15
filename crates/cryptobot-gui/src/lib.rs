@@ -11,6 +11,8 @@
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
 //! - `GET /api/fleet`: `bb bot-status --json` bots (activity, trades, P&L).
+//! - `GET /api/exits`: Phase 45 exit plans: settings, running plans with their sell lines,
+//!   plans waiting for the watcher and the newest watch-log events ([`exits`]).
 //! - `GET /api/signals`: Phase 43 X insighter (paper only): collector health, focus, traction
 //!   curves, Haiku takes, recent signals and the weekly report ([`signals`]).
 //!
@@ -19,6 +21,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod exits;
 pub mod history;
 pub mod signals;
 pub mod wallet;
@@ -36,6 +39,7 @@ use axum::routing::get;
 use bb_binance::BinanceClient;
 use bb_capital::status::{collect_snapshot, render_json};
 use bb_signals::x_insighter::schema::XPaths;
+use bb_trader::exit_book::ExitPaths;
 use bb_trader::audit::failed_route_halt;
 use bb_trader::config::{
     DEFAULT_AUDIT_PATH, DEFAULT_JOURNAL_PATH, DEFAULT_STATE_PATH, DEFAULT_STOP_PATH,
@@ -64,6 +68,8 @@ pub struct ClaudeSpotFiles {
     pub journal_path: PathBuf,
     pub state_path: PathBuf,
     pub stop_path: PathBuf,
+    /// Phase 45 exit-plan book, watch state and watch log.
+    pub exits: ExitPaths,
 }
 
 impl ClaudeSpotFiles {
@@ -76,6 +82,7 @@ impl ClaudeSpotFiles {
             journal_path: path("CLAUDE_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
             state_path: path("CLAUDE_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
             stop_path: path("CLAUDE_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
+            exits: ExitPaths::from_env(),
         }
     }
 }
@@ -174,6 +181,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/history", get(history_handler))
         .route("/api/wallet", get(wallet_handler))
         .route("/api/fleet", get(fleet))
+        .route("/api/exits", get(exits_handler))
         .route("/api/signals", get(signals_handler))
         .layer(middleware::from_fn(localhost_only))
         .with_state(Arc::new(state))
@@ -245,6 +253,14 @@ async fn fleet(State(app): State<Arc<AppState>>) -> Response {
     json_response(view)
 }
 
+async fn exits_handler(State(app): State<Arc<AppState>>) -> Response {
+    let paths = app.claude_spot.exits.clone();
+    blocking_json(move || {
+        exits::exits_view(&paths, |name| std::env::var(name).ok(), bb_core::time::now_ms())
+    })
+    .await
+}
+
 async fn signals_handler(State(app): State<Arc<AppState>>) -> Response {
     blocking_json(move || app.signals()).await
 }
@@ -273,7 +289,8 @@ fn no_store(mut response: Response) -> Response {
 }
 
 /// Claude Spot state: stop file, the trader's own failed-route halt verdict, agent state,
-/// newest cycle summaries and journal notes (newest first).
+/// newest cycle summaries and journal notes (newest first), and where the data came from
+/// (`source`: a missing audit file means this host has no Claude Spot data at all).
 pub fn status_view(files: &ClaudeSpotFiles) -> Value {
     let audit = load_audit_rows(&files.audit_path);
     let halt = failed_route_halt(&audit);
@@ -286,7 +303,11 @@ pub fn status_view(files: &ClaudeSpotFiles) -> Value {
         .map(|row| {
             json!({
                 "timestamp": row.get("timestamp"),
+                "cycle_id": row.get("cycle_id"),
                 "status": row.get("status"),
+                "mode": row.get("mode"),
+                "prompt_version": row.get("prompt_version"),
+                "candidate_route_count": row.get("candidate_route_count"),
                 "error": row.get("error"),
                 "decision": row.get("decision"),
                 "agent": row.get("agent"),
@@ -300,7 +321,17 @@ pub fn status_view(files: &ClaudeSpotFiles) -> Value {
         }
         Err(error) => (Vec::new(), Some(error.to_string())),
     };
+    let audit_meta = std::fs::metadata(&files.audit_path).ok();
+    let audit_modified = audit_meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
     json!({
+        "source": {
+            "audit_path": files.audit_path.display().to_string(),
+            "audit_present": audit_meta.is_some(),
+            "audit_modified": audit_modified,
+        },
         "stop_active": files.stop_path.exists(),
         "stop_path": files.stop_path.display().to_string(),
         "halt": halt,
@@ -365,6 +396,11 @@ mod tests {
             journal_path: dir.join("journal.jsonl"),
             state_path: dir.join("state.json"),
             stop_path: dir.join("claude-spot.stop"),
+            exits: ExitPaths {
+                plans: dir.join("exit-plans.json"),
+                state: dir.join("exit-watch-state.json"),
+                log: dir.join("exit-watch.jsonl"),
+            },
         }
     }
 
@@ -410,6 +446,9 @@ mod tests {
         assert_eq!(empty["stop_active"], json!(false));
         assert_eq!(empty["halt"], Value::Null);
         assert_eq!(empty["cycles"], json!([]));
+        // No audit file: the page must say this host has no Claude Spot data.
+        assert_eq!(empty["source"]["audit_present"], json!(false));
+        assert_eq!(empty["source"]["audit_modified"], Value::Null);
 
         write_lines(
             &files.audit_path,
@@ -420,6 +459,7 @@ mod tests {
             ],
         );
         assert_eq!(status_view(&files)["halt"], Value::Null);
+        assert_eq!(status_view(&files)["source"]["audit_present"], json!(true));
     }
 
     #[test]

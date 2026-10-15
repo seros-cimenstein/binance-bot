@@ -994,6 +994,35 @@ Step 3, live (operator decision 2026-10-15: live now, without the paper week):
   failed sells before any order retry up to 3 times.
 - [ ] Review after about a week: live plan sells vs Claude's own exits.
 
+## 46. Dashboard On The Pi's Live Data (operator request 2026-10-15)
+
+`cryptobot-gui` started on the laptop showed empty History and Claude tabs:
+the trader writes its files on the Pi, and the page said "history was reset"
+instead of saying it had no data. The dashboard stays read-only and
+localhost-only.
+
+- [x] `scripts/cryptobot_gui_pi.sh`: rsync mirror of the Pi's data dir
+  (no omp logins, Claude session or Telegram session), refreshed every 30 s,
+  trader paths and the non-secret exit-plan settings mapped from the Pi's env
+  file; the dashboard runs against the mirror. The `cryptobot-gui` fish
+  command uses it.
+- [x] `/api/status` reports whether the audit file exists and when it last
+  changed; the page names the missing path and the launcher instead of empty
+  states, and the header shows how old the trader's data is.
+- [x] Claude tab: running/idle from the observed cycle cadence (not a fixed
+  4 minutes), a brains card (cycles, failures and cost per model, fallback
+  state, tool use) and expandable cycles with the brain, fallback attempts,
+  tokens, cost, prompt version and every tool call with its arguments.
+- [x] Exits tab (`/api/exits`): mode and default plan, each watched position
+  with its rules in plain words, sell line, bid, peak and fills, plans
+  waiting for the watcher, trades closed by a plan and the watch log; unreadable
+  state or plan files are shown as errors. History marks trades closed by an
+  exit plan, the overview shows the open position's sell line.
+- [x] History P&L from the exchange fills (cost, filled quantity and fees of
+  each order) instead of the trader's pre-trade quote, which counted the
+  planned spend; fees of both orders subtracted, quote fallback for routes
+  without USDT-quoted fills.
+
 ## Post-Implementation Handoff
 
 Roadmap phases 1 through 11 are implemented and locally verified. Future
