@@ -79,16 +79,22 @@ driven project.
   tools; `execute_route` is the only order path. Claude Spot must not call
   margin, futures, universal-transfer, withdrawal, or prediction write
   endpoints.
-- Claude Spot model fallback (operator decision 2026-10-13): when the primary
-  model (`CLAUDE_SPOT_MODEL`, `anthropic/claude-haiku-5-5`) is rate- or
-  usage-limited, omp may switch that turn to `openai-codex/gpt-6.1-sol` with
-  thinking `low` (`retry.fallbackChains` in the Pi's
-  `omp-agent/config.yml`) and returns to the primary when its cooldown ends.
-  The fallback model is the trader for that turn: the same host tools, the
-  same `execute_route` path and every hard-safety item below apply unchanged.
-  The fallback uses its own Codex login on the Pi (device flow), not a copied
-  token. Adding another fallback model or provider needs a new operator
-  decision.
+- Claude Spot model fallback (operator decisions 2026-10-13 and 2026-10-15):
+  the primary model (`CLAUDE_SPOT_MODEL`) is `anthropic/claude-sonnet-5-5`
+  at thinking `high` since 2026-10-14 (before that
+  `anthropic/claude-haiku-5-5`), with a 20-minute deployed cycle since
+  2026-10-15 so it fits the subscription allowance. The brain chain is
+  Sonnet 5.5 (Anthropic) -> `openai-codex/gpt-6.1-sol` at `high` ->
+  `google-antigravity/claude-sonnet-5-5` at `high`
+  (`CLAUDE_SPOT_FALLBACK_MODELS` and `retry.fallbackChains` in the Pi's
+  `omp-agent/config.yml`); each provider uses its own omp login on the Pi.
+  When the active model is rate- or usage-limited (or times out, errors or
+  fails a compaction), the turn moves to the next model in the chain and
+  returns to the primary when its cooldown ends. A fallback model is the
+  trader for that turn: the same host tools, the same `execute_route` path
+  and every hard-safety item below apply unchanged. Each login is made on
+  the Pi with `omp login <provider>`, never a copied token. Adding another
+  model or provider needs a new operator decision.
 - Claude Spot has no trading guardrails, by operator decision. The edge /
   market-evidence minimum, friction cap, speculative mode, loss-streak limit,
   trade cooldown, daily trade cap, proven-edge gate, rules-engine decision mode,
@@ -98,7 +104,34 @@ driven project.
   information in tool output for Claude to weigh, never blocking gates. Do not
   reintroduce any of them as a blocking gate without explicit operator
   approval. `CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD` is LLM cost control, not a
-  trading gate.
+  trading gate. By operator decision (2026-10-14) the trader has no stop-loss
+  or take-profit levels: the prompt must not ask Claude for invalidation
+  prices, exit triggers or profit targets, and no automatic price-level exit
+  may be added to Claude Spot without explicit operator approval.
+- Phase 45 Claude-chosen exit plans (operator approval 2026-10-14): Claude may
+  pick a sell plan per position from a fixed, deterministic menu (follow the
+  peak by percent or ATR, take part, stretch above the Bollinger band,
+  slowdown, momentum fade, deadline) by setting its parameters; Claude
+  never writes or runs code. Approved: the historical replay
+  (`bb claude-spot-exit-replay`) and, after the operator reviewed it, the
+  paper trial: the optional `set_exit_plan` host tool and the
+  `claude-spot-exit-watch` watcher, which records would-be sells and must
+  never place an order or hold an order path. The prompt may offer the tool
+  but must not require exit plans.
+- Phase 45 live exit plans (operator decision 2026-10-15, before a paper
+  run, after the 40-trade backtest): with `CLAUDE_SPOT_EXIT_PLANS_LIVE=true`
+  the `claude-spot` daemon follows positions between cycles and sells a
+  position into USDT when its plan (Claude's, or the default
+  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`, deployed `stretch=2:1,atr=3:1h`, for
+  positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM`) fires. These
+  sells use `Runtime::exit_sell`: the cycle lock (never during a Claude
+  route), live arming, the emergency stop file, the failed-route halt,
+  operator scope, `order/test` per leg, exchange filters, fill
+  reconciliation, and one durable audit row (`cycle_id` `exit-plan`) before
+  the alert; an ambiguous sell halts live trading like any route. Only the
+  trader writes the watch files then; the paper watcher refuses to start.
+  Exit plans only sell, never buy. Changing the default plan or the menu
+  needs a new operator decision.
 - Claude Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

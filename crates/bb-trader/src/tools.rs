@@ -11,8 +11,11 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::config::TraderConfig;
 use crate::context::decimal_json;
 use crate::cycle::{Runtime, route_summary};
+use crate::exit_book::{PlanBook, PlanEntry, SetExitPlanArgs};
+use crate::exit_replay::{read_audit, round_trips};
 use crate::journal::MAX_ENTRY_CHARS;
 use crate::memory::value_decimal;
 use crate::universe::{candidate_assets, quote_routes};
@@ -27,8 +30,33 @@ fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false})
 }
 
+/// Menu part of the `set_exit_plan` description.
+const EXIT_PLAN_MENU: &str = "One plan per asset; setting again replaces it. Rules, in any combination: trail_pct (sell all once the price falls this % below the highest price since entry) or atr_multiple with atr_timeframe 1m|5m|15m|1h (Chandelier: that many average true ranges of those candles below the highest price); take_part_gain_pct with take_part_fraction (sell that fraction once at that gain); stretch_z with stretch_fraction (sell that fraction once the price is z standard deviations above its 20-minute average, upper Bollinger band, while above entry); slowdown_fraction with slowdown_minutes (sell that fraction once the speed over that many minutes is still positive but has fallen 3 minutes in a row, while above entry); fade_min_gain_pct with fade_minutes (after being up at least that %, sell all when no new high for that many minutes); deadline_minutes (sell all that long after entry). Fractions are of the original position. clear: true removes the plan.";
+
+/// `set_exit_plan` description for the configured mode (live sells or paper trial).
+fn exit_plan_description(config: &TraderConfig) -> String {
+    let default = config.exit.default_plan.map_or_else(
+        || "No default plan: a position without a plan has none.".to_owned(),
+        |d| {
+            format!(
+                "Every new position gets the default plan {} unless you set another.",
+                d.plan
+            )
+        },
+    );
+    if config.exit.live {
+        format!(
+            "Give an open position a sell plan from a fixed menu. LIVE: between cycles the trader checks the bid every few seconds and SELLS the position into USDT (real orders, same safety checks as execute_route) when its plan fires; the next cycle shows what was sold. {default} {EXIT_PLAN_MENU}"
+        )
+    } else {
+        format!(
+            "Optional. Give an open position a sell plan from a fixed menu. A watcher follows the bid every few seconds between cycles and records what the plan would sell. Paper trial: it places no orders, so selling still goes through execute_route; the cycle prompt shows each plan's would-be sells. {default} {EXIT_PLAN_MENU}"
+        )
+    }
+}
+
 /// Tool catalogue registered with omp.
-pub fn tool_definitions() -> Vec<HostTool> {
+pub fn tool_definitions(config: &TraderConfig) -> Vec<HostTool> {
     let assets = json!({"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_EVIDENCE_ASSETS});
     vec![
         HostTool::new(
@@ -94,7 +122,7 @@ pub fn tool_definitions() -> Vec<HostTool> {
             object(
                 json!({
                     "route_id": {"type": "string"},
-                    "reason": {"type": "string", "description": "your thesis: signal, magnitude, horizon, invalidation"},
+                    "reason": {"type": "string", "description": "your thesis: signal, expected move, horizon"},
                     "spend_amount": {"type": "number", "exclusiveMinimum": 0}
                 }),
                 &["route_id", "reason"],
@@ -103,10 +131,38 @@ pub fn tool_definitions() -> Vec<HostTool> {
         HostTool::new(
             "journal_write",
             "Journal write",
-            "Append a durable note (theses, invalidation levels, lessons). Survives compaction and restarts; the latest notes are shown every cycle.",
+            "Append a durable note (theses, lessons). Survives compaction and restarts; the latest notes are shown every cycle.",
             object(
                 json!({"text": {"type": "string", "maxLength": MAX_ENTRY_CHARS}}),
                 &["text"],
+            ),
+        ),
+        HostTool::new(
+            "set_exit_plan",
+            if config.exit.live {
+                "Exit plan (live)"
+            } else {
+                "Exit plan (paper trial)"
+            },
+            exit_plan_description(config),
+            object(
+                json!({
+                    "asset": {"type": "string", "description": "held asset, e.g. ENA"},
+                    "clear": {"type": "boolean"},
+                    "trail_pct": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 100},
+                    "atr_multiple": {"type": "number", "exclusiveMinimum": 0},
+                    "atr_timeframe": {"type": "string", "enum": ["1m", "5m", "15m", "1h"]},
+                    "take_part_gain_pct": {"type": "number", "exclusiveMinimum": 0},
+                    "take_part_fraction": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1},
+                    "stretch_z": {"type": "number", "exclusiveMinimum": 0},
+                    "stretch_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+                    "slowdown_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+                    "slowdown_minutes": {"type": "integer", "minimum": 2, "maximum": 60},
+                    "fade_min_gain_pct": {"type": "number", "minimum": 0},
+                    "fade_minutes": {"type": "integer", "minimum": 1},
+                    "deadline_minutes": {"type": "integer", "minimum": 1}
+                }),
+                &["asset"],
             ),
         ),
         HostTool::new(
@@ -253,6 +309,7 @@ impl TraderTools {
             "get_trade_history" => self.get_trade_history(parse(arguments)?).await,
             "execute_route" => self.execute_route(parse(arguments)?).await,
             "journal_write" => self.journal_write(parse(arguments)?).await,
+            "set_exit_plan" => self.set_exit_plan(parse(arguments)?).await,
             "journal_read" => self.journal_read(parse(arguments)?),
             "end_cycle" => self.end_cycle(parse(arguments)?).await,
             other => Err(format!("unknown tool {other}")),
@@ -479,6 +536,64 @@ impl TraderTools {
             .read(limit)
             .map_err(|e| format!("journal read failed: {e}"))?;
         Ok(json!({"entries": entries}))
+    }
+
+    async fn set_exit_plan(&self, args: SetExitPlanArgs) -> ToolResult {
+        let asset = args.asset.trim().to_uppercase();
+        if asset.is_empty() {
+            return Err("asset must not be blank".into());
+        }
+        let config = &self.runtime.config;
+        let path = &config.exit_paths.plans;
+        let mut book =
+            PlanBook::load(path).map_err(|e| format!("exit plan book unreadable: {e}"))?;
+        if args.clear {
+            let cleared = book.plans.remove(&asset).is_some();
+            book.save(path)
+                .map_err(|e| format!("exit plan book not saved: {e}"))?;
+            return Ok(json!({"cleared": cleared, "asset": asset}));
+        }
+        let plan = args.plan()?;
+        let rows = read_audit(&config.audit_path).map_err(|e| format!("audit unreadable: {e}"))?;
+        let (trips, _) = round_trips(&rows, None, None);
+        let trip = trips
+            .iter()
+            .rev()
+            .find(|t| t.asset == asset && t.exit.is_none())
+            .ok_or_else(|| {
+                format!(
+                    "no open {asset} position in the audit log; exit plans follow positions opened with execute_route"
+                )
+            })?;
+        let cycle_id = {
+            let guard = self.runtime.cycle.lock().await;
+            guard
+                .as_ref()
+                .map(|s| s.cycle_id.clone())
+                .unwrap_or_default()
+        };
+        let entry = PlanEntry {
+            asset: asset.clone(),
+            symbol: trip.symbol.clone(),
+            spec: plan.to_string(),
+            plan,
+            entry_ms: trip.entry_ms,
+            entry_price: trip.entry_price,
+            set_at_ms: bb_core::time::now_ms(),
+            cycle_id,
+        };
+        book.plans.insert(asset.clone(), entry.clone());
+        book.save(path)
+            .map_err(|e| format!("exit plan book not saved: {e}"))?;
+        Ok(json!({
+            "recorded": true,
+            "asset": asset,
+            "plan": entry.spec,
+            "symbol": entry.symbol,
+            "entry_price": decimal_json(entry.entry_price),
+            "paper_only": true,
+            "note": "Paper trial: the watcher records what this plan would sell; it places no orders. Sell with execute_route."
+        }))
     }
 
     async fn end_cycle(&self, args: EndCycleArgs) -> ToolResult {

@@ -417,7 +417,9 @@ bb claude-spot --mark-failed-route-reviewed --review-reason "reconciled by hand"
 Claude Spot is a long-running daemon, not a timer:
 
 - Docker: compose service `claude-spot` (profiles `live` and `all`), running
-  `bb claude-spot --submit-live --daemon --interval-seconds 240`.
+  `bb claude-spot --submit-live --daemon --interval-seconds 1200` (every 20
+  minutes since 2026-10-15: Sonnet 5.5 on the subscription cannot sustain
+  4-minute cycles).
 - systemd: `binance-claude-spot.service` (same command, `Restart=always`):
 
 ```bash
@@ -427,6 +429,33 @@ journalctl --user -u binance-claude-spot.service -f
 
 The service always passes `--submit-live`; whether it trades is decided by the
 live arming variables in `.env` and the stop file.
+
+### Exit plans (Phase 45)
+
+Claude may give an open position a sell plan with the `set_exit_plan` tool
+(fixed menu: follow the peak by percent or ATR, take part, stretch, slowdown,
+momentum fade, deadline); positions opened from
+`CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` without one get
+`CLAUDE_SPOT_DEFAULT_EXIT_PLAN` (deployed: `stretch=2:1,atr=3:1h`).
+
+- **Live** (`CLAUDE_SPOT_EXIT_PLANS_LIVE=true`, deployed since 2026-10-15):
+  between cycles `claude-spot` checks each planned position's bid every
+  `CLAUDE_SPOT_EXIT_POLL_SECONDS` (5) and sells it into USDT when its plan
+  fires, through the same hard safety as Claude's routes. Each sell is a
+  route row with `cycle_id` `exit-plan` in the audit and a Telegram alert;
+  the watch log records `would_sell`, `sold`, `sell_failed` and
+  `sell_abandoned`. The emergency stop file stops these sells too. To turn
+  live plans off, set `CLAUDE_SPOT_EXIT_PLANS_LIVE=false` and recreate
+  `claude-spot`.
+- **Paper** (`CLAUDE_SPOT_EXIT_PLANS_LIVE=false`): compose service
+  `claude-spot-exit-watch` (profile `exit-paper`) or
+  `binance-claude-spot-exit-watch.service` records would-be sells and places
+  no orders. It refuses to start while plans run live.
+- Files: `CLAUDE_SPOT_EXIT_PLANS_PATH` (written by the trader's tool),
+  `CLAUDE_SPOT_EXIT_WATCH_STATE_PATH` and `CLAUDE_SPOT_EXIT_WATCH_LOG_PATH`
+  (written by whichever of the two runs). The cycle prompt shows each plan.
+- Results: `bb claude-spot-exit-watch --summary` compares, for each closed
+  position with a plan, "with the plan" and "Claude alone".
 
 ### omp authentication
 
@@ -438,6 +467,24 @@ the persistent data volume, so the login survives container recreation.
 
 ```bash
 docker compose run --rm -it claude-spot omp
+```
+
+The brain chain (`CLAUDE_SPOT_MODEL` then `CLAUDE_SPOT_FALLBACK_MODELS`) needs
+one login per provider in that same directory: `anthropic`, `openai-codex`
+(device flow) and `google-antigravity`. `omp usage` inside the container shows
+each account's 5-hour and 7-day allowance.
+
+Google Antigravity redirects the browser to `127.0.0.1:51121` on the machine
+running omp, so on the Pi log in from a host-network container and tunnel that
+port from the laptop whose browser signs in:
+
+```bash
+# laptop terminal 1: forward the callback port to the Pi
+ssh -L 51121:127.0.0.1:51121 pi-wired
+# in that session, on the Pi:
+docker run --rm -it --network host -v ~/binance-bot/docker-data:/app/data \
+  binance-bot:latest omp login google-antigravity
+# open the printed URL in the laptop browser and sign in; omp prints success
 ```
 
 ### Failed-route halt

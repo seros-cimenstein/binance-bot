@@ -200,15 +200,17 @@ focused tests before the next phase starts.
 ## 8. Risk Coverage Expansion
 
 - [x] Current runtime uses max position size, daily loss limit, and duplicate-order
-  checks.
+  checks. (Daily loss limit removed in Phase 44.)
 - [x] Wire additional existing `RiskGuard` capabilities into runtime config:
   maximum total exposure, maximum open orders, minimum balance, allowed
-  leverage, daily drawdown, and maximum price deviation.
+  leverage, daily drawdown, and maximum price deviation. (Daily drawdown
+  removed in Phase 44.)
 - [x] Add tests for every configured risk rule and Telegram alerts on rejection.
 
 ## 9. Persistence And Recovery
 
-- [x] Restore orders, positions, and daily loss on startup.
+- [x] Restore orders, positions, and daily loss on startup. (Daily loss
+  persistence removed in Phase 44.)
 - [x] Add a recovery audit log for restored positions, active orders, and risk
   state.
 - [x] Reconcile locally active orders with Binance on startup.
@@ -872,9 +874,10 @@ Traction, focus and exhaustion:
   score with the flags that triggered it.
 - [x] Deterministic exit rules, with Haiku as one input: scale out as the
   exhaustion score crosses thresholds (e.g. half at the first, the rest at
-  the second), exit in full on any rug precursor, and keep trailing, hard and
-  time stops as backstops. "Assumed peak" means the exhaustion signal; the
-  real peak is only known afterwards.
+  the second), exit in full on any rug precursor, and keep a 24h time stop
+  as the backstop (no hard or trailing stops, operator decision 2026-10-14).
+  "Assumed peak" means the exhaustion signal; the real peak is only known
+  afterwards.
 
 Evaluation, paper only:
 
@@ -882,19 +885,19 @@ Evaluation, paper only:
   +24h, +3d and +7d (price, liquidity, pair existence).
 - [x] Weekly report: lead time (signal before or after the move), hit rate
   (+X% before -Y% within 6h), rug rate, path returns, and friction-adjusted
-  paper P&L under scheduled exits and rule exits (take-profit ladder,
-  trailing stop, time stop). "Sold at the peak" is shown only as an upper
-  bound, never as expected return.
+  paper P&L under scheduled exits and rule exits (exhaustion scale-out, rug
+  precursor, time stop). "Sold at the peak" is shown only as an upper bound,
+  never as expected return.
 - [x] Ablation: deterministic features alone vs features plus Haiku's
   verdict, so Haiku has to earn its cost.
 - [x] Exit quality: peak capture ratio (realized gain / best gain available
   from entry), how often the exhaustion exit fired before vs after the actual
   peak, how often it got out before the rug proxy, and exhaustion exits vs a
-  trailing-stop-only baseline on the same signals.
+  24h-hold (`hold_24h`) baseline on the same signals.
 - [ ] Pre-registered gate: at least 4 weeks and 100 scored signals; positive
   friction-adjusted P&L under rule exits that survives dropping the top two
   outliers; rug rate below V1's 45.3%; median lead time of at least 10 minutes
-  before a +30% move; exhaustion exits beat the trailing-stop-only baseline
+  before a +30% move; exhaustion exits beat the 24h-hold baseline
   after friction. Friction: the audit's >= 7.2% round trip for ~$15 on
   Solana, or authenticated taker fees plus spread for Binance-listed coins.
   The weekly report computes this verdict per venue; it stays open until the
@@ -914,10 +917,82 @@ Execution, separate approval after the gate:
   order-test / reconciliation / stop-file path, or on-chain Solana through
   `bb-sniper` with its own wallet, per-trade and daily caps and an emergency
   stop. Haiku never places orders; the deterministic entry and exhaustion /
-  stop exit rules do.
+  rug / time exit rules do.
 
 Non-goals: private chats or DMs, posting or engaging from the account,
 coordinating or promoting pumps, and any change to Claude Spot.
+
+## 44. No Fixed Exit Levels Or Loss Caps (operator decision 2026-10-14)
+
+The live Claude Spot trader was opening and closing positions within minutes
+on self-set "invalidation" prices, paying roughly 75-110 bps of fees and
+spread per round trip. The operator ordered fixed exit levels and loss caps
+out of the selected modules.
+
+- [x] Claude Spot prompt: theses carry why, expected move and horizon, no
+  invalidation price; the system prompt states there are no stop-loss or
+  take-profit levels and that a small move is not by itself a reason to exit
+  (guidance, not a gate). Prompt version `claude-spot-v5-agentic`.
+- [x] X insighter paper exits: hard and trailing stops removed; the
+  `trailing_only` baseline arm is now `hold_24h`.
+- [x] Legacy runtime (`bb main`): daily loss limit and daily drawdown limit
+  removed with their daily-loss persistence.
+- Not selected by the operator, so unchanged: listing sniper/detector stops
+  and the mean reversion stop/target (paper or disabled), and every Claude
+  Spot hard-safety item in `CODEX.md`.
+
+## 45. Claude-Chosen Exit Plans Between Cycles (operator approval 2026-10-14)
+
+Claude Spot looks at the market once per cycle (240 s); a coin can rise and
+fall again in between. Claude picks a sell plan for each position from a fixed
+menu, and a watcher enforces it between cycles. Claude never writes code: the
+menu is fixed, deterministic Rust, and Claude only fills in its parameters.
+"Max win" cannot be guaranteed; each plan is a bet on when a move is over, so
+every step is proven on data before it touches money.
+
+Step 1, replay (research only, no order path):
+
+- [x] Exit-plan menu evaluator in `bb-trader` (`exit_plan`), money in
+  `Decimal`: follow the peak (sell all once price falls X% below the highest
+  price since entry, X fixed or a multiple of the coin's normal 1-minute
+  swing), take part (sell a fraction once at +X%), momentum fade (after being
+  up at least X%, sell when no new high for N minutes), deadline (sell after N
+  minutes). Bars are evaluated pessimistically (low before high); a tick is a
+  one-price bar, so the live watcher can reuse it unchanged.
+- [x] `bb claude-spot-exit-replay`: pair real round trips from the Claude Spot
+  audit, fetch public klines from entry to entry + horizon, run a grid of
+  plans, and compare each with Claude's actual exit and with holding to the
+  horizon, net of the real fee rate plus modelled exit slippage.
+- [x] Run it on the live audit and record the result in `PROGRESS.md`
+  (2026-10-14: 9 round trips; no plan made money, see `PROGRESS.md`).
+
+Step 2, paper watcher (after the operator reviews the replay):
+
+- [x] `set_exit_plan` host tool (menu parameters only, validated, paper
+  only) and `bb claude-spot-exit-watch`: follows the bid between cycles,
+  logs would-be sells, no orders; the cycle prompt shows each plan's
+  results; `--summary` compares "Claude with the plan" and "Claude alone".
+- [ ] Run it for about a week next to the live trader and review
+  `bb claude-spot-exit-watch --summary`.
+- [x] Research the math traders use for exits (2026-10-15) and keep every
+  candidate in `docs/exit-plan-candidates.md`.
+- [x] Menu expansion from that research: ATR trail / Chandelier exit
+  (`atr=<k>:<1m|5m|15m|1h>`, replaces the 1-minute swing multiple),
+  stretch above the 20-minute upper Bollinger band (`stretch=<z>:<fraction>`)
+  and slowdown, still rising but slowing 3 minutes in a row
+  (`slow=<fraction>:<minutes>`); `set_exit_plan`, replay and watcher updated.
+- [x] Expanded menu deployed with the live step below.
+
+Step 3, live (operator decision 2026-10-15: live now, without the paper week):
+
+- [x] Sells through `Runtime::exit_sell` (cycle lock, arming, stop file,
+  failed-route halt, scope, order/test, filters, reconciliation, audit row
+  before alert) from an exit guard that runs between cycles in the
+  `claude-spot` daemon (`CLAUDE_SPOT_EXIT_PLANS_LIVE`); default plan
+  `stretch=2:1,atr=3:1h` for positions opened from
+  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM`; partial sells keep the position open;
+  failed sells before any order retry up to 3 times.
+- [ ] Review after about a week: live plan sells vs Claude's own exits.
 
 ## Post-Implementation Handoff
 

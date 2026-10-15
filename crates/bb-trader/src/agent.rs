@@ -44,12 +44,41 @@ pub const COMPACT_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Instructions for `compact` when the context fills up.
 pub const COMPACT_INSTRUCTIONS: &str = "You are compacting the context of an autonomous Binance Spot trader. \
-Preserve exactly: current holdings and their entry values, every open thesis with its invalidation level and \
+Preserve exactly: current holdings and their entry values, every open thesis with its expected move and \
 review horizon, lessons learned from closed trades, the most recent fills and failures (route ids, amounts, \
 status), and any operator halt. Drop raw tool payloads, candle data and superseded route quotes.";
 
+/// The system-prompt rule about exit plans for the configured mode.
+fn exit_plan_rule(config: &TraderConfig) -> String {
+    let default = config.exit.default_plan.map_or_else(
+        || "No default plan is set.".to_owned(),
+        |d| {
+            format!(
+                "Every new position gets the default plan {} unless you set another.",
+                d.plan
+            )
+        },
+    );
+    if config.exit.live {
+        format!(
+            "- Exit plans run LIVE: between cycles the trader checks the bid every few seconds and, when a \
+position's plan fires, sells it into USDT for you (real orders, same safety checks as execute_route). \
+{default} Use set_exit_plan to give a position another plan from the fixed menu, or clear: true to remove \
+it; sells made by plans show in the next cycle and in your trade history."
+        )
+    } else {
+        format!(
+            "- Exit plans are an optional paper trial: set_exit_plan lets you give a position a sell plan from a \
+fixed menu with your own parameters, and a watcher records between cycles what that plan would have sold. \
+It places no orders; selling stays your decision through execute_route. {default} Use the recorded results \
+to learn which settings would have helped."
+        )
+    }
+}
+
 /// The trader's standing instructions.
 pub fn system_prompt(config: &TraderConfig) -> String {
+    let exit_rule = exit_plan_rule(config);
     let mut prompt = format!(
         "You are the autonomous trader of a Binance Spot wallet.\n\nMission: {MISSION}\n\n\
 How you work:\n\
@@ -61,8 +90,12 @@ spend_amount), and run several routes in one cycle. Holding is a decision, not a
 versus the indicative value). Weigh them against the move you expect; they are information, not rules.\n\
 - Market evidence (returns over 5m/15m/1h/4h/24h/7d, volatility, volume change, relative momentum), social \
 evidence and trade memory are information for your judgement. Nothing blocks a route on their behalf.\n\
-- Write down every thesis (why, expected move, horizon, invalidation) with journal_write, and review open \
-theses at the start of each cycle. Record lessons from closed trades.\n\
+- Write down every thesis (why, expected move, horizon) with journal_write, and review open theses at the \
+start of each cycle. Record lessons from closed trades.\n\
+- No stop-loss or take-profit levels in your own trading: do not set yourself invalidation prices or profit \
+targets and sell when they are touched. Judge each holding on its thesis over its horizon; a small move \
+against or in favour of a position is not by itself a reason to exit.\n\
+{exit_rule}\n\
 - You act only through the tools below. Every order you place in live mode is real money.\n\
 - Finish every cycle by calling end_cycle exactly once (action hold or traded, with a short summary).\n\n\
 Execution invariants the runtime enforces (do not spend turns testing them):\n"
@@ -80,7 +113,7 @@ relies on in your journal.\n",
         );
     }
     prompt.push_str("\nTools:\n");
-    for tool in tool_definitions() {
+    for tool in tool_definitions(config) {
         let _ = writeln!(prompt, "- {}: {}", tool.name, tool.description);
     }
     if config.web_search {
@@ -434,6 +467,9 @@ pub struct TraderAgent {
     primary_timeout: Duration,
     cooldown: Duration,
     compact_at_percent: f64,
+    /// Also compact once the context holds this many tokens (0 = percent only), so every
+    /// model in the chain keeps a similar context whatever its window.
+    compact_at_tokens: u64,
     /// `[primary, fallbacks...]`.
     models: Vec<ModelSpec>,
     /// Index into `models` last selected by the trader or observed from omp.
@@ -495,7 +531,9 @@ impl TraderAgent {
             inner: tools,
             calls: Arc::clone(&route_calls),
         });
-        session.set_host_tools(tool_definitions(), counted).await?;
+        session
+            .set_host_tools(tool_definitions(config), counted)
+            .await?;
         let opened = session.open_session(&config.session_dir).await?;
         if opened.cancelled {
             return Err(TraderError::config("omp cancelled open_session"));
@@ -514,6 +552,7 @@ impl TraderAgent {
             primary_timeout: config.primary_timeout,
             cooldown: config.fallback_cooldown,
             compact_at_percent: config.compact_at_percent,
+            compact_at_tokens: config.compact_at_tokens,
             effective: primary_name.clone().unwrap_or_default(),
             primary_name,
             models,
@@ -539,6 +578,12 @@ impl TraderAgent {
     /// An unknown model counts as the primary (omp starts on it).
     fn on_primary(&self) -> bool {
         self.effective.is_empty() || self.is_primary(&self.effective)
+    }
+
+    /// Whether a context of `tokens` (`percent` of the window) needs compaction.
+    fn over_compaction_threshold(&self, tokens: Option<u64>, percent: Option<f64>) -> bool {
+        percent.is_some_and(|p| p >= self.compact_at_percent)
+            || (self.compact_at_tokens > 0 && tokens.is_some_and(|t| t >= self.compact_at_tokens))
     }
 
     fn current_model(&self) -> String {
@@ -703,20 +748,21 @@ impl TraderAgent {
             return;
         }
         let tokens = state.context_usage.as_ref().and_then(|usage| usage.tokens);
-        if let (Some(tokens), Some(window)) = (tokens, self.primary_window) {
-            #[allow(clippy::cast_precision_loss)]
-            let percent = tokens as f64 * 100.0 / window.max(1) as f64;
-            if percent >= self.compact_at_percent {
-                tracing::info!(
-                    percent,
-                    model = %self.current_model(),
-                    "context too large for the primary; compacting before switching back"
-                );
-                if let Err(error) = self.session.compact(Some(COMPACT_INSTRUCTIONS)).await {
-                    tracing::warn!(%error, "compaction before returning to the primary failed; staying on the fallback");
-                    self.primary_retry_at = Some(Instant::now() + self.cooldown);
-                    return;
-                }
+        #[allow(clippy::cast_precision_loss)]
+        let percent = tokens
+            .zip(self.primary_window)
+            .map(|(tokens, window)| tokens as f64 * 100.0 / window.max(1) as f64);
+        if self.over_compaction_threshold(tokens, percent) {
+            tracing::info!(
+                ?percent,
+                ?tokens,
+                model = %self.current_model(),
+                "context too large for the primary; compacting before switching back"
+            );
+            if let Err(error) = self.session.compact(Some(COMPACT_INSTRUCTIONS)).await {
+                tracing::warn!(%error, "compaction before returning to the primary failed; staying on the fallback");
+                self.primary_retry_at = Some(Instant::now() + self.cooldown);
+                return;
             }
         }
         if let Err(error) = self.switch_to(0, "fallback cooldown ended").await {
@@ -737,16 +783,20 @@ impl TraderAgent {
             }
         };
         self.observe_state(&state);
-        let percent = state.context_usage.and_then(|usage| usage.percent);
-        let Some(percent) = percent.filter(|p| *p >= self.compact_at_percent) else {
+        let usage = state.context_usage.as_ref();
+        let tokens = usage.and_then(|usage| usage.tokens);
+        let percent = usage.and_then(|usage| usage.percent);
+        if !self.over_compaction_threshold(tokens, percent) {
             return;
-        };
-        tracing::info!(percent, model = %self.current_model(), "compacting trader context");
+        }
+        tracing::info!(?percent, ?tokens, model = %self.current_model(), "compacting trader context");
         let mut tried = vec![false; self.models.len()];
         tried[self.active] = true;
         // A context larger than the model's own window cannot be summarized by that model
         // (seen 2026-10-14: Haiku at 130% after a night on the larger fallback); move first.
-        if percent >= 100.0 && self.fallback_enabled() {
+        if let Some(percent) = percent.filter(|p| *p >= 100.0)
+            && self.fallback_enabled()
+        {
             let model = self.current_model();
             let why = format!("context is {percent:.0}% of {model}'s window");
             if self.switch_next(&mut tried, &why).await.is_some() {
@@ -1465,6 +1515,24 @@ mod tests {
         assert_eq!(report.attempts.len(), 1);
         assert_eq!(report.attempts[0].status, "compaction");
         assert!(report.attempts[0].error.contains("130%"));
+    }
+
+    #[tokio::test]
+    async fn token_threshold_compacts_large_windows_at_the_same_context_size() {
+        let config = config(&[("CLAUDE_SPOT_COMPACT_AT_TOKENS", "100000")]);
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        let script = tokio::spawn(async move {
+            // 120K tokens is only 12% of a 1M window, but over the 100K token threshold.
+            server.state(PRIMARY, 120_000, 1_000_000).await;
+            server.compact(None).await;
+            // Below both thresholds: no compaction.
+            server.state(PRIMARY, 60_000, 1_000_000).await;
+            server.quiet().await;
+        });
+        agent.maybe_compact().await;
+        agent.maybe_compact().await;
+        script.await.unwrap();
     }
 
     #[tokio::test]

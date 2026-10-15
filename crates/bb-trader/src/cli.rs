@@ -20,6 +20,10 @@ use crate::error::{Result, TraderError};
 pub enum Command {
     /// Run the Claude agentic Spot trader (one cycle, or a daemon with --daemon).
     ClaudeSpot(ClaudeSpotArgs),
+    /// Replay the exit-plan menu on Claude Spot's real round trips (public klines, no orders).
+    ClaudeSpotExitReplay(crate::exit_replay::ExitReplayArgs),
+    /// Paper exit-plan watcher: follows bids between cycles, records would-be sells (no orders).
+    ClaudeSpotExitWatch(crate::exit_watch::ExitWatchArgs),
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -52,6 +56,20 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("Claude Spot failed: {error}");
+                ExitCode::FAILURE
+            }
+        }),
+        Command::ClaudeSpotExitReplay(args) => Ok(match crate::exit_replay::run_cli(args).await {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("Exit-plan replay failed: {error}");
+                ExitCode::FAILURE
+            }
+        }),
+        Command::ClaudeSpotExitWatch(args) => Ok(match crate::exit_watch::run_cli(args).await {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("Exit-plan watcher failed: {error}");
                 ExitCode::FAILURE
             }
         }),
@@ -124,6 +142,14 @@ async fn claude_spot(args: ClaudeSpotArgs) -> Result<ExitCode> {
     spawn_signal_listener(shutdown.clone(), Arc::clone(&runtime));
     let mut trader = Trader::new(Arc::clone(&runtime));
     let mut exit = ExitCode::SUCCESS;
+    let mut exit_guard = (args.daemon && mode == CycleMode::Live && config.exit.live).then(|| {
+        tracing::info!(
+            default_plan = ?config.exit.default_plan.map(|d| d.plan.to_string()),
+            poll_seconds = config.exit.poll_seconds,
+            "live exit plans enabled"
+        );
+        crate::exit_guard::ExitGuard::new(Arc::clone(&runtime))
+    });
     loop {
         match trader.run_cycle(&shutdown).await {
             Ok(outcome) => {
@@ -143,9 +169,17 @@ async fn claude_spot(args: ClaudeSpotArgs) -> Result<ExitCode> {
         if !args.daemon || shutdown.is_cancelled() {
             break;
         }
-        tokio::select! {
-            () = tokio::time::sleep(Duration::from_secs(args.interval_seconds)) => {}
-            () = shutdown.cancelled() => break,
+        let next_cycle = tokio::time::Instant::now() + Duration::from_secs(args.interval_seconds);
+        match exit_guard.as_mut() {
+            // Live exit plans: follow bids and sell when a plan fires until the next cycle.
+            Some(guard) => guard.run_until(next_cycle, &shutdown).await,
+            None => tokio::select! {
+                () = tokio::time::sleep_until(next_cycle) => {}
+                () = shutdown.cancelled() => {}
+            },
+        }
+        if shutdown.is_cancelled() {
+            break;
         }
     }
     runtime.begin_shutdown();

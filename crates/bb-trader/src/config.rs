@@ -15,7 +15,7 @@ use crate::error::{Result, TraderError};
 use crate::scope::ScopeConfig;
 
 /// Prompt/audit version tag of the agentic trader.
-pub const PROMPT_VERSION: &str = "claude-spot-v4-agentic";
+pub const PROMPT_VERSION: &str = "claude-spot-v7-agentic";
 /// The only accepted value of `CLAUDE_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 
@@ -173,6 +173,8 @@ pub struct TraderConfig {
     pub journal_path: PathBuf,
     pub journal_prompt_entries: usize,
     pub compact_at_percent: f64,
+    /// `CLAUDE_SPOT_COMPACT_AT_TOKENS`: also compact at this many context tokens (0 = off).
+    pub compact_at_tokens: u64,
     /// 0 = unlimited.
     pub max_daily_llm_cost_usd: Decimal,
     pub state_path: PathBuf,
@@ -181,6 +183,10 @@ pub struct TraderConfig {
     pub audit_path: PathBuf,
     pub lock_path: PathBuf,
     pub stop_path: PathBuf,
+    /// Phase 45 exit plans: plan book (written by `set_exit_plan`), watch state and log.
+    pub exit_paths: crate::exit_book::ExitPaths,
+    /// Phase 45 exit plans: live or paper, default plan, poll interval.
+    pub exit: crate::exit_book::ExitSettings,
     // telegram
     pub telegram_explain: bool,
     pub telegram_reason_chars: usize,
@@ -276,6 +282,8 @@ impl TraderConfig {
         if evidence_timeframe != "1h" {
             return Err(TraderError::config("market_evidence_timeframe must be 1h"));
         }
+        let exit = crate::exit_book::ExitSettings::from_lookup(|name| env.raw(name))
+            .map_err(TraderError::config)?;
         let config = Self {
             api_key,
             api_secret,
@@ -305,6 +313,7 @@ impl TraderConfig {
             journal_path: env.path("CLAUDE_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
             journal_prompt_entries: env.integer("CLAUDE_SPOT_JOURNAL_PROMPT_ENTRIES", 8)?,
             compact_at_percent: env.float("CLAUDE_SPOT_COMPACT_AT_PERCENT", 70.0)?,
+            compact_at_tokens: env.integer("CLAUDE_SPOT_COMPACT_AT_TOKENS", 0)?,
             max_daily_llm_cost_usd: env
                 .decimal("CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD", Decimal::ZERO)?,
             state_path: env.path("CLAUDE_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
@@ -312,6 +321,8 @@ impl TraderConfig {
             audit_path: env.path("CLAUDE_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
             lock_path: env.path("CLAUDE_SPOT_LOCK_PATH", "data/claude-spot.lock"),
             stop_path: env.path("CLAUDE_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
+            exit_paths: crate::exit_book::ExitPaths::from_lookup(|name| env.raw(name)),
+            exit,
             telegram_explain: env.boolean("CLAUDE_SPOT_TELEGRAM_EXPLAIN", true)?,
             telegram_reason_chars: env.integer("CLAUDE_SPOT_TELEGRAM_REASON_CHARS", 0)?,
             max_route_legs: env.integer("CLAUDE_SPOT_MAX_ROUTE_LEGS", 3)?,

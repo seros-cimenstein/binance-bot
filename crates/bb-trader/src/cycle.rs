@@ -31,6 +31,9 @@ use crate::universe::{
     Balances, MarketView, RouteCandidate, build_route_candidates, quote_candidate,
 };
 
+/// The exit-plan watcher saves its state every few seconds; older state means it is down.
+const EXIT_WATCHER_STALE_MS: i64 = 60_000;
+
 /// Whether `execute_route` may place orders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CycleMode {
@@ -606,6 +609,158 @@ impl Runtime {
         }
         result
     }
+
+    /// Sell `share` (0..=1] of the free `asset` balance into USDT because an exit plan
+    /// fired. Same hard safety as `execute_route`: live arming, the emergency stop file,
+    /// the failed-route halt, operator scope, `order/test` per leg, exchange filters and
+    /// fill reconciliation. Holds the cycle lock, so it never overlaps a Claude route.
+    pub async fn exit_sell(
+        &self,
+        asset: &str,
+        share: Decimal,
+        reason: &str,
+    ) -> std::result::Result<Value, ExitSellError> {
+        let _cycle = self.cycle.lock().await;
+        if self.mode != CycleMode::Live {
+            return Err(ExitSellError::refused(
+                "plan-only mode: exit plans do not sell",
+            ));
+        }
+        if self.shutting_down() {
+            return Err(ExitSellError::refused("trader is shutting down"));
+        }
+        if bb_core::fsutil::stop_requested(&self.config.stop_path) {
+            return Err(ExitSellError::refused(format!(
+                "Claude Spot emergency stop is active: {}",
+                self.config.stop_path.display()
+            )));
+        }
+        self.config
+            .check_live_arming()
+            .map_err(|e| ExitSellError::refused(e.to_string()))?;
+        if let Some(halt) = failed_route_halt(&self.audit.rows()) {
+            return Err(ExitSellError::refused(halt));
+        }
+        let view = self
+            .load_view()
+            .await
+            .map_err(|e| ExitSellError::refused(format!("market refresh failed: {e}")))?;
+        let balances = self
+            .balances()
+            .await
+            .map_err(|e| ExitSellError::refused(format!("balance read failed: {e}")))?;
+        self.sell_into_usdt(&view, &balances, asset, share, reason)
+            .await
+    }
+
+    /// The order half of [`Self::exit_sell`] on a given market view and balances. Every
+    /// executor run is one durable route row (`cycle_id` `exit-plan`) before its alert.
+    pub(crate) async fn sell_into_usdt(
+        &self,
+        view: &MarketView,
+        balances: &Balances,
+        asset: &str,
+        share: Decimal,
+        reason: &str,
+    ) -> std::result::Result<Value, ExitSellError> {
+        if share <= Decimal::ZERO || share > Decimal::ONE {
+            return Err(ExitSellError::refused(format!(
+                "exit share must be in (0, 1], got {share}"
+            )));
+        }
+        let free = balances.free(asset);
+        let amount = if share == Decimal::ONE {
+            free
+        } else {
+            free * share
+        };
+        if amount <= Decimal::ZERO {
+            return Err(ExitSellError::refused(format!("no free {asset} balance")));
+        }
+        let candidate = quote_candidate(view, &self.config, asset, EXIT_QUOTE, amount)
+            .await
+            .map_err(|e| ExitSellError::refused(format!("quote failed: {e}")))?
+            .ok_or_else(|| {
+                ExitSellError::refused(format!(
+                    "no executable route from {asset} to {EXIT_QUOTE} for {amount}"
+                ))
+            })?;
+        let executor = Executor {
+            exchange: &self.client,
+            fees: &view.fees,
+            config: &self.config,
+            poll_interval: self.poll_interval,
+        };
+        let outcome = executor
+            .execute(&candidate.route, &view.markets, Some(amount))
+            .await;
+        let decision = Decision::rebalance(&candidate, reason, Some(amount));
+        let (mut row, result) = match outcome {
+            Ok(legs) => {
+                let mut row =
+                    AuditRow::new(&self.config, RowType::Route, RowStatus::Submitted, decision);
+                row.submission_attempted = true;
+                let result = Ok(json!({
+                    "status": "submitted",
+                    "route": route_summary(&candidate),
+                    "legs": leg_summaries(&legs),
+                }));
+                row.submitted_legs = legs;
+                (row, result)
+            }
+            Err(failure) => {
+                let mut row =
+                    AuditRow::new(&self.config, RowType::Route, RowStatus::Failed, decision);
+                row.submission_attempted = failure.submission_attempted;
+                row.error = failure.message.clone();
+                let result = Err(ExitSellError {
+                    message: failure.message,
+                    submission_attempted: failure.submission_attempted,
+                });
+                row.submitted_legs = failure.legs;
+                (row, result)
+            }
+        };
+        row.selected_route = candidate.as_context();
+        row.cycle_id = EXIT_CYCLE_ID.into();
+        if let Err(error) = self.audit.append(&row) {
+            tracing::error!(%error, "CRITICAL: exit-plan sell could not be audited");
+            return Err(ExitSellError {
+                message: format!("exit-plan sell not audited: {error}"),
+                submission_attempted: true,
+            });
+        }
+        row.telegram_sent = self.alerter.send(&row).await;
+        result
+    }
+}
+
+/// Quote asset exit-plan sells go to.
+pub const EXIT_QUOTE: &str = "USDT";
+/// `cycle_id` of exit-plan route rows (they run between cycles).
+pub const EXIT_CYCLE_ID: &str = "exit-plan";
+
+/// Why an exit-plan sell did not complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExitSellError {
+    pub message: String,
+    /// An order may exist: live trading is halted until the operator reviews the route.
+    pub submission_attempted: bool,
+}
+
+impl ExitSellError {
+    fn refused(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            submission_attempted: false,
+        }
+    }
+}
+
+impl std::fmt::Display for ExitSellError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
 }
 
 /// Worst route status of the cycle (`held` when nothing was attempted).
@@ -790,7 +945,7 @@ impl Trader {
                 tracing::warn!(%error, "journal unreadable");
                 Vec::new()
             });
-        let prompt = cycle_prompt(
+        let mut prompt = cycle_prompt(
             &config,
             runtime.mode,
             state.cycle_count + 1,
@@ -799,6 +954,12 @@ impl Trader {
             state.last_cycle.as_ref(),
             &journal,
         );
+        prompt.push_str(&crate::exit_book::prompt_section(
+            &config.exit_paths,
+            bb_core::time::now_ms(),
+            EXIT_WATCHER_STALE_MS,
+            config.exit.live,
+        ));
         let agent = self.agent().await?;
         agent.prepare_cycle().await;
         let report = agent.run_turn(&prompt, shutdown).await;
@@ -876,11 +1037,19 @@ mod tests {
             p("state.json"),
             p("stop"),
         );
+        let (plans, watch_state, watch_log) = (
+            p("exit-plans.json"),
+            p("exit-watch-state.json"),
+            p("exit-watch.jsonl"),
+        );
         let mut pairs = vec![
             ("CLAUDE_SPOT_AUDIT_PATH", audit.as_str()),
             ("CLAUDE_SPOT_JOURNAL_PATH", journal.as_str()),
             ("CLAUDE_SPOT_STATE_PATH", state.as_str()),
             ("CLAUDE_SPOT_STOP_PATH", stop.as_str()),
+            ("CLAUDE_SPOT_EXIT_PLANS_PATH", plans.as_str()),
+            ("CLAUDE_SPOT_EXIT_WATCH_STATE_PATH", watch_state.as_str()),
+            ("CLAUDE_SPOT_EXIT_WATCH_LOG_PATH", watch_log.as_str()),
             ("CLAUDE_SPOT_CANDIDATE_LIMIT", "0"),
         ];
         pairs.extend_from_slice(extra);
@@ -1230,6 +1399,82 @@ mod tests {
         assert!(error.contains("no active cycle"));
     }
 
+    #[tokio::test]
+    async fn set_exit_plan_follows_the_open_position_and_clears() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
+        let tools = TraderTools::new(Arc::clone(&runtime));
+        let config = &runtime.config;
+
+        let error = tools
+            .dispatch("set_exit_plan", json!({"asset": "ena", "trail_pct": 2}))
+            .await
+            .unwrap_err();
+        assert!(error.contains("audit unreadable"), "{error}");
+
+        let buy = json!({
+            "row_type": "route",
+            "status": "submitted",
+            "selected_route": {"legs": [{"fee_rate": 0.001}]},
+            "submitted_legs": [{
+                "symbol": "ENA/USDT",
+                "side": "buy",
+                "final_order": {"average": 0.1983, "filled": 75.11, "timestamp": 1_791_990_000_000_i64}
+            }]
+        });
+        // A position bought on a non-USDT market, in the older row schema (no row_type).
+        let bnb_buy = json!({
+            "status": "submitted",
+            "selected_route": {"legs": [{"fee_rate": 0.001}], "source_value_usdt": 12.5},
+            "submitted_legs": [{
+                "symbol": "SOL/BNB",
+                "side": "buy",
+                "final_order": {"average": 0.25, "filled": 0.05, "timestamp": 1_791_990_100_000_i64}
+            }]
+        });
+        std::fs::write(&config.audit_path, format!("{buy}\n{bnb_buy}\n")).unwrap();
+        let error = tools
+            .dispatch("set_exit_plan", json!({"asset": "DOGE", "trail_pct": 2}))
+            .await
+            .unwrap_err();
+        assert!(error.contains("no open DOGE position"), "{error}");
+        let sol = tools
+            .dispatch("set_exit_plan", json!({"asset": "sol", "trail_pct": 2}))
+            .await
+            .unwrap();
+        assert_eq!(sol["symbol"], "SOL/BNB");
+        let error = tools
+            .dispatch("set_exit_plan", json!({"asset": "ENA"}))
+            .await
+            .unwrap_err();
+        assert!(error.contains("at least one rule"), "{error}");
+
+        let set = tools
+            .dispatch(
+                "set_exit_plan",
+                json!({"asset": "ena", "atr_multiple": 3, "atr_timeframe": "15m", "deadline_minutes": 240}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(set["plan"], "atr=3:15m,deadline=240");
+        assert_eq!(set["paper_only"], true);
+        let book = crate::exit_book::PlanBook::load(&config.exit_paths.plans).unwrap();
+        let entry = &book.plans["ENA"];
+        assert_eq!(
+            (entry.symbol.as_str(), entry.entry_ms, entry.entry_price),
+            ("ENA/USDT", 1_791_990_000_000, Decimal::new(1983, 4))
+        );
+
+        let cleared = tools
+            .dispatch("set_exit_plan", json!({"asset": "ENA", "clear": true}))
+            .await
+            .unwrap();
+        assert_eq!(cleared["cleared"], true);
+        let book = crate::exit_book::PlanBook::load(&config.exit_paths.plans).unwrap();
+        assert_eq!(book.plans.keys().collect::<Vec<_>>(), ["SOL"]);
+    }
+
     /// Alert sink that snapshots the audit file at the moment it is invoked.
     #[derive(Debug)]
     struct AuditSnooper {
@@ -1342,6 +1587,121 @@ mod tests {
             1,
             "no extra cycle alert after a route alert"
         );
+    }
+
+    fn live_pairs() -> [(&'static str, &'static str); 5] {
+        [
+            ("CLAUDE_SPOT_ENABLED", "true"),
+            ("CLAUDE_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
+            ("USE_TESTNET", "false"),
+            ("DRY_RUN", "false"),
+            ("CONFIRM_LIVE_TRADING", "yes"),
+        ]
+    }
+
+    #[tokio::test]
+    async fn exit_sell_refuses_without_orders_in_plan_only_or_under_the_stop_file() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let plan_only = runtime(
+            &server,
+            trader_config(dir.path(), &live_pairs()),
+            CycleMode::PlanOnly,
+        )
+        .await;
+        let error = plan_only
+            .exit_sell("ETH", Decimal::ONE, "test")
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("plan-only"), "{error}");
+        assert!(!error.submission_attempted);
+
+        let live = runtime(
+            &server,
+            trader_config(dir.path(), &live_pairs()),
+            CycleMode::Live,
+        )
+        .await;
+        std::fs::write(dir.path().join("stop"), "").unwrap();
+        let error = live
+            .exit_sell("ETH", Decimal::ONE, "test")
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("emergency stop"), "{error}");
+        assert_eq!(order_calls(&server).await, 0);
+        assert!(audit_rows(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn ambiguous_exit_sell_is_audited_and_halts_further_exit_sells() {
+        let server = MockServer::start().await;
+        let account = json!({"canTrade": true, "balances": [{"asset": "ETH", "free": "0.01", "locked": "0"}]});
+        for (verb, route, response) in [
+            (
+                "GET",
+                "/api/v3/time",
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"serverTime": bb_core::time::now_ms()})),
+            ),
+            (
+                "GET",
+                "/api/v3/account",
+                ResponseTemplate::new(200).set_body_json(account),
+            ),
+            (
+                "POST",
+                "/api/v3/order/test",
+                ResponseTemplate::new(200).set_body_json(json!({})),
+            ),
+            (
+                "POST",
+                "/api/v3/order",
+                ResponseTemplate::new(503).set_body_string("unavailable"),
+            ),
+        ] {
+            Mock::given(method(verb))
+                .and(path(route))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let config = trader_config(dir.path(), &live_pairs());
+        let market_view = view(&config);
+        let runtime = runtime(&server, config, CycleMode::Live).await;
+        let balances = Balances {
+            free: [("ETH".to_owned(), dec!(0.01))].into(),
+            used: Default::default(),
+            total: [("ETH".to_owned(), dec!(0.01))].into(),
+        };
+
+        let error = runtime
+            .sell_into_usdt(
+                &market_view,
+                &balances,
+                "ETH",
+                Decimal::ONE,
+                "exit plan test fired",
+            )
+            .await
+            .unwrap_err();
+        assert!(error.submission_attempted, "{error}");
+        let rows = audit_rows(dir.path());
+        let row = rows.last().unwrap();
+        assert_eq!(row["status"], "failed");
+        assert_eq!(row["cycle_id"], EXIT_CYCLE_ID);
+        assert_eq!(row["decision"]["source_asset"], "ETH");
+        assert_eq!(row["decision"]["destination_asset"], "USDT");
+        assert_eq!(row["decision"]["reason"], "exit plan test fired");
+
+        // The failed-route halt now stops every further exit sell before any order.
+        let calls = order_calls(&server).await;
+        let error = runtime
+            .exit_sell("ETH", Decimal::ONE, "again")
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("review"), "{error}");
+        assert_eq!(order_calls(&server).await, calls);
     }
 
     #[tokio::test]

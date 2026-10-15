@@ -59,14 +59,24 @@ services:
 
   # ---------- LIVE ----------
 
-  # Claude agentic Spot trader: one persistent omp session, a cycle every 4 minutes.
+  # Claude agentic Spot trader: one persistent omp session, a cycle every 20 minutes (Sonnet, operator decision 2026-10-15).
   # Live submission still requires CLAUDE_SPOT_ENABLED=true, CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot,
   # USE_TESTNET=false, DRY_RUN=false, CONFIRM_LIVE_TRADING=yes. Emergency stop: touch data/claude-spot.stop.
   claude-spot:
     <<: *base
     container_name: claude-spot
     profiles: ["live", "all"]
-    command: ["bb", "claude-spot", "--submit-live", "--daemon", "--interval-seconds", "240"]
+    command: ["bb", "claude-spot", "--submit-live", "--daemon", "--interval-seconds", "1200"]
+
+  # Phase 45 exit-plan PAPER trial: follows the bid of every position with a plan every 5 s
+  # and records would-be sells (no orders). Not used while CLAUDE_SPOT_EXIT_PLANS_LIVE=true:
+  # then claude-spot runs the plans live itself and this service refuses to start.
+  claude-spot-exit-watch:
+    <<: *base
+    container_name: claude-spot-exit-watch
+    profiles: ["exit-paper"]
+    restart: "no"
+    command: ["bb", "claude-spot-exit-watch", "--daemon", "--poll-seconds", "5"]
 
   # ---------- DISABLED / OPT-IN (live) ----------
   # Off since 2026-10-12: Claude Spot is the only live trader on the shared wallet.

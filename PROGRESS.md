@@ -5,6 +5,240 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-15: Live exit plans (operator: "implement the winning one on top
+  and make it live", chose live now over a paper week). New `exit_guard`
+  runs between cycles inside the `claude-spot` daemon when
+  `CLAUDE_SPOT_EXIT_PLANS_LIVE=true` (and `--submit-live --daemon`): it
+  steps the watcher every `CLAUDE_SPOT_EXIT_POLL_SECONDS` (5) and executes
+  fired plans through new `Runtime::exit_sell` (cycle lock, live arming,
+  stop file, failed-route halt, then a fresh view/balances and
+  `quote_candidate(asset -> USDT)`, the normal `Executor` with order/test,
+  filters and reconciliation, one audit row `cycle_id` `exit-plan` before
+  the alert; ambiguous sells halt like any route). Default plan
+  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN=stretch=2:1,atr=3:1h` for positions opened
+  from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM`; Claude's `set_exit_plan`
+  overrides per position. Watcher: `effective_plans` (Claude's plan for the
+  open position, else the default), `step` returns `PlanSignal`s with the
+  share of what is still held, trials start at most 3 days back. Partial
+  sells now shrink a round trip instead of closing it. Failed sells before
+  any order retry up to 3 times (`sell_failed`, `sell_abandoned`). Paper
+  watcher refuses to start while live and moved to compose profile
+  `exit-paper`. Tool text, system prompt and cycle prompt say LIVE and show
+  the default plan; `PROMPT_VERSION` v7. Tests: default plan / override /
+  shares, partial-sell trips, exit_sell refused in plan-only and under the
+  stop file (no orders), ambiguous exit sell audited with `exit-plan` and
+  halting the next exit sell. Not exercised: a successful real exit sell
+  (executor success path is covered by executor tests). Deployed 09:17 UTC:
+  rollback tag `binance-bot:pre-live-exits-20261015`, Pi build 17m28s, paper
+  container `claude-spot-exit-watch` stopped and removed, `.env.docker`
+  (backup `*-prelive`) has `CLAUDE_SPOT_EXIT_PLANS_LIVE=true`,
+  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN=stretch=2:1,atr=3:1h`,
+  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM=2026-10-15T09:17:34Z`, prompt v7.
+  Verified: log "live exit plans enabled default_plan=atr=3:1h,stretch=2:1",
+  09:18 cycle row `claude-spot-v7-agentic` (gpt-6.1-sol; Sonnet's 7-day
+  allowance resets ~2026-10-16 05:00), watch state refreshed every few
+  seconds after the cycle, no position open yet. `cargo clippy` clean,
+  `cargo test --workspace` 971 passed. Open: first real plan sell, then the
+  week review.
+- 2026-10-15: Exit-plan menu expansion (repo only, not deployed). Research
+  saved in `docs/exit-plan-candidates.md` (31 functions with plain-language
+  meaning, status and sources). Added to `exit_plan`: ATR trail / Chandelier
+  (`atr=<k>:<1m|5m|15m|1h>`, ATR of 22 candles before entry; replaces the
+  1-minute swing multiple), stretch (`stretch=<z>:<fraction>`, upper
+  Bollinger band of the last 20 minute closes, only above entry), slowdown
+  (`slow=<fraction>:<minutes>`, EMA speed positive but falling 3 completed
+  minutes in a row, only above entry, sells at the next observed price).
+  Minute closes are built from bars or ticks (`warm_up_before_entry`,
+  `warm_up_since_entry`); `set_exit_plan` args `atr_multiple`/`atr_timeframe`,
+  `stretch_z`/`stretch_fraction`, `slowdown_fraction`/`slowdown_minutes`;
+  replay `--history-minutes` and per-trip ATR; watcher fetches the ATR candles.
+  Backtest, all 3 Pi audits, 40 closed trips, 1m bars, 24h horizon, USDT:
+  Claude -2.28; hold -14.76; trail 0.5 -1.58; atr 2/3 x 1m -1.24/-1.10 (37
+  trips with a non-zero ATR); atr 3 x 15m/1h -4.78/-8.38; stretch 2:1 -0.21
+  (median hold 19.5 min, max 978); stretch 2:0.5 -7.48; stretch 1.5:1 -2.36;
+  stretch 2.5:1 -5.97; slow 1:5 -3.16; atr 3:1h + stretch 2:0.5 + slow 0.5:5
+  -0.66; stretch 2:1 + atr 3:1h -0.21 (the 1h stop never fired first);
+  stretch 2:1 + deadline 240 -1.22; best price seen +8.77. Read: "sell
+  everything on the first 2-sigma spike above entry" came closest to break
+  even, but 2.5 sigma lost $5.97, so the result is sensitive and the sample
+  small. Verified: clippy clean, `cargo test --workspace` 968 passed.
+- 2026-10-15: Google Antigravity logged in on the Pi (user, via the
+  host-network login container and the operator's `ssh -L 51121` tunnel);
+  credentials in `docker-data/omp-agent/agent.db`. `omp usage` in
+  `claude-spot`: Anthropic 7-day 100% (resets in ~21h), Antigravity Claude &
+  GPT weekly 0%, Codex 7-day 6% / 5-hour 41%. `omp -p --model
+  google-antigravity/claude-sonnet-5-5 --thinking high` answered "OK". All
+  three brains of the chain are now usable.
+- 2026-10-15: Deployed the repo to the Pi (operator approval): rsync of the
+  source (no .env/data/target), `docker compose build claude-spot` on the Pi
+  (10m51s), rollback tag `binance-bot:pre-phase45-20261015` (the previous
+  `latest`). Pi `.env.docker` (backup `.env.docker.bak-*-prephase45`):
+  `CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v6-agentic`,
+  `CLAUDE_SPOT_COMPACT_AT_PERCENT=70`, `CLAUDE_SPOT_COMPACT_AT_TOKENS=100000`,
+  `DAILY_LOSS_LIMIT_USD` removed. `claude-spot` recreated and
+  `claude-spot-exit-watch` started (both `binance-bot:latest`). Verified:
+  07:38 cycle row has `prompt_version` v6 and completed on
+  `openai-codex/gpt-6.1-sol` at `high` (Sonnet's 7-day allowance is used up
+  until ~2026-10-16 05:00); the watcher logs "exit-plan paper watcher started
+  (no orders)" and writes `claude-spot-exit-watch-state.json`; no exit plan
+  yet (no position). The `scheduler` still runs the older image. Open:
+  operator login for `google-antigravity` (OPERATIONS "omp authentication";
+  host-network container + `ssh -L 51121`, checked that it reaches the
+  Google URL prompt with the shared `omp-agent` dir).
+- 2026-10-15: Three-brain chain (operator decision): Sonnet 5.5 high
+  (Anthropic) -> `openai-codex/gpt-6.1-sol:high` ->
+  `google-antigravity/claude-sonnet-5-5:high`, each on its own omp login.
+  Pi: `.env.docker` `CLAUDE_SPOT_FALLBACK_MODELS` set (backup
+  `.env.docker.bak-*-prechain`), `omp-agent/config.yml` fallbackChains for
+  Sonnet updated (backup `docker-backups/omp-config.yml.bak-*-prechain`),
+  `claude-spot` recreated (env verified). Google Antigravity is NOT logged in
+  on the Pi yet: `omp login google-antigravity` prints a Google OAuth URL
+  whose redirect is the container's `127.0.0.1:51121`, so the operator must
+  run it interactively (`docker exec -it claude-spot omp login
+  google-antigravity`); until then that step fails and the cycle holds.
+  Repo: new `CLAUDE_SPOT_COMPACT_AT_TOKENS` (compact at N context tokens or
+  at the percent, whichever first; 0 = off) because one percent cannot fit
+  windows from 272K to 1M (at 7% gpt-6.1-sol compacted every cycle, 35% of
+  its window); `.env.example`/`.env.docker` now 70% + 100000 tokens; test
+  `token_threshold_compacts_large_windows_at_the_same_context_size`;
+  `cargo test --workspace` 963 passed. The Pi still runs the old binary
+  (needs a deploy for the token threshold, Phase 44/45 and the any-market
+  replay/watcher).
+- 2026-10-15: Operator chose Sonnet with 20-minute cycles. Pi
+  `docker-compose.yml` now runs `--interval-seconds 1200` (backup
+  `docker-backups/docker-compose.yml.bak-*-pre20min`); `claude-spot`
+  recreated, `docker inspect` shows the new command and
+  `CLAUDE_SPOT_MODEL=anthropic/claude-sonnet-5-5`. ~72 calls/day instead of
+  ~360. No brain until the Anthropic 7-day window resets (~2026-10-16 05:00
+  UTC); cycles hold until then. Repo: compose, systemd unit, OPERATIONS,
+  CODEX updated (CLI default stays 240 s). Check after the reset that cycles
+  complete on Sonnet and `omp usage` stays below the 7-day cap.
+- 2026-10-15: Sonnet switch outcome. The trader moved onto Sonnet at
+  2026-10-14 18:30 UTC, but its first compaction got Anthropic 429
+  `rate_limit_error`; since then Sonnet finished 1 cycle, gpt-6.1-sol carried
+  the rest (one STX round trip 19:08 -> 20:42), and many cycles held as
+  "brain unavailable on all models" (no orders; e.g. 23:00-01:00 and
+  04:00-06:00 every cycle). `omp usage` at 06:14: Anthropic (user) 7-day
+  100% (resets ~2026-10-16 05:00, 1 saved reset), Codex (serefcimen15, Plus)
+  7-day 100% (resets in 5d8h, 3 saved resets). The trader stays safe (holds)
+  but has no brain until a quota resets. Needs an operator decision: cycle
+  interval, API key, back to Haiku, or saved resets. Repo: `set_exit_plan`
+  test now also covers a position bought on SOL/BNB in the older row schema;
+  `cargo test --workspace` 962 passed.
+- 2026-10-14 (later): Claude Spot primary model switched to
+  `anthropic/claude-sonnet-5-5` at thinking `high` on the Pi (operator
+  request; old binary, env only). Backups: `.env.docker.bak-20261014T175833Z-presonnet`,
+  `docker-backups/omp-config.yml.bak-20261014T175833Z`. Pi `.env.docker`:
+  `CLAUDE_SPOT_MODEL=anthropic/claude-sonnet-5-5`,
+  `CLAUDE_SPOT_COMPACT_AT_PERCENT=7` (Sonnet's window is 1M; 7% keeps the
+  ~70K context Haiku had at 70% of 100K; at 70% each tool turn would re-read
+  up to 700K tokens). `omp-agent/config.yml` fallbackChains gained
+  `anthropic/claude-sonnet-5-5 -> openai-codex/gpt-6.1-sol:low`. Verified:
+  `omp -p --model anthropic/claude-sonnet-5-5 --thinking high` answered
+  from the container; `docker compose up -d --force-recreate claude-spot`
+  shows the new env. Known behavior: a resumed omp session reports its last
+  model (Haiku), which the trader treats as a fallback, so the first cycles
+  ran on gpt-6.1-sol (Haiku context at 134%) and the trader returns to the
+  primary after `CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS` (1800). Per-cycle
+  notional cost before the switch (10-11 to 10-14 audit): Haiku $0.017 /
+  185K input tokens, gpt-6.1-sol $0.135 / 548K. The Pi's Anthropic login is
+  a subscription that already hit its 5h/7d limits on Haiku; Sonnet uses
+  that quota faster, so expect more fallback turns. Repo: `.env.example`,
+  `.env.docker`, `CODEX.md` updated; code default stays Haiku.
+- 2026-10-14 (later): Exit-plan backtest on the whole Claude Spot history.
+  `claude-spot-exit-replay` now reads the older audit schema (rows without
+  `row_type`), every market (`--quote` optional), reports P&L in USDT from
+  the route's `source_value_usdt`, marks an exit on another market at that
+  market's close even after the horizon, leaves positions Claude never closed
+  out of the summary, and skips (not aborts) trips without klines; the paper
+  watcher and `set_exit_plan` follow positions on any market and report
+  `plan_vs_claude_usdt`. Data: the three Pi audits (pre-reset archive,
+  10-13 reset backup, current), 42 round trips, 39 closed by Claude
+  (2026-05-26 to 2026-10-14, $417 spent), 1m bars, 5 bps slippage. Total
+  P&L, 24h horizon (USDT): Claude -2.20 (5 wins); hold -11.18; trail
+  0.5/1/2/3/5/8% -1.69/-2.29/-4.65/-4.48/-8.17/-10.33; trail 0.5 + deadline
+  15 min -1.32 (best); trail 0.5 + fade 0.5:10 -1.38; trail 0.5 + part
+  0.5:0.5 -1.47; deadline 15 -1.87; fade 0.5:10 -3.62 (24 wins); swing x2
+  -0.73 on the 21 trips with a non-zero 1-minute swing (+1.01 vs Claude);
+  best price seen +8.41 (36 of 39 went above cost within 24h; +2.21 within
+  4h). 1s bars on a 4h horizon matched 1m within ~$0.2. Read: no plan is
+  profitable; only tight, fast exits lose less than Claude (by up to $0.88
+  over 39 trips), wide ones lose much more; the plans were picked after the
+  fact from 27 on a small sample. Verified: clippy clean, `cargo test
+  --workspace` 962 passed.
+- 2026-10-14 (later): Phase 45 step 2 built (paper trial; repo only, not
+  deployed). Operator chose: the bot owns the sell functions, Claude only
+  sets their parameters. Added `set_exit_plan` host tool (asset + menu
+  parameters: trail_pct or swing_multiple, take_part_gain_pct/fraction,
+  fade_min_gain_pct/minutes, deadline_minutes, clear; anchors to the open
+  USDT round trip in the audit; writes `CLAUDE_SPOT_EXIT_PLANS_PATH`),
+  `exit_book` (plan book, watch state, cycle-prompt section "Exit plans
+  (paper trial ...)"), and `bb claude-spot-exit-watch` (`exit_watch`:
+  seeds the peak from 1m highs since entry, catches up the minutes since
+  the plan was set, then follows the book-ticker bid every 5 s; logs
+  started / would_sell / closed / cleared / orphaned to
+  `CLAUDE_SPOT_EXIT_WATCH_LOG_PATH`; on Claude's real sell compares "with
+  plan" vs "Claude alone"; restart does not re-log fills; `--summary`).
+  System prompt says the trial places no orders; own-trading line reworded
+  so it does not contradict the tool. `PROMPT_VERSION` =
+  `claude-spot-v6-agentic` (`.env.example`, `.env.docker`). Compose
+  `claude-spot-exit-watch` (live/all) and
+  `deploy/user/binance-claude-spot-exit-watch.service`. Smoke on a copy of
+  the Pi audit with hand-written plans: ENA swing=3 caught up and closed
+  (+0.105 USDT vs Claude's own exit), LDO trail=1 live on the real bid with
+  peak 0.4131 / sell line 0.40897; `--summary` printed the table. Verified:
+  clippy clean, `cargo test --workspace` 961 passed, `docker compose
+  --profile all config` lists the service. To run on the Pi: deploy, set
+  `CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v6-agentic` in the Pi's
+  `.env.docker`, `docker compose --profile all up -d`; review `--summary`
+  after about a week (plan item open).
+- 2026-10-14 (later): Phase 45 step 1 done (operator approved the plan:
+  Claude picks a sell plan from a fixed menu, never writes code; `CODEX.md`
+  updated). Added `bb-trader` `exit_plan` (follow the peak by % or by a
+  multiple of the coin's 1-minute swing, take part, momentum fade,
+  deadline; `Decimal`, pessimistic bars, ticks reuse it) and `bb
+  claude-spot-exit-replay` (`exit_replay`: pairs real round trips from the
+  audit, public klines, 16-plan default grid, JSON report or `--table`).
+  Run on the Pi audit copied at ~16:50 UTC (9 round trips, 1m bars, 24h
+  horizon cut at now, 5 bps slippage). Total P&L (USDT): Claude actual
+  -1.09; hold 24h -6.49; trail 1/2/3/5/8% -1.05/-1.28/-2.29/-4.29/-6.10;
+  swing x3/x5/x8 -0.55/-0.95/-1.03; part+trail -2.09/-4.29; fade -3.30/-5.69;
+  deadline 60/240 min -1.58/-2.67; best price seen (upper bound) +0.84.
+  Read: these entries rarely rose after the buy (perfect selling would have
+  made +$0.84 over 9 trades, less than the fees), so no exit plan makes them
+  profitable; only tight stops (swing x3, ~0.3-1%) beat Claude, by $0.54,
+  in a falling market. Sample is one day and small. Step 2 (paper watcher)
+  waits for the operator's review. Verified: clippy clean, `cargo test
+  --workspace` 955 passed.
+- 2026-10-14 (later): Phase 44, no fixed exit levels or loss caps (operator
+  decision; repo only, not deployed). Evidence: the live Claude Spot audit
+  since the 10-13 reset has 8 round trips in ~19h, held 8-64 min, each paying
+  ~65-100 bps entry friction + ~10 bps exit and closed on Claude's own
+  "invalidation" price (e.g. ENA 0.1983 -> 0.1947, -$0.29); no stop-loss or
+  take-profit exists in bb-trader code. Changes:
+  - bb-trader prompt: theses are why / expected move / horizon (no
+    invalidation); system prompt says there are no stop-loss or take-profit
+    levels and a small move is not by itself a reason to exit; compaction
+    instructions and `execute_route` / `journal_write` descriptions match.
+    `PROMPT_VERSION` = `claude-spot-v5-agentic` (`.env.example`,
+    `.env.docker`). `CODEX.md` records the decision.
+  - X insighter paper exits: hard and trailing stops removed; baseline arm
+    `trailing_only` -> `hold_24h`, gate criterion `rule_exits_vs_hold`; GUI
+    arm label and design doc (dated clarification) updated.
+  - bb-runtime (`bb main`, disabled): daily loss limit, daily drawdown limit
+    and daily-loss persistence removed (`DAILY_LOSS_LIMIT_USD`,
+    `DAILY_DRAWDOWN_LIMIT_PCT` gone; `RiskGuard::new(config)`); old `bot.db`
+    files keep their unused `daily_loss` table.
+  - Not selected, unchanged: listing sniper/detector stops, mean reversion
+    stop/target, bb-products allocator limits, all Claude Spot hard safety.
+  Verified: `cargo clippy --workspace --all-targets -- -D warnings` clean,
+  `cargo test --workspace` 942 passed; rendered system prompt checked;
+  `bb x-insighter-report` on an empty data dir writes the `hold_24h` arm.
+  To take effect on the Pi: deploy the image and set
+  `CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v5-agentic` in the Pi's
+  `.env.docker` (drop its `DAILY_LOSS_LIMIT_USD`), then restart
+  `claude-spot`. The persistent journal still holds old invalidation-style
+  notes; they age out of the 8-entry prompt window.
 - 2026-10-14: Deployed the bb-trader failover to the Pi (source rsynced, image
   built on the Pi; rollback tags `binance-bot:pre-fallback-20261013` and
   `binance-bot:fallback-v1-20261014`; `.env.docker` backup

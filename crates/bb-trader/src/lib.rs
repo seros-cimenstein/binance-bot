@@ -15,7 +15,11 @@
 //! - [`tools`]: omp host tools. [`agent`]: omp session lifecycle and prompts.
 //! - [`executor`]: live route execution. [`audit`]: rows, halt, review marker.
 //! - [`alerts`]: Telegram ELI5. [`journal`]: notebook + agent state.
-//! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `claude-spot`.
+//! - [`exit_plan`]: the Phase 45 sell-plan menu. [`exit_replay`]: its historical replay.
+//!   [`exit_book`]: plans set by `set_exit_plan`. [`exit_watch`]: the paper watcher.
+//!   [`exit_guard`]: live exit plans inside the trader daemon.
+//! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `claude-spot`,
+//!   `claude-spot-exit-replay`, `claude-spot-exit-watch`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
@@ -29,6 +33,11 @@ pub mod cycle;
 pub mod error;
 pub mod evidence;
 pub mod executor;
+pub mod exit_book;
+pub mod exit_guard;
+pub mod exit_plan;
+pub mod exit_replay;
+pub mod exit_watch;
 pub mod journal;
 pub mod memory;
 pub mod scope;

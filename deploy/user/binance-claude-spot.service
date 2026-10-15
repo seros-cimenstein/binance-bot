@@ -1,5 +1,5 @@
 [Unit]
-Description=Binance Claude Agentic Spot Trader (omp session, cycle every 4 minutes)
+Description=Binance Claude Agentic Spot Trader (omp session, cycle every 20 minutes)
 After=network-online.target
 Wants=network-online.target
 
@@ -9,7 +9,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/.local/share/binance-bot
 EnvironmentFile=%h/.local/share/binance-bot/.env
-ExecStart=%h/.local/share/binance-bot/bin/bb claude-spot --submit-live --daemon --interval-seconds 240
+ExecStart=%h/.local/share/binance-bot/bin/bb claude-spot --submit-live --daemon --interval-seconds 1200
 Restart=always
 RestartSec=30
 TimeoutStopSec=120

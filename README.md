@@ -81,7 +81,9 @@ Claude trades the Spot wallet through omp (the oh-my-pi coding agent, npm
   data and trade memory are information for Claude to weigh. None of them blocks
   a trade. The old edge, friction, speculative, loss-streak, cooldown,
   daily-cap, proven-edge and rules-engine gates are gone. Their env vars are
-  ignored, with one warning listing them.
+  ignored, with one warning listing them. There are no stop-loss or
+  take-profit levels either: theses record why, expected move and horizon,
+  and the prompt tells Claude not to set invalidation prices or exit triggers.
 - **Hard safety (always on, fail closed):**
   - live arming: `CLAUDE_SPOT_ENABLED=true`, `CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
   - the emergency stop file (`CLAUDE_SPOT_STOP_PATH`), checked at cycle start, before every route, before every leg and before every order;
@@ -102,7 +104,39 @@ bb claude-spot --evidence-only                 # decision context, no Claude, no
 bb claude-spot --plan-only                     # Claude decides; execute_route only records plans
 bb claude-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
 bb claude-spot --mark-failed-route-reviewed    # clear the failed-route halt after review
+bb claude-spot-exit-replay --table             # replay the Phase 45 sell-plan menu on real round trips
+bb claude-spot-exit-watch --daemon             # paper exit-plan watcher (no orders)
+bb claude-spot-exit-watch --summary            # paper trial results vs Claude's own exits
 ```
+
+`bb claude-spot-exit-replay` (Phase 45, research only, public klines, no
+orders) pairs each real round trip in the audit log (current and older row
+schema, every market; `--quote USDT` keeps one quote), replays sell plans on
+the entry market's klines from entry to `--horizon-minutes` (1440) later and
+compares them with Claude's actual exit and with the best price seen. P&L is
+the net return times the USDT value the route spent. Plans come from a fixed
+menu, repeatable as `--plan`: `trail=<pct>` or `atr=<multiple>:<1m|5m|15m|1h>`
+(follow the peak by a percent or by average true ranges, Chandelier exit),
+`part=<gain_pct>:<fraction>` (take part), `stretch=<z>:<fraction>` (sell at
+the upper Bollinger band of the last 20 minutes, above entry),
+`slow=<fraction>:<minutes>` (still rising but slowing 3 minutes in a row),
+`fade=<min_gain_pct>:<minutes>` (momentum fade), `deadline=<minutes>` and
+`hold`. `docs/exit-plan-candidates.md` lists the researched functions not in
+the menu yet. Simulated sells pay the entry leg's fee rate plus
+`--slippage-bps` (5); `--interval 1s` gives a finer replay. A round trip whose
+klines are unavailable is listed under `skipped`.
+
+Exit plans: Claude may give an open position one of these plans with the
+`set_exit_plan` host tool (its own parameters; it never writes code), and
+positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` without one get
+`CLAUDE_SPOT_DEFAULT_EXIT_PLAN`. With `CLAUDE_SPOT_EXIT_PLANS_LIVE=true` the
+`claude-spot --submit-live --daemon` process follows those positions' bids
+every `CLAUDE_SPOT_EXIT_POLL_SECONDS` (5) between cycles and sells a position
+into USDT when its plan fires, with the same hard safety as Claude's routes
+(audit rows with `cycle_id` `exit-plan`). Otherwise `bb claude-spot-exit-watch`
+runs the plans on paper and only records would-be sells. Either way the cycle
+prompt shows Claude each plan. Files: `CLAUDE_SPOT_EXIT_PLANS_PATH`,
+`CLAUDE_SPOT_EXIT_WATCH_STATE_PATH`, `CLAUDE_SPOT_EXIT_WATCH_LOG_PATH`.
 
 Cost control (not a trading gate): `CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD` (0 = unlimited).
 Choose the model and thinking level with `CLAUDE_SPOT_MODEL` (default
