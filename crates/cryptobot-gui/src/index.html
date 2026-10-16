@@ -257,7 +257,7 @@
       <a href="#overview" data-tab="overview">Overview</a>
       <a href="#history" data-tab="history">History</a>
       <a href="#wallet" data-tab="wallet">Wallet</a>
-      <a href="#claude" data-tab="claude">Claude</a>
+      <a href="#bot" data-tab="bot">Bot</a>
       <a href="#exits" data-tab="exits">Exits</a>
       <a href="#fleet" data-tab="fleet">Fleet</a>
       <a href="#signals" data-tab="signals">Signals</a>
@@ -279,7 +279,7 @@
 // textContent / createTextNode; nothing is parsed as HTML.
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
-const TABS = ["overview", "history", "wallet", "claude", "exits", "fleet", "signals"];
+const TABS = ["overview", "history", "wallet", "bot", "exits", "fleet", "signals"];
 const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", fleet: "/api/fleet", exits: "/api/exits", signals: "/api/signals" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
@@ -645,16 +645,16 @@ function cycleInterval(cycles) {
   return gaps.length >= 3 ? gaps[Math.floor(0.75 * (gaps.length - 1))] / 1000 : null;
 }
 function noClaudeData() { const st = ui.data.status; return !!(st && st.source && !st.source.audit_present); }
-const NO_DATA = ["No Claude Spot data on this computer", "See the note at the top of the page."];
+const NO_DATA = ["No bot data on this computer", "See the note at the top of the page."];
 function claudeEmpty(title, text) { return noClaudeData() ? empty(...NO_DATA) : empty(title, text); }
 function claudeState() {
   const st = ui.data.status;
   if (!st) return { label: ui.errors.status ? "Unknown" : "Loading", tone: "", detail: ui.errors.status || "" };
-  if (noClaudeData()) return { label: "No data", tone: "warn", detail: "No Claude Spot audit log at " + st.source.audit_path };
+  if (noClaudeData()) return { label: "No data", tone: "warn", detail: "No bot audit log at " + st.source.audit_path };
   if (st.stop_active) return { label: "Stopped", tone: "neg", detail: "Emergency stop file present: " + st.stop_path };
   if (st.halt) return { label: "Halted", tone: "neg", detail: st.halt };
   const last = st.agent && st.agent.last_cycle ? st.agent.last_cycle.finished_at : null;
-  if (!last) return { label: "Waiting", tone: "", detail: "No Claude cycle recorded yet" };
+  if (!last) return { label: "Waiting", tone: "", detail: "No bot cycle recorded yet" };
   const age = (Date.now() - ms(last)) / 1000;
   const every = cycleInterval(st.cycles || []) ?? 1200;
   const detail = "Last cycle " + ago(last) + " · every ~" + duration(every);
@@ -718,7 +718,7 @@ function equityTimeline(s) {
     const tip = open
       ? [head, "Bought " + stamp(t.opened_at) + " for " + usd(t.cost_usdt), "Held " + duration((now - t0) / 1000) + " so far, marked at the current price", "Running total incl. open " + usd(y1, { sign: true })]
       : [head, "Bought " + stamp(t.opened_at) + " for " + usd(t.cost_usdt), "Sold " + stamp(t.closed_at) + " for " + usd(t.exit_usdt),
-        "Held " + duration((t1 - t0) / 1000) + " · sold by " + (t.closed_by_plan ? "the exit plan" : "Claude"),
+        "Held " + duration((t1 - t0) / 1000) + " · sold by " + (t.closed_by_plan ? "the exit plan" : "the bot"),
         "Fees " + usd(t.fees_usdt) + " · running total " + usd(y1, { sign: true })];
     return { trade: t, t0, t1, y0, y1, tone: open ? "accent" : t.status === "win" ? "pos" : "neg", tip };
   });
@@ -741,9 +741,9 @@ function equityTimeline(s) {
 function alerts() {
   const items = [];
   const st = ui.data.status;
-  if (noClaudeData()) items.push(["warn", "No Claude Spot data on this computer",
-    "Nothing at " + st.source.audit_path + ". The live trader runs on the Pi, so History, Claude and Exits stay empty here. Start the dashboard with scripts/cryptobot_gui_pi.sh: it mirrors the Pi's data dir (read-only) and opens this page on it."]);
-  if (st && st.stop_active) items.push(["neg", "Emergency stop is on", "Claude Spot won't trade while " + st.stop_path + " exists. Delete it to resume."]);
+  if (noClaudeData()) items.push(["warn", "No bot data on this computer",
+    "Nothing at " + st.source.audit_path + ". The live trader runs on the Pi, so History, Bot and Exits stay empty here. Start the dashboard with scripts/cryptobot_gui_pi.sh: it mirrors the Pi's data dir (read-only) and opens this page on it."]);
+  if (st && st.stop_active) items.push(["neg", "Emergency stop is on", "The bot won't trade while " + st.stop_path + " exists. Delete it to resume."]);
   if (st && st.halt) items.push(["neg", "Live trading halted", st.halt + ". Review, then run bb claude-spot --mark-failed-route-reviewed."]);
   if (st && st.audit_error) items.push(["neg", "Audit log unreadable", st.audit_error]);
   for (const [key, error] of Object.entries(ui.errors)) items.push(["warn", "Couldn't load " + key, error]);
@@ -760,7 +760,7 @@ function renderHeader() {
   const pill = document.getElementById("status-pill");
   pill.className = "status " + s.tone;
   pill.title = s.detail;
-  pill.replaceChildren(el("span", { class: "dot" }), el("span", null, "Claude · " + s.label));
+  pill.replaceChildren(el("span", { class: "dot" }), el("span", null, "Bot · " + s.label));
   for (const a of document.querySelectorAll("#tabs a")) {
     if (a.dataset.tab === ui.tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
@@ -772,7 +772,7 @@ function renderHeader() {
 function render() {
   renderHeader();
   const view = document.getElementById("view");
-  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, claude: claudePage, exits: exitsPage, fleet: fleetPage, signals: signalsPage };
+  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, bot: claudePage, exits: exitsPage, fleet: fleetPage, signals: signalsPage };
   ui.pendingRender = false;
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
@@ -840,37 +840,37 @@ function overviewPage() {
   const kpis = el("div", { class: "grid kpis" },
     kpi("Portfolio value", total === null ? "—" : usd(total),
       change === null ? (wallet && wallet.error ? "wallet unavailable" : "") : el("span", null, el("b", { class: tone(change) }, usd(change, { sign: true }) + " (" + pct(changePct) + ")"), " last 24h")),
-    kpi("Claude P&L", s.realized.length || s.open.length ? usd(s.net + s.unrealized, { sign: true }) : "—",
+    kpi("Bot P&L", s.realized.length || s.open.length ? usd(s.net + s.unrealized, { sign: true }) : "—",
       s.decided.length ? el("span", null, el("b", null, pct(s.winRate, { sign: false, dp: 0 })), " win rate · " + s.wins.length + "W / " + s.losses.length + "L")
-        : noClaudeData() ? "no Claude Spot data here" : "no closed trades yet", s.realized.length || s.open.length ? tone(s.net + s.unrealized) : null),
+        : noClaudeData() ? "no bot data here" : "no closed trades yet", s.realized.length || s.open.length ? tone(s.net + s.unrealized) : null),
     kpi("Open position", openTrade ? openTrade.destination_asset : "None",
       openTrade ? el("span", null, el("b", { class: tone(openTrade.pnl_usdt) }, usd(openTrade.pnl_usdt, { sign: true }) + " (" + pct(openTrade.pnl_pct) + ")"), " · held " + duration(openTrade.hold_seconds),
         openPlan ? el("span", null, " · ", el("a", { href: "#exits", style: "color:var(--accent);text-decoration:none" },
           num(openPlan.sell_line) !== null ? "sell line " + px(openPlan.sell_line) : "exit plan " + openPlan.spec)) : "")
-        : noClaudeData() ? "no Claude Spot data here" : "Claude is in cash or between trades"),
-    kpi("Claude", state.label, el("span", null, state.detail, agent.cycle_count ? " · " + agent.cycle_count + " cycles" : "",
+        : noClaudeData() ? "no bot data here" : "The bot is in cash or between trades"),
+    kpi("Bot", state.label, el("span", null, state.detail, agent.cycle_count ? " · " + agent.cycle_count + " cycles" : "",
       num(agent.llm_cost_usd) ? " · " + usd(agent.llm_cost_usd) + " LLM today" : ""), state.tone || null));
 
   const timeline = equityTimeline(s);
   const equity = card("Cumulative P&L", timeline ? tradeChart(timeline, { height: 230 })
-    : claudeEmpty("No trades yet", "The chart starts with Claude's first buy."), { hint: s.decided.length ? s.decided.length + " closed trades" : null });
+    : claudeEmpty("No trades yet", "The chart starts with the bot's first buy."), { hint: s.decided.length ? s.decided.length + " closed trades" : null });
 
   const holdings = wallet && !wallet.error ? wallet.holdings.filter((h) => num(h.value_usdt) >= DUST_USDT) : [];
   const allocation = card("Allocation", wallet && wallet.error ? errorBox(wallet.error)
     : holdings.length ? allocationDonut(wallet) : empty("Nothing to show", "No balances worth $1 or more."));
 
-  const thinking = card("Claude's latest call", lastCycle ? el("div", { class: "grid", style: "gap:10px" },
+  const thinking = card("Bot's latest call", lastCycle ? el("div", { class: "grid", style: "gap:10px" },
       el("div", { class: "feed-meta" }, actionChip(lastCycle), el("span", null, ago(lastCycle.timestamp)), el("span", { class: "sep" }, "·"), el("span", null, stamp(lastCycle.timestamp))),
       el("div", { class: "quote" }, cycleSummary(lastCycle) || "No summary for this cycle."),
       lastCycle.error ? el("div", { class: "neg small" }, lastCycle.error) : null,
       status.journal && status.journal[0] ? el("div", { class: "grid", style: "gap:4px;margin-top:4px" },
         el("div", { class: "small muted" }, "Latest journal note · " + ago(status.journal[0].timestamp)),
         longText("journal:" + status.journal[0].timestamp, status.journal[0].text)) : null)
-    : claudeEmpty("No cycles yet", "Claude's reasoning shows up here after its first cycle."), { action: el("a", { href: "#claude", class: "small", style: "color:var(--accent);text-decoration:none" }, "All cycles →") });
+    : claudeEmpty("No cycles yet", "The bot's reasoning shows up here after its first cycle."), { action: el("a", { href: "#bot", class: "small", style: "color:var(--accent);text-decoration:none" }, "All cycles →") });
 
   const recent = [...trades].reverse().slice(0, 5);
   const recentCard = card("Recent trades", recent.length ? tradeTable(recent, { compact: true })
-    : claudeEmpty("No trades yet", "Trades appear here as soon as Claude executes one."), { flush: recent.length > 0,
+    : claudeEmpty("No trades yet", "Trades appear here as soon as the bot executes one."), { flush: recent.length > 0,
     action: el("a", { href: "#history", class: "small", style: "color:var(--accent);text-decoration:none" }, "Full history →") });
 
   return el("div", { class: "grid" }, kpis, el("div", { class: "grid split" }, equity, allocation), el("div", { class: "grid halves" }, thinking, recentCard));
@@ -896,14 +896,14 @@ function cycleSummary(cycle) {
 function historyPage() {
   const history = ui.data.history;
   const rangePicker = seg(RANGES.map(([k, label]) => [k, label]), ui.range, (v) => { ui.range = v; render(); });
-  const head = pageHead("Trade history", "Every trade Claude has made since the fresh start, with its result.", rangePicker);
+  const head = pageHead("Trade history", "Every trade the bot has made since the fresh start, with its result.", rangePicker);
   if (!history) return el("div", { class: "grid" }, head, ui.errors.history ? card(null, errorBox(ui.errors.history)) : loadingView());
   if (history.error) return el("div", { class: "grid" }, head, card(null, errorBox(history.error)));
   const trades = tradesInRange(history.trades);
   const s = stats(trades);
   if (!trades.length) {
     return el("div", { class: "grid" }, head, card(null, history.trades.length ? empty("No trades in this range", "Pick a longer range to see older trades.")
-      : claudeEmpty("No trades yet", "Charts fill in as soon as Claude executes its first route.")), failedRoutesCard(history));
+      : claudeEmpty("No trades yet", "Charts fill in as soon as the bot executes its first route.")), failedRoutesCard(history));
   }
 
   const pf = s.profitFactor === null ? "—" : s.profitFactor === Infinity ? "∞" : nf(2, 2).format(s.profitFactor);
@@ -951,10 +951,10 @@ function historyPage() {
     el("div", { class: "grid split" }, equity, mix),
     el("div", { class: "grid halves" }, perTrade, daily),
     assetCard(trades),
-    card("Trades", tradeTable([...trades].reverse(), { expandable: true }), { flush: true, hint: "click a row for Claude's reasoning" }),
+    card("Trades", tradeTable([...trades].reverse(), { expandable: true }), { flush: true, hint: "click a row for the bot's reasoning" }),
     failedRoutesCard(history),
     el("details", { class: "footnote" }, el("summary", null, "How results are calculated"),
-      el("p", null, "Each route Claude submits opens a trade in the coin it bought. The trade closes when that coin is sold, by Claude or by its exit plan. Cost is what the exchange filled the buy for; the result is what the coins fetched when sold (or are worth right now, if still held) minus that cost and the exchange fees of both orders. So spread and slippage are in the fill prices and the trade results add up to the whole run. Fees paid in BNB are valued at today's BNB price. Parking in stablecoins costs nothing and counts toward neither wins nor losses. Routes without fill data (or quoted in another coin than USDT) use the bot's quote at execution time instead, with fees inside the quote.")));
+      el("p", null, "Each route the bot submits opens a trade in the coin it bought. The trade closes when that coin is sold, by the bot or by its exit plan. Cost is what the exchange filled the buy for; the result is what the coins fetched when sold (or are worth right now, if still held) minus that cost and the exchange fees of both orders. So spread and slippage are in the fill prices and the trade results add up to the whole run. Fees paid in BNB are valued at today's BNB price. Parking in stablecoins costs nothing and counts toward neither wins nor losses. Routes without fill data (or quoted in another coin than USDT) use the bot's quote at execution time instead, with fees inside the quote.")));
 }
 function assetCard(trades) {
   const groups = new Map();
@@ -1078,12 +1078,12 @@ function securityCard(wallet) {
       : check("pos", "Withdrawals disabled", "The key can't move funds off Binance."),
     k.ipRestrict ? check("pos", "IP restricted", "The key only works from your whitelisted IPs.")
       : check("warn", "No IP restriction", "The key works from any IP. Restrict it to the Pi's IP in API Management."),
-    k.enableSpotAndMarginTrading ? check("pos", "Spot trading enabled", "Claude Spot needs this to trade.")
-      : check("warn", "Spot trading disabled", "Claude Spot can't place orders with this key."),
+    k.enableSpotAndMarginTrading ? check("pos", "Spot trading enabled", "The bot needs this to trade.")
+      : check("warn", "Spot trading disabled", "The bot can't place orders with this key."),
   ];
   const extras = [["enableFutures", "Futures"], ["enableMargin", "Margin"], ["permitsUniversalTransfer", "Universal transfer"], ["enableInternalTransfer", "Internal transfer"], ["enableVanillaOptions", "Options"]]
     .filter(([key]) => k[key]).map(([, label]) => label);
-  items.push(extras.length ? check("warn", extras.join(", ") + (extras.length === 1 ? " permission" : " permissions") + " on", "Not used while Claude Spot is the only live trader. Turning them off shrinks what a leaked key could do.")
+  items.push(extras.length ? check("warn", extras.join(", ") + (extras.length === 1 ? " permission" : " permissions") + " on", "Not used while the bot is the only live trader. Turning them off shrinks what a leaked key could do.")
     : check("pos", "No extra permissions", "Futures, margin and transfers are off."));
   return card("API key safety", el("div", { class: "checks" }, items), { flush: true, hint: k.createTime ? "key created " + new Date(k.createTime).toLocaleDateString() : null });
 }
@@ -1173,7 +1173,7 @@ function brainsCard(st) {
 }
 function claudePage() {
   const st = ui.data.status;
-  const head = pageHead("Claude", "What the trader is doing and why. Click a cycle for its brain, tools and cost.", null);
+  const head = pageHead("Bot", "What the trader is doing and why. Click a cycle for its brain, tools and cost.", null);
   if (!st) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
   if (noClaudeData()) return el("div", { class: "grid" }, head, card(null, empty(...NO_DATA)));
   const state = claudeState();
@@ -1210,13 +1210,13 @@ function claudePage() {
       el("div", { class: "feed-text" + (open ? "" : " clamp") }, cycleSummary(c) || "No summary."),
       c.error ? el("div", { class: "small neg" + (open ? "" : " clamp") }, c.error) : null,
       open ? cycleDetail(c) : null);
-  }), olderButton("cycles", 30, st.cycles.length)) : empty("No cycles yet", "Claude's first cycle shows up within a few minutes of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
+  }), olderButton("cycles", 30, st.cycles.length)) : empty("No cycles yet", "The bot's first cycle shows up within a few minutes of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
 
   const journal = card("Journal", st.journal_error ? errorBox(st.journal_error) : st.journal.length
     ? el("div", { class: "feed" }, st.journal.slice(0, shownCount("journal", 20)).map((j) => el("div", { class: "feed-item" },
       el("div", { class: "feed-meta" }, el("span", { title: stamp(j.timestamp) }, ago(j.timestamp)), el("span", { class: "sep" }, "·"), el("span", null, stamp(j.timestamp))),
       longText("journal:" + j.timestamp, j.text))), olderButton("journal", 20, st.journal.length))
-    : empty("Empty journal", "Claude writes its theses here so they survive restarts."), { flush: st.journal.length > 0, hint: "Claude's own notes" });
+    : empty("Empty journal", "The bot writes its theses here so they survive restarts."), { flush: st.journal.length > 0, hint: "the bot's own notes" });
 
   return el("div", { class: "grid" }, head, kpis, el("div", { class: "grid split" }, cost, brainsCard(st)), el("div", { class: "grid split" }, feed, journal));
 }
@@ -1259,7 +1259,7 @@ function ladder(a) {
 }
 function activePlanCard(a, live) {
   return card(null, el("div", { class: "grid", style: "gap:10px" },
-    el("div", { class: "token-head" }, assetLabel(a.asset), chip(a.source === "claude" ? "Claude's plan" : "Default plan", a.source === "claude" ? "accent" : ""),
+    el("div", { class: "token-head" }, assetLabel(a.asset), chip(a.source === "claude" ? "Bot's plan" : "Default plan", a.source === "claude" ? "accent" : ""),
       el("span", { class: "code muted" }, a.spec), el("span", { class: "val", title: stamp(a.last_at) }, "bid checked " + ago(a.last_at))),
     el("ul", { class: "rules" }, planRules(a.spec).map((r) => el("li", null, r))),
     ladder(a),
@@ -1278,14 +1278,14 @@ const EXIT_EVENTS = { started: ["Watching", "accent"], would_sell: ["Plan fired"
 function exitEventText(e) {
   if (e.event === "would_sell") return share(e.fraction) + " at " + px(e.price) + " · " + (e.reason || "");
   if (e.event === "sold") return share(e.share) + " of what was held · " + (e.reason || "");
-  if (e.event === "closed") return "Claude alone " + pct(e.claude_alone_net_pct) + " · with plan " + pct(e.with_plan_net_pct) + " · plan vs Claude " + usd(e.plan_vs_claude_usdt, { sign: true });
+  if (e.event === "closed") return "Bot alone " + pct(e.claude_alone_net_pct) + " · with plan " + pct(e.with_plan_net_pct) + " · plan vs bot " + usd(e.plan_vs_claude_usdt, { sign: true });
   if (e.event === "started") return "entry " + px(e.entry_price) + (num(e.trail_pct) !== null ? " · trail " + fixed(e.trail_pct, 2) + "%" : "") + (num(e.peak) !== null ? " · peak " + px(e.peak) : "");
   if (e.event === "sell_failed" || e.event === "sell_abandoned") return (e.error || "") + (e.attempts ? " (attempt " + e.attempts + ")" : "");
   return e.error || "";
 }
 function exitsPage() {
   const ex = ui.data.exits;
-  const head = pageHead("Exit plans", "How open positions get sold between Claude's cycles.", null);
+  const head = pageHead("Exit plans", "How open positions get sold between the bot's cycles.", null);
   if (!ex) return el("div", { class: "grid" }, head, ui.errors.exits ? card(null, errorBox(ui.errors.exits)) : loadingView());
   const s = ex.settings || {};
   const live = !!s.live;
@@ -1299,18 +1299,18 @@ function exitsPage() {
   const kpis = el("div", { class: "grid kpis" },
     kpi("Mode", mode[0], mode[2], mode[1]),
     kpi("Default plan", s.default_plan || "None", s.default_plan ? el("span", null, planRules(s.default_plan).length + " rules · positions opened since " + stamp(s.default_plan_from))
-      : s.configured ? "only plans Claude sets run" : "unknown here"),
+      : s.configured ? "only plans the bot sets run" : "unknown here"),
     kpi("Watching", String(ex.active.length) + (ex.active.length === 1 ? " position" : " positions"), watchSub, ex.stale && ex.state_present ? "warn" : null),
     live ? kpi("Plan sells", String(planSells.length), planSells.length ? el("span", null, signed(planPnl), " on the trades they closed") : "no position sold by a plan yet", planSells.length ? tone(planPnl) : null)
-      : kpi("Paper trial", String(ex.closed_trials) + " closed", ex.closed_trials ? el("span", null, "plan vs Claude ", signed(ex.plan_vs_claude_usdt)) : "no closed trial yet"));
+      : kpi("Paper trial", String(ex.closed_trials) + " closed", ex.closed_trials ? el("span", null, "plan vs bot ", signed(ex.plan_vs_claude_usdt)) : "no closed trial yet"));
 
   const active = ex.active.length ? el("div", { class: "grid halves" }, ex.active.map((a) => activePlanCard(a, live)))
     : card("Open positions", empty("Nothing to watch", noClaudeData() ? NO_DATA[1]
-      : "Claude holds no position with a plan. When it buys" + (s.default_plan ? ", the default plan " + s.default_plan + " (or the one Claude sets)" : ", the plan Claude sets") + " shows up here within seconds."));
+      : "The bot holds no position with a plan. When it buys" + (s.default_plan ? ", the fixed plan " + s.default_plan : ", the plan the bot sets") + " shows up here within seconds."));
 
   const waiting = ex.waiting.length ? card("Waiting for the watcher", table([["Coin"], ["Plan"], ["Entry", "r"], ["Set", "r"]], ex.waiting.map((w) => el("tr", null,
     el("td", null, assetLabel(w.asset)), el("td", { class: "code" }, w.spec), el("td", { class: "r" }, px(w.entry_price)), el("td", { class: "r muted", title: stamp(w.set_at) }, ago(w.set_at))))),
-    { flush: true, hint: "Claude set these; the watcher hasn't picked them up" }) : null;
+    { flush: true, hint: "The bot set these; the watcher hasn't picked them up" }) : null;
 
   const sells = planSells.length ? card("Trades closed by a plan", tradeTable([...planSells].reverse(), { expandable: true }), { flush: true }) : null;
 
@@ -1325,7 +1325,7 @@ function exitsPage() {
     [ex.state_error, ex.book_error].filter(Boolean).map((e) => card(null, errorBox(e))),
     kpis, active, waiting, sells, events,
     el("details", { class: "footnote" }, el("summary", null, "How exit plans work"),
-      el("p", null, "Claude can pick a sell plan for each position from a fixed menu (follow the peak by percent or by candle range, take part at a gain, stretch above the 20-minute band, slowdown, momentum fade, deadline). Positions without one use the default plan. Between cycles the bot checks the bid every few seconds; when a rule fires it sells that share into USDT through the same checked order path as Claude's own trades. Exit plans only sell, never buy. The sell line is where the follow-the-peak rule sells; other rules fire on their own conditions.")));
+      el("p", null, "When a default plan is set, it is the only plan: every position runs it and the bot cannot change it. Without one, the bot can pick a sell plan for each position from a fixed menu (follow the peak by percent or by candle range, take part at a gain, stretch above the 20-minute band, slowdown, momentum fade, deadline). Between cycles the bot checks the bid every few seconds; when a rule fires it sells that share into USDT through the same checked order path as the bot's own trades. Exit plans only sell, never buy. The sell line is where the follow-the-peak rule sells; other rules fire on their own conditions.")));
 }
 
 // ---------- Fleet ----------
