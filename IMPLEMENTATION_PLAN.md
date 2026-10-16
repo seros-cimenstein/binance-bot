@@ -994,6 +994,23 @@ Step 3, live (operator decision 2026-10-15: live now, without the paper week):
   failed sells before any order retry up to 3 times.
 - [ ] Review after about a week: live plan sells vs Claude's own exits.
 
+Step 4, one fixed plan (operator decision 2026-10-16, after the 67-plan
+backtest on all 3 audits: `atr=3:1h,stretch=2:1` lost least, and Claude's
+deadline-only plans had been switching it off; the operator chose "only
+this plan, locked" over layering Claude's rules on top):
+
+- [x] With a default plan set, the watcher and live exit guard run it
+  unchanged on every position opened from
+  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` and ignore Claude's plan book.
+- [x] `set_exit_plan` is left out of the tool catalogue and refuses calls
+  while a default plan is set (still offered without one, paper trial).
+- [x] System prompt names the fixed plan and its rules in plain words, says
+  Claude cannot change it; dashboard wording; prompt version v8.
+- [x] Tests: a Claude plan is ignored and the default still sells; the tool
+  is withdrawn and refuses without writing the plan book.
+- [x] Deploy to the Pi (image rebuild, `CLAUDE_SPOT_PROMPT_VERSION=
+  claude-spot-v8-agentic` in the Pi's `.env.docker`, recreate `claude-spot`).
+
 ## 46. Dashboard On The Pi's Live Data (operator request 2026-10-15)
 
 `cryptobot-gui` started on the laptop showed empty History and Claude tabs:

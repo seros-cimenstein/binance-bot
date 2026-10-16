@@ -33,32 +33,25 @@ fn object(properties: Value, required: &[&str]) -> Value {
 /// Menu part of the `set_exit_plan` description.
 const EXIT_PLAN_MENU: &str = "One plan per asset; setting again replaces it. Rules, in any combination: trail_pct (sell all once the price falls this % below the highest price since entry) or atr_multiple with atr_timeframe 1m|5m|15m|1h (Chandelier: that many average true ranges of those candles below the highest price); take_part_gain_pct with take_part_fraction (sell that fraction once at that gain); stretch_z with stretch_fraction (sell that fraction once the price is z standard deviations above its 20-minute average, upper Bollinger band, while above entry); slowdown_fraction with slowdown_minutes (sell that fraction once the speed over that many minutes is still positive but has fallen 3 minutes in a row, while above entry); fade_min_gain_pct with fade_minutes (after being up at least that %, sell all when no new high for that many minutes); deadline_minutes (sell all that long after entry). Fractions are of the original position. clear: true removes the plan.";
 
-/// `set_exit_plan` description for the configured mode (live sells or paper trial).
+/// `set_exit_plan` description for the configured mode (live sells or paper trial). The
+/// tool is only offered without a default plan.
 fn exit_plan_description(config: &TraderConfig) -> String {
-    let default = config.exit.default_plan.map_or_else(
-        || "No default plan: a position without a plan has none.".to_owned(),
-        |d| {
-            format!(
-                "Every new position gets the default plan {} unless you set another.",
-                d.plan
-            )
-        },
-    );
     if config.exit.live {
         format!(
-            "Give an open position a sell plan from a fixed menu. LIVE: between cycles the trader checks the bid every few seconds and SELLS the position into USDT (real orders, same safety checks as execute_route) when its plan fires; the next cycle shows what was sold. {default} {EXIT_PLAN_MENU}"
+            "Give an open position a sell plan from a fixed menu. LIVE: between cycles the trader checks the bid every few seconds and SELLS the position into USDT (real orders, same safety checks as execute_route) when its plan fires; the next cycle shows what was sold. {EXIT_PLAN_MENU}"
         )
     } else {
         format!(
-            "Optional. Give an open position a sell plan from a fixed menu. A watcher follows the bid every few seconds between cycles and records what the plan would sell. Paper trial: it places no orders, so selling still goes through execute_route; the cycle prompt shows each plan's would-be sells. {default} {EXIT_PLAN_MENU}"
+            "Optional. Give an open position a sell plan from a fixed menu. A watcher follows the bid every few seconds between cycles and records what the plan would sell. Paper trial: it places no orders, so selling still goes through execute_route; the cycle prompt shows each plan's would-be sells. {EXIT_PLAN_MENU}"
         )
     }
 }
 
-/// Tool catalogue registered with omp.
+/// Tool catalogue registered with omp. With a default exit plan that plan is the only one,
+/// so `set_exit_plan` is not offered.
 pub fn tool_definitions(config: &TraderConfig) -> Vec<HostTool> {
     let assets = json!({"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_EVIDENCE_ASSETS});
-    vec![
+    let mut tools = vec![
         HostTool::new(
             "get_portfolio",
             "Portfolio",
@@ -186,7 +179,11 @@ pub fn tool_definitions(config: &TraderConfig) -> Vec<HostTool> {
                 &["action", "summary"],
             ),
         ),
-    ]
+    ];
+    if config.exit.default_plan.is_some() {
+        tools.retain(|tool| tool.name != "set_exit_plan");
+    }
+    tools
 }
 
 #[derive(Debug, Deserialize)]
@@ -539,11 +536,17 @@ impl TraderTools {
     }
 
     async fn set_exit_plan(&self, args: SetExitPlanArgs) -> ToolResult {
+        let config = &self.runtime.config;
+        if let Some(default) = config.exit.default_plan {
+            return Err(format!(
+                "set_exit_plan is off: every position runs the fixed exit plan {}",
+                default.plan
+            ));
+        }
         let asset = args.asset.trim().to_uppercase();
         if asset.is_empty() {
             return Err("asset must not be blank".into());
         }
-        let config = &self.runtime.config;
         let path = &config.exit_paths.plans;
         let mut book =
             PlanBook::load(path).map_err(|e| format!("exit plan book unreadable: {e}"))?;

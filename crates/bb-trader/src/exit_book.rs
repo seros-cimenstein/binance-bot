@@ -60,7 +60,7 @@ impl ExitPaths {
     }
 }
 
-/// Plan applied to every position Claude opens at or after `from_ms` unless Claude set one.
+/// The only plan, run on every position opened at or after `from_ms`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DefaultPlan {
     pub plan: ExitPlan,

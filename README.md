@@ -128,8 +128,9 @@ klines are unavailable is listed under `skipped`.
 
 Exit plans: Claude may give an open position one of these plans with the
 `set_exit_plan` host tool (its own parameters; it never writes code), and
-positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` without one get
-`CLAUDE_SPOT_DEFAULT_EXIT_PLAN`. With `CLAUDE_SPOT_EXIT_PLANS_LIVE=true` the
+positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` all run
+`CLAUDE_SPOT_DEFAULT_EXIT_PLAN`; while a default is set it is the only plan
+and `set_exit_plan` is not offered. With `CLAUDE_SPOT_EXIT_PLANS_LIVE=true` the
 `claude-spot --submit-live --daemon` process follows those positions' bids
 every `CLAUDE_SPOT_EXIT_POLL_SECONDS` (5) between cycles and sells a position
 into USDT when its plan fires, with the same hard safety as Claude's routes

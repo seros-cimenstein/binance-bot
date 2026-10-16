@@ -244,20 +244,17 @@ impl Watcher {
         &self.state
     }
 
-    /// Plans to run, by asset: Claude's plan for an open position, else the default plan
-    /// for positions opened since it applies; Claude's plans for positions no longer open
-    /// stay (they close or orphan their trial) unless the asset has a newer position.
+    /// Plans to run, by asset. With a default plan it is the only plan: every position
+    /// opened since it applies runs it and Claude's plan book is ignored. Without one,
+    /// Claude's plan for an open position runs; Claude's plans for positions no longer
+    /// open stay (they close or orphan their trial) unless the asset has a newer position.
     fn effective_plans(&self, book: &PlanBook, trips: &[RoundTrip]) -> BTreeMap<String, PlanEntry> {
-        let mut plans = BTreeMap::new();
-        for trip in trips.iter().filter(|t| t.exit.is_none()) {
-            let chosen = book
-                .plans
-                .get(&trip.asset)
-                .filter(|p| p.entry_ms == trip.entry_ms)
-                .cloned()
-                .or_else(|| {
-                    let default = self.default_plan.filter(|d| trip.entry_ms >= d.from_ms)?;
-                    Some(PlanEntry {
+        let open = trips.iter().filter(|t| t.exit.is_none());
+        if let Some(default) = self.default_plan {
+            return open
+                .filter(|trip| trip.entry_ms >= default.from_ms)
+                .map(|trip| {
+                    let entry = PlanEntry {
                         asset: trip.asset.clone(),
                         symbol: trip.symbol.clone(),
                         spec: default.plan.to_string(),
@@ -266,10 +263,19 @@ impl Watcher {
                         entry_price: trip.entry_price,
                         set_at_ms: trip.entry_ms,
                         cycle_id: "default".into(),
-                    })
-                });
-            if let Some(entry) = chosen {
-                plans.insert(trip.asset.clone(), entry);
+                    };
+                    (trip.asset.clone(), entry)
+                })
+                .collect();
+        }
+        let mut plans = BTreeMap::new();
+        for trip in open {
+            if let Some(entry) = book
+                .plans
+                .get(&trip.asset)
+                .filter(|p| p.entry_ms == trip.entry_ms)
+            {
+                plans.insert(trip.asset.clone(), entry.clone());
             }
         }
         for (asset, entry) in &book.plans {
@@ -744,7 +750,7 @@ pub async fn run_cli(args: ExitWatchArgs) -> Result<ExitCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exit_plan::ExitPlan;
+    use crate::exit_plan::{ExitPlan, ExitReason};
     use parking_lot::Mutex;
     use rust_decimal_macros::dec;
 
@@ -938,18 +944,34 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].share, Decimal::ONE);
 
-        // Claude's own plan replaces the default for the same position.
+        // With a default plan, Claude's plan is ignored: the position runs the default
+        // alone and its 3% trail below the 1.01 peak still sells.
         let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(default));
+        let deadline = book("deadline=90", 104 * M);
+        *prices.bid.lock() = dec!(1.0);
         watcher
-            .step(
-                &book("trail=1", 104 * M),
-                &[trip(None)],
-                &prices,
-                105 * M,
-                &mut log,
-            )
+            .step(&deadline, &[trip(None)], &prices, 105 * M, &mut log)
             .await;
-        assert_eq!(watcher.state().active["ENA"].spec, "trail=1");
+        assert_eq!(watcher.state().active["ENA"].spec, "trail=3,part=5:0.5");
+        *prices.bid.lock() = dec!(0.97);
+        let sold = watcher
+            .step(&deadline, &[trip(None)], &prices, 105 * M + 5_000, &mut log)
+            .await;
+        assert_eq!(sold.len(), 1);
+        assert_eq!(sold[0].fill.reason, ExitReason::FollowPeak);
+        assert_eq!(sold[0].share, Decimal::ONE);
+
+        // Nor does Claude's plan run on a position opened before the default applies.
+        let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(default));
+        let mut early = book("deadline=90", 104 * M);
+        early.plans.get_mut("ENA").unwrap().entry_ms = 99 * M;
+        let mut old = trip(None);
+        old.entry_ms = 99 * M;
+        *prices.bid.lock() = dec!(1.0);
+        watcher
+            .step(&early, &[old], &prices, 105 * M, &mut log)
+            .await;
+        assert!(watcher.state().active.is_empty());
     }
 
     #[tokio::test]

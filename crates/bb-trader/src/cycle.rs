@@ -1475,6 +1475,34 @@ mod tests {
         assert_eq!(book.plans.keys().collect::<Vec<_>>(), ["SOL"]);
     }
 
+    #[tokio::test]
+    async fn default_exit_plan_withdraws_set_exit_plan() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = trader_config(
+            dir.path(),
+            &[
+                ("CLAUDE_SPOT_DEFAULT_EXIT_PLAN", "atr=3:1h,stretch=2:1"),
+                ("CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM", "2026-10-15T09:17:34Z"),
+            ],
+        );
+        assert!(
+            crate::tools::tool_definitions(&config)
+                .iter()
+                .all(|tool| tool.name != "set_exit_plan")
+        );
+        let runtime = runtime(&server, config, CycleMode::PlanOnly).await;
+        let tools = TraderTools::new(Arc::clone(&runtime));
+        for args in [
+            json!({"asset": "ENA", "deadline_minutes": 60}),
+            json!({"asset": "ENA", "clear": true}),
+        ] {
+            let error = tools.dispatch("set_exit_plan", args).await.unwrap_err();
+            assert!(error.contains("atr=3:1h,stretch=2:1"), "{error}");
+        }
+        assert!(!runtime.config.exit_paths.plans.exists());
+    }
+
     /// Alert sink that snapshots the audit file at the moment it is invoked.
     #[derive(Debug)]
     struct AuditSnooper {

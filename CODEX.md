@@ -131,7 +131,11 @@ driven project.
   the alert; an ambiguous sell halts live trading like any route. Only the
   trader writes the watch files then; the paper watcher refuses to start.
   Exit plans only sell, never buy. Changing the default plan or the menu
-  needs a new operator decision.
+  needs a new operator decision. Since the operator decision of 2026-10-16
+  the default plan is the only plan: every position opened from
+  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` runs it unchanged, `set_exit_plan`
+  is not offered (and refuses calls) while a default plan is set, and
+  Claude's stored plans are ignored.
 - Claude Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

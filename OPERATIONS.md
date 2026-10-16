@@ -448,9 +448,11 @@ live arming variables in `.env` and the stop file.
 
 Claude may give an open position a sell plan with the `set_exit_plan` tool
 (fixed menu: follow the peak by percent or ATR, take part, stretch, slowdown,
-momentum fade, deadline); positions opened from
-`CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` without one get
-`CLAUDE_SPOT_DEFAULT_EXIT_PLAN` (deployed: `stretch=2:1,atr=3:1h`).
+momentum fade, deadline). Positions opened from
+`CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` all run `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`
+(deployed: `stretch=2:1,atr=3:1h`). Since 2026-10-16 a set default plan is
+the only plan: `set_exit_plan` is not offered and Claude's stored plans are
+ignored; Claude chooses plans only when no default is set.
 
 - **Live** (`CLAUDE_SPOT_EXIT_PLANS_LIVE=true`, deployed since 2026-10-15):
   between cycles `claude-spot` checks each planned position's bid every

@@ -5,6 +5,69 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-16: Trader moved to a fresh omp session (operator: Sonnet's
+  history kept gpt-6.1-sol from trading). The old session (one file since
+  2026-10-13, 58 MB, cycles up to 581, compacted) is archived on the Pi
+  at `docker-data/archive/claude-spot-session-20261016T175928Z-sonnet`;
+  journal, audit and agent state were kept. `claude-spot` was stopped and
+  started between cycles; log `resumed=false`, session
+  `01a145de-7cd4-7000-887b-4af91e59bdee`. The first fresh cycle
+  (18:00:11 UTC, gpt-6.1-sol high, primary) still held: all 12 scanned
+  assets were negative over 15m, and it cited entry/exit costs. The prompt
+  still carries the 8 newest journal notes (`CLAUDE_SPOT_JOURNAL_PROMPT_ENTRIES`),
+  all HOLD notes. Since 17:09 gpt-6.1-sol has held 5 cycles out of 5.
+- 2026-10-16: One fixed exit plan (operator decision, after the 67-plan
+  backtest; chose "only this plan, locked" over layering Claude's rules on
+  the default). With `CLAUDE_SPOT_DEFAULT_EXIT_PLAN` set it is the only
+  plan: `exit_watch::effective_plans` runs it unchanged on every position
+  opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` and ignores Claude's
+  plan book (a running Claude-plan trial is cleared and the default
+  starts); `set_exit_plan` is left out of `tool_definitions` and refuses
+  calls; the system prompt names the fixed plan with its rules in plain
+  words and says Claude cannot change it. Without a default, the old
+  Claude-chosen plans (paper trial) are unchanged. Dashboard Exits wording,
+  README, OPERATIONS, CODEX (decision recorded), `.env.example`,
+  `.env.docker` updated; `PROMPT_VERSION` v8. Tests: a Claude
+  `deadline=90` plan is ignored and the default's trail still sells; the
+  tool is withdrawn and refuses without writing the book. Smoke: release
+  `bb claude-spot-exit-watch` (paper, temp dir) on the real audit cut after
+  the RENDER buy, with Claude's `deadline=60` plan in the book, started
+  `atr=3:1h,stretch=2:1` and logged a catch-up stretch would-sell at 1.967
+  (live had run `deadline=60` only). Clippy clean, `cargo test
+  --workspace` 980 passed, `scripts/smoke.sh` passed, release binary
+  rebuilt. Deployed 17:53 UTC (operator approval): rollback tag
+  `binance-bot:pre-fixed-exit-20261016`, source rsynced (no .env/data/
+  target), `docker compose build claude-spot` on the Pi (11m20s),
+  `.env.docker` (backup `*-prefixedexit`) `CLAUDE_SPOT_PROMPT_VERSION=
+  claude-spot-v8-agentic`, `claude-spot` recreated after the 17:51 cycle
+  with no open position. Verified: log "live exit plans enabled
+  default_plan=atr=3:1h,stretch=2:1", 17:54:23 cycle row v8 on
+  gpt-6.1-sol (held, no tool errors), watch state refreshed. Open: first
+  buy under the fixed plan.
+- 2026-10-16: Dashboard says "Bot" instead of "Claude" (operator request;
+  the brain is no longer Claude): tab `#bot` (was `#claude`), header pill,
+  Overview KPIs/cards, empty states, hints, alerts, Exits and footnotes in
+  `crates/cryptobot-gui/src/index.html`. Internal names, the API `source`
+  value `claude` and `bb claude-spot` commands are unchanged. Checked in
+  Chromium on the Pi mirror (port 8788): tabs and pill read Bot, no
+  "Claude" text on Overview/History/Wallet/Bot/Exits, no page errors; GUI
+  tests 23 passed; release binary rebuilt (restart the running dashboard
+  to serve it).
+- 2026-10-16: Combined exit-rule backtest (operator: the AI never joins
+  rules). Audit check: all 10 `set_exit_plan` calls since live exit plans
+  had one rule (9 deadline-only, 1 clear); the prompt mentions combining
+  only once in the tool text and never says a set plan replaces the
+  default. Replay of 67 plans (single rules, loss x profit pairs, triples)
+  on all 3 Pi audits copied read-only to `/tmp/audits` (47 closed trips
+  May + Oct; 3 thin non-USDT trips without a 1m ATR left out), 4h and 24h
+  horizons. Every plan loses. Best: `stretch=2:1` -1.06 (4h) / -0.15
+  (24h); AI -1.47 / -1.47; `atr=3:1m,part=2:0.5` -0.94 / -0.94;
+  `deadline=120` -2.41; `trail=2,fade=1:30` -2.51 / -2.77; `fade=1:30`
+  alone -2.16 / -5.91 (Oct losers ride 24h). The live default
+  `atr=3:1h,stretch=2:1` traded identically to `stretch=2:1` on all 47
+  trips; most pairs equal their faster rule. Best edge over the AI
+  (+0.41 USDT) is inside one standard error (0.83). No change to plans
+  or prompt.
 - 2026-10-16: Brain chain switched (operator decision): primary
   `openai-codex/gpt-6.1-sol` at `high`, single fallback
   `google-antigravity/gemini-4-argon-high:high` (Sonnet out of the
