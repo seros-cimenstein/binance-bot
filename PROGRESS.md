@@ -5,6 +5,50 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-16: P&L chart is now a trade timeline (operator: could not see
+  when a coin was sold or how long it was held). `tradeChart` +
+  `equityTimeline` replace `equityPoints` on Overview and History: time
+  axis (`timeTicks`, round local hours/days), each round trip a tinted
+  band (green win, red loss, accent while open) with a solid line from a
+  hollow buy dot to a filled sell dot, a dashed flat line while in USDT,
+  coin names along the top where they fit, a legend, and hover anywhere:
+  hold = coin, P&L, bought/sold time and amount, hold time, sold by
+  Claude or the exit plan, fees, running total; gap = time in USDT. y is
+  realized P&L of trades sold by then (plus the open position's
+  unrealized), so overlapping positions stay correct. `lineChart` is only
+  the Signals paper curve now. Checked in Chromium on the Pi mirror (port
+  8788): All and 24h ranges, hover on UNI, its USDT gap and the open LDO,
+  no page errors; GUI tests 23 passed. Exit replay
+  on the 9 trips since live exit plans (`bb claude-spot-exit-replay
+  --since 2026-10-15T09:17:00Z --horizon-minutes 240`, 8 closed): Claude
+  +0.62 USDT, deadline=120 +0.85, deadline=60 +0.49, stretch=2:1 (and
+  the default atr=3:1h,stretch=2:1) +0.14, atr=3:1m +0.09, trail=0.5
+  -0.19, best price seen +2.37. Every trip after the first ENA had a
+  Claude deadline-only plan, so the default stretch/ATR rules were off;
+  only NEAR was sold by its deadline. Discussed with the operator, no
+  change to plans or prompt.
+- 2026-10-16: Cumulative P&L chart fix (operator: dots misaligned, curve
+  start made no sense). Causes: every USDT -> X -> USDT round trip also
+  produced a `cash` row (proceeds parked in USDT, always $0) that was drawn
+  as a grey dot, so half the dots were zero-change and every move looked
+  shifted by one dot; the curve began at the first trade's result (-$0.16),
+  not at $0; the x labels were the first/middle/last points ("Oct 14 /
+  Oct 14 / Oct 16"). Now `equityPoints` uses closed trades only
+  (`s.decided`), starts with a $0 point before the first trade, and the
+  "now" point carries the open position; `lineChart` labels each new day
+  once at its first point (56 px apart; also used by the Signals paper
+  curve) and hovers the nearest point. A time-axis step version was tried
+  first and rejected by the operator (jagged, trades bunched at the right
+  edge), so points stay evenly spaced with sloped lines. Overview hint
+  counts closed trades; History shows an empty state when a range holds
+  only USDT parking. Checked in Chromium against the Pi mirror on a second
+  instance (port 8788): 18 trade dots + start + open LDO, labels Oct 13 /
+  14 / 15 / 16, no page errors; GUI tests 23 passed, workspace 979 passed.
+  Release binary rebuilt; the operator's running dashboard needs a
+  restart to serve it. Sonnet 5.5 is back as the brain since the
+  05:23 UTC cycle (allowance reset); it sold the SOL that gpt-6.1-sol
+  bought (-$0.047 net), held twice, then at 06:46 UTC bought 19.4 LDO for
+  7.95 USDT (0.4098) with a `deadline=60` exit plan.
 - 2026-10-15: Dashboard reading fixes (operator: truncated details, journal
   closing by itself). Cause: the 30 s refresh rebuilt the page and the
   journal's open state lived only on the DOM element. Now long texts
