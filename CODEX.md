@@ -79,14 +79,14 @@ driven project.
   tools; `execute_route` is the only order path. Claude Spot must not call
   margin, futures, universal-transfer, withdrawal, or prediction write
   endpoints.
-- Claude Spot model fallback (operator decisions 2026-10-13 and 2026-10-15):
-  the primary model (`CLAUDE_SPOT_MODEL`) is `anthropic/claude-sonnet-5-5`
-  at thinking `high` since 2026-10-14 (before that
-  `anthropic/claude-haiku-5-5`), with a 20-minute deployed cycle since
+- Claude Spot model fallback (operator decisions 2026-10-13, 2026-10-15 and
+  2026-10-16): the primary model (`CLAUDE_SPOT_MODEL`) is
+  `openai-codex/gpt-6.1-sol` at thinking `high` since 2026-10-16 (before
+  that `anthropic/claude-sonnet-5-5` from 2026-10-14 and
+  `anthropic/claude-haiku-5-5`), on a 20-minute deployed cycle since
   2026-10-15 so it fits the subscription allowance. The brain chain is
-  Sonnet 5.5 (Anthropic) -> `openai-codex/gpt-6.1-sol` at `high` ->
-  `google-antigravity/claude-sonnet-5-5` at `high`
-  (`CLAUDE_SPOT_FALLBACK_MODELS` and `retry.fallbackChains` in the Pi's
+  gpt-6.1-sol (OpenAI Codex) -> `google-antigravity/gemini-4-argon-high` at
+  `high` (`CLAUDE_SPOT_FALLBACK_MODELS` and `retry.fallbackChains` in the Pi's
   `omp-agent/config.yml`); each provider uses its own omp login on the Pi.
   When the active model is rate- or usage-limited (or times out, errors or
   fails a compaction), the turn moves to the next model in the chain and

@@ -379,8 +379,11 @@ Cost control (not a trading gate): `CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD`
 can resolve to another provider), `CLAUDE_SPOT_THINKING` (default `high`).
 
 Model failover: `CLAUDE_SPOT_FALLBACK_MODELS` (comma list of
-`provider/model-id[:thinking]`, default empty = off; the approved fallback is
-`openai-codex/gpt-6.1-sol:low`), `CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS` (150,
+`provider/model-id[:thinking]`, default empty = off; the approved chain is
+`openai-codex/gpt-6.1-sol` at `high` then
+`google-antigravity/gemini-4-argon-high:high`; use the exact id from
+`omp models <provider>` inside the container, the trader's switch does no fuzzy
+matching), `CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS` (150,
 primary per-attempt timeout while fallbacks exist),
 `CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS` (1800) and
 `CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3, 0 = never). A failed turn is retried
@@ -481,9 +484,10 @@ docker compose run --rm -it claude-spot omp
 ```
 
 The brain chain (`CLAUDE_SPOT_MODEL` then `CLAUDE_SPOT_FALLBACK_MODELS`) needs
-one login per provider in that same directory: `anthropic`, `openai-codex`
-(device flow) and `google-antigravity`. `omp usage` inside the container shows
-each account's 5-hour and 7-day allowance.
+one login per provider in that same directory: `openai-codex` (device flow)
+and `google-antigravity` (`anthropic` too while omp's own chains use it).
+`omp usage` inside the container shows each account's 5-hour and 7-day
+allowance.
 
 Google Antigravity redirects the browser to `127.0.0.1:51121` on the machine
 running omp, so on the Pi log in from a host-network container and tunnel that

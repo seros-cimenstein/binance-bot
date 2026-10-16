@@ -5,6 +5,27 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-16: Brain chain switched (operator decision): primary
+  `openai-codex/gpt-6.1-sol` at `high`, single fallback
+  `google-antigravity/gemini-4-argon-high:high` (Sonnet out of the
+  chain). The Pi's omp is 18.8.9, whose catalog names Argon per tier
+  (`gemini-4-argon-low/-medium/-high`); RPC `set_model` with the bare
+  `gemini-4-argon` returns "Model not found" (only the CLI fuzzy-matches
+  it), so the exact `-high` id is used. Checked from the container:
+  `omp -p` answered OK on both models, RPC `set_model` accepted
+  `google-antigravity/gemini-4-argon-high`. Turn times on gpt-6.1-sol in
+  the session log: p50 37 s, p90 63 s, 4 of 454 over the 150 s primary
+  timeout, so the timeout stays. Pi: `.env.docker` (backup
+  `.env.docker.bak-20261016T162718Z-presol`) and `omp-agent/config.yml`
+  (backup `docker-backups/omp-config.yml.bak-20261016T162718Z-presol`;
+  chains sol -> argon-high and sonnet -> sol -> argon-high), `claude-spot`
+  recreated between cycles, env verified. Repo: `.env.example`,
+  `.env.docker`, `CODEX.md`, `OPERATIONS.md`; code default stays Haiku.
+  Usage at the switch: Codex 7-day 32%, Antigravity Gemini weekly 0.2%.
+  The resumed session reported Sonnet, so the 16:28 and 16:48 cycles ran
+  on it as a fallback; after the 30 min cooldown the trader logged "back
+  on the primary model" at 17:09:19 UTC and the 17:09:47 cycle completed
+  on `openai-codex/gpt-6.1-sol` at `high` (held, not a fallback).
 - 2026-10-16: P&L chart is now a trade timeline (operator: could not see
   when a coin was sold or how long it was held). `tradeChart` +
   `equityTimeline` replace `equityPoints` on Overview and History: time
