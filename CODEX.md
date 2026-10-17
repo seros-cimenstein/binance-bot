@@ -121,26 +121,28 @@ driven project.
 - Phase 45 live exit plans (operator decision 2026-10-15, before a paper
   run, after the 40-trade backtest): with `CLAUDE_SPOT_EXIT_PLANS_LIVE=true`
   the `claude-spot` daemon follows positions between cycles and sells a
-  position into USDT when the plan Claude set for it with `set_exit_plan`
-  fires. These sells use `Runtime::exit_sell`: the cycle lock (never during
-  a Claude route), live arming, the emergency stop file, the failed-route halt,
-  operator scope, `order/test` per leg, exchange filters, fill
+  position into USDT when its plan (Claude's from `set_exit_plan`, or the
+  default `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`, deployed `stretch=2:1,atr=3:1h`,
+  for positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM`) fires.
+  These sells use `Runtime::exit_sell`: the cycle lock (never during a
+  Claude route), live arming, the emergency stop file, the failed-route
+  halt, operator scope, `order/test` per leg, exchange filters, fill
   reconciliation, and one durable audit row (`cycle_id` `exit-plan`) before
   the alert; an ambiguous sell halts live trading like any route. Only the
   trader writes the watch files then; the paper watcher refuses to start.
-  Exit plans only sell, never buy. Changing the locked rules or the menu
-  needs a new operator decision. Since the operator decision of 2026-10-17
-  the fixed default plan (`atr=3:1h,stretch=2:1`, 2026-10-16) is replaced
-  by locked rules: `CLAUDE_SPOT_EXIT_PLAN_RULES=atr,stretch` makes every
-  plan exactly `atr=x:y,stretch=z:t` with numbers Claude picks (menu limits
-  only), once per position; `set_exit_plan` refuses other rules, `clear`
-  and a second plan for the same position, plans with other rules in the
-  book are ignored, and a position without a plan is not sold
-  automatically. Since a further operator decision the same day, `stretch`
-  sells only when its line is above break-even (entry plus buy and sell
-  fees at the trip's fee rate), and the cycle prompt and trade history show
-  Claude which rule sold each position and the result after fees
-  (information only).
+  Exit plans only sell, never buy. Changing the default plan or the menu
+  needs a new operator decision. Operator decision 2026-10-17 (branch
+  `old-gold-way`): back to the v7 system after the fixed plan (2026-10-16)
+  and locked rules (2026-10-17) cut winners short. Claude's `set_exit_plan`
+  (full menu, deadline included; setting again replaces, `clear` removes)
+  overrides the default per position, and the system prompt is the v7 text
+  (tag `claude-spot-v11-agentic`). Kept from 2026-10-17: `stretch` sells
+  only when its line is above break-even (entry plus buy and sell fees at
+  the trip's fee rate), and the cycle prompt and trade history show Claude
+  which rule sold each position and the result after fees (information
+  only). The trader session was restored to the v7 conversation up to the
+  last gpt-6.1-sol cycle before Sonnet took over (cycle 542, 2026-10-16
+  05:02 UTC), with the journal cut at the same point.
 - Claude Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

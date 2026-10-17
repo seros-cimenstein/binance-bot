@@ -5,6 +5,25 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-17 (evening): Branch `old-gold-way` (operator decision): the v7
+  way back. Round trips v7 (10-15 09:18 -> 10-16 16:00): 10 trips, mean
+  hold 68 min, wins 4, summed net +7.5% (UNI +3.51% 134 min, NEAR +2.31%
+  120 min deadline, INJ +2.33%, LDO +1.21%); v8-v10: 9 trips, 30 min, -4.1%
+  (stretch sold UNI after 33 min twice, NEAR after 5 min). Replay of the
+  same 19 trips (4h): `atr=3:1h` / hold +0.97 USDT, current
+  `atr=3:1h,stretch=2.5:1` -0.06. Code: trader and dashboard exit-plan
+  files restored to 5807dec (default plan + Claude's full-menu
+  `set_exit_plan` override, v7 system prompt), step 6 fee floor and
+  closed-position feedback re-applied, `set_exit_plan` reply fixed for
+  live mode; prompt tag `claude-spot-v11-agentic`; `.env.docker` back to
+  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN=stretch=2:1,atr=3:1h` from
+  2026-10-15T09:17:34Z; code default model stays Haiku (env sets
+  gpt-6.1-sol; changing the code default broke 8 model-chain tests).
+  Session: the archived v7 session (`archive/claude-spot-session-
+  20261016T175928Z-sonnet`) cut after cycle 542 (gpt-6.1-sol, 2026-10-16
+  05:02:08 UTC; the next line is the switch to Sonnet), journal cut at the
+  same time; both staged in `docker-data/archive/old-gold-staging`. Clippy
+  clean, `cargo test --workspace` 979 passed.
 - 2026-10-17 (later): Stretch fee floor and exit feedback for the bot
   (operator decision, after the ZEC stretch sale: +6 bps gross, about
   -0.006 USDT net; the bot wrote it could not tell which rule sold).

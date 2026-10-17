@@ -448,16 +448,15 @@ live arming variables in `.env` and the stop file.
 
 Claude may give an open position a sell plan with the `set_exit_plan` tool
 (fixed menu: follow the peak by percent or ATR, take part, stretch, slowdown,
-momentum fade, deadline). Since 2026-10-17 `CLAUDE_SPOT_EXIT_PLAN_RULES`
-(`.env.docker`: `atr,stretch`) locks the rules: every plan is `atr=x:y,stretch=z:t`
-with numbers Claude picks once per position; the tool refuses other rules,
-`clear` and a second plan for the same position, and a position without a
-plan is not sold automatically. Blank means the free menu (any combination,
-replace or clear at will). The fixed default plan
-(`CLAUDE_SPOT_DEFAULT_EXIT_PLAN`) is gone. `stretch` fires only when its
-line is above break-even (entry plus the buy and sell fees at the trip's fee
-rate), so it cannot sell a fee-negative "win" (UNI 2026-10-16, ZEC
-2026-10-17).
+momentum fade, deadline; setting again replaces it, `clear` removes it).
+Positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` run
+`CLAUDE_SPOT_DEFAULT_EXIT_PLAN` (`.env.docker`: `stretch=2:1,atr=3:1h`)
+unless Claude sets its own plan; in the v7 runs it set deadline plans
+(`deadline=60..180`). This is the v7 system restored on 2026-10-17 (branch
+`old-gold-way`) after the fixed plan and the locked rules cut winners short.
+`stretch` fires only when its line is above break-even (entry plus the buy
+and sell fees at the trip's fee rate), so it cannot sell a fee-negative
+"win" (UNI 2026-10-16, ZEC 2026-10-17).
 
 - **Live** (`CLAUDE_SPOT_EXIT_PLANS_LIVE=true`, deployed since 2026-10-15):
   between cycles `claude-spot` checks each planned position's bid every

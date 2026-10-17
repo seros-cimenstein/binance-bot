@@ -1039,6 +1039,22 @@ stretch sale at +6 bps gross, a net loss):
   with the plan, rule, share and trigger price (`exit_plan`); prompt v10.
 - [x] Deploy to the Pi (`CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v10-agentic`).
 
+Step 7, old-gold-way (operator decision 2026-10-17, branch `old-gold-way`):
+the fixed plan (step 4) and locked rules (step 5) cut winners short (v7: 10
+trips, mean hold 68 min, +7.5% summed; v8-v10: 9 trips, 30 min, -4.1%), so
+the v7 system comes back.
+
+- [x] Trader and dashboard exit-plan code of the v7 system (default plan,
+  Claude's `set_exit_plan` override with the full menu incl. deadline); the
+  v7 system prompt (tag `claude-spot-v11-agentic`); step 6 fee floor and
+  feedback kept; `set_exit_plan` reply says LIVE or paper.
+- [x] Trader session restored to the v7 conversation up to the last
+  gpt-6.1-sol cycle before Sonnet took over (cycle 542, 2026-10-16 05:02
+  UTC; 7394 of 7885 lines) and the journal cut at the same point (476 of
+  582 notes); staged on the Pi in `docker-data/archive/old-gold-staging`.
+- [ ] Deploy: image from the branch, `.env.docker` v7 exit settings, swap
+  in the staged session and journal between cycles with no open position.
+
 ## 46. Dashboard On The Pi's Live Data (operator request 2026-10-15)
 
 `cryptobot-gui` started on the laptop showed empty History and Claude tabs:

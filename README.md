@@ -128,11 +128,10 @@ the menu yet. Simulated sells pay the entry leg's fee rate plus
 klines are unavailable is listed under `skipped`.
 
 Exit plans: Claude may give an open position one of these plans with the
-`set_exit_plan` host tool (its own parameters; it never writes code). With
-`CLAUDE_SPOT_EXIT_PLAN_RULES` set (comma-separated menu keys; `.env.docker`
-has `atr,stretch`) every plan has exactly those rules: Claude picks their numbers
-once per position, cannot change or remove the plan, and a position without a
-plan is not sold automatically. With `CLAUDE_SPOT_EXIT_PLANS_LIVE=true` the
+`set_exit_plan` host tool (its own parameters; it never writes code; setting
+again replaces it, `clear` removes it). Positions opened from
+`CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` run `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`
+unless Claude sets its own plan. With `CLAUDE_SPOT_EXIT_PLANS_LIVE=true` the
 `claude-spot --submit-live --daemon` process follows those positions' bids
 every `CLAUDE_SPOT_EXIT_POLL_SECONDS` (5) between cycles and sells a position
 into USDT when its plan fires, with the same hard safety as Claude's routes
