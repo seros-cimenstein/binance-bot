@@ -23,7 +23,21 @@ the durable roadmap and use this file for the current working state.
   20261016T175928Z-sonnet`) cut after cycle 542 (gpt-6.1-sol, 2026-10-16
   05:02:08 UTC; the next line is the switch to Sonnet), journal cut at the
   same time; both staged in `docker-data/archive/old-gold-staging`. Clippy
-  clean, `cargo test --workspace` 979 passed.
+  clean, `cargo test --workspace` 980 passed. Deployed from the branch
+  (rollback tag `binance-bot:pre-old-gold-20261017`, env backup
+  `.env.docker.bak-20261017T122551Z-preoldgold`, previous session in
+  `archive/claude-spot-session-20261017T122551Z-sol-v8v10`, full journal in
+  `archive/claude-spot-journal-20261017T122551Z-full.jsonl`). The resumed
+  session reopened on Sonnet (outside the sol -> argon chain) and the
+  trader treated it as a fallback with a 30 min cooldown: cycles 12:27 and
+  12:47 ran on Sonnet. Fix `c386ca3`: a session model outside the chain
+  moves to the primary before the turn (regression test). Rebuilt, then
+  session and journal re-cut from the staged copies (the Sonnet blip saved
+  in `archive/*-20261017T125453Z-v11-sonnet-blip`). Verified: 12:56 cycle
+  v11 on `openai-codex/gpt-6.1-sol` (held: all 12 scanned coins down over
+  5m), session = v7 conversation through cycle 542 followed directly by
+  sol's new turn, log `default_plan=Some("atr=3:1h,stretch=2:1")`. `main`
+  still has the locked-rules version; merge the branch once it proves out.
 - 2026-10-17 (later): Stretch fee floor and exit feedback for the bot
   (operator decision, after the ZEC stretch sale: +6 bps gross, about
   -0.006 USDT net; the bot wrote it could not tell which rule sold).
