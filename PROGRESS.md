@@ -28,12 +28,18 @@ the durable roadmap and use this file for the current working state.
   and SOL `deadline=60` in the book: locked ran ENA only and rejected SOL;
   unlocked ran both; `atr,trail` failed config. Dashboard on that dir in
   Chromium: Plan rules `atr,stretch`, no page errors. `cargo clippy` clean,
-  `cargo test --workspace` 981 passed, `scripts/smoke.sh` passed. Not
-  deployed. On the Pi: rebuild the image, in `.env.docker` set
-  `CLAUDE_SPOT_EXIT_PLAN_RULES=atr,stretch`, drop the two default-plan
-  vars, set `CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v9-agentic`, and
-  recreate `claude-spot` between cycles. A position still open at that
-  moment loses the fixed plan; the bot can then set its own plan for it.
+  `cargo test --workspace` 981 passed, `scripts/smoke.sh` passed. Commit
+  `a17b331`. Deployed 07:41 UTC (operator approval): rollback tag
+  `binance-bot:pre-locked-rules-20261017`, tracked files rsynced (no
+  `.env*`), `docker compose build claude-spot` on the Pi (10m), Pi
+  `.env.docker` (backup `*-20261017T074059Z-prelockedrules`):
+  `CLAUDE_SPOT_EXIT_PLAN_RULES=atr,stretch`, default-plan vars removed,
+  prompt v9; `claude-spot` recreated between cycles with no open
+  position. Verified: log "live exit plans enabled" with
+  `plan_rules=Some("atr,stretch")`, container env as set. First v9 cycle
+  (07:44 UTC) bought ZEC at 1172.13 and set `atr=3:1h,stretch=2.5:1`
+  itself; the live guard started it at 07:45:21 (sell line 1121.02 =
+  3 x ATR 17.04 below the peak, bid 1171.38).
 - 2026-10-16: Does gpt-6.1-sol think an exit-plan-sold coin is still held?
   (operator question, analysis only.) No. The first live exit-plan sell
   under sol: UNI bought 19:24 UTC (cycle 586), held at 19:45 (cycle 587),

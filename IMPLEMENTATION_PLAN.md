@@ -1022,7 +1022,7 @@ replaces the fixed default plan of step 4):
   and `_FROM` removed.
 - [x] Watcher and live guard ignore book plans with other rules.
 - [x] System prompt, tool text, dashboard Exits tab, docs; prompt v9.
-- [ ] Deploy to the Pi (image rebuild, `.env.docker`
+- [x] Deploy to the Pi (image rebuild, `.env.docker`
   `CLAUDE_SPOT_EXIT_PLAN_RULES=atr,stretch`, default-plan vars removed,
   `CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v9-agentic`, recreate
   `claude-spot`).
