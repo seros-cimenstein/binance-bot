@@ -17,6 +17,8 @@
 //!   each session's configuration ([`sessions`]).
 //! - `GET /api/signals`: Phase 43 X insighter (paper only): collector health, focus, traction
 //!   curves, Haiku takes, recent signals and the weekly report ([`signals`]).
+//! - `GET /api/market`: market mood, bearish to bullish, from the breadth of the most-traded
+//!   USDT coins, with its last 24 hours ([`market`]; public market data).
 //!
 //! Every request must address `localhost`, `127.0.0.1` or `[::1]` in its `Host` header, so a
 //! web page that rebinds its DNS name to 127.0.0.1 cannot read the data.
@@ -25,6 +27,7 @@
 
 pub mod exits;
 pub mod history;
+pub mod market;
 pub mod sessions;
 pub mod signals;
 pub mod wallet;
@@ -52,6 +55,7 @@ use bb_trader::memory::load_audit_rows;
 use serde_json::{Value, json};
 
 use crate::history::{ParsedAudit, build_trades, parse_audit};
+use crate::market::MarketView;
 use crate::signals::SignalsCache;
 use crate::wallet::WalletView;
 
@@ -61,6 +65,8 @@ pub const CYCLE_LIMIT: usize = 120;
 pub const JOURNAL_LIMIT: usize = 150;
 /// How long one Binance wallet read is reused (the page polls every 30 s).
 pub const WALLET_TTL: Duration = Duration::from_secs(20);
+/// How long one market-mood read is reused (it moves on 15m candles).
+pub const MARKET_TTL: Duration = Duration::from_secs(60);
 
 const INDEX_HTML: &str = include_str!("index.html");
 
@@ -106,8 +112,11 @@ pub struct AppState {
     claude_spot: ClaudeSpotFiles,
     /// Mainnet read client; `None` leaves the wallet empty.
     client: Option<BinanceClient>,
+    /// Client for public market data: the wallet client, or an unauthenticated one.
+    market_client: Option<BinanceClient>,
     /// Held across the Binance read so concurrent requests share one fetch.
     wallet_cache: tokio::sync::Mutex<Option<(Instant, Arc<WalletView>)>>,
+    market_cache: tokio::sync::Mutex<Option<(Instant, Arc<MarketView>)>>,
     audit_cache: Mutex<Option<AuditCache>>,
     /// Phase 43 files, in the fleet data dir.
     x_paths: XPaths,
@@ -124,8 +133,10 @@ impl AppState {
             x_paths: XPaths::in_dir(&data_dir),
             data_dir,
             claude_spot,
+            market_client: client.clone().or_else(public_client),
             client,
             wallet_cache: tokio::sync::Mutex::new(None),
+            market_cache: tokio::sync::Mutex::new(None),
             audit_cache: Mutex::new(None),
             signals_cache: Mutex::new(SignalsCache::default()),
         }
@@ -139,6 +150,18 @@ impl AppState {
             return view.clone();
         }
         let view = Arc::new(wallet::fetch(self.client.as_ref()).await);
+        *cache = Some((Instant::now(), view.clone()));
+        view
+    }
+
+    async fn market(&self) -> Arc<MarketView> {
+        let mut cache = self.market_cache.lock().await;
+        if let Some((at, view)) = cache.as_ref()
+            && at.elapsed() < MARKET_TTL
+        {
+            return view.clone();
+        }
+        let view = Arc::new(market::fetch(self.market_client.as_ref()).await);
         *cache = Some((Instant::now(), view.clone()));
         view
     }
@@ -176,6 +199,13 @@ impl AppState {
     }
 }
 
+/// Mainnet client without credentials, for public market data.
+fn public_client() -> Option<BinanceClient> {
+    BinanceClient::new(bb_binance::BinanceConfig::new(false))
+        .inspect_err(|error| tracing::warn!(%error, "public Binance client unavailable"))
+        .ok()
+}
+
 /// The dashboard: GET routes only, behind the localhost `Host` check.
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -186,6 +216,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/fleet", get(fleet))
         .route("/api/exits", get(exits_handler))
         .route("/api/signals", get(signals_handler))
+        .route("/api/market", get(market_handler))
         .route("/api/sessions", get(sessions_handler))
         .layer(middleware::from_fn(localhost_only))
         .with_state(Arc::new(state))
@@ -254,6 +285,11 @@ async fn sessions_handler(State(app): State<Arc<AppState>>) -> Response {
 
 async fn wallet_handler(State(app): State<Arc<AppState>>) -> Response {
     let view = app.wallet().await;
+    json_response(json!(*view))
+}
+
+async fn market_handler(State(app): State<Arc<AppState>>) -> Response {
+    let view = app.market().await;
     json_response(json!(*view))
 }
 

@@ -1090,6 +1090,12 @@ localhost-only.
   hold, bot cost, models, exit plans run and the full configuration. The
   trader writes its non-secret `run_config` on every cycle summary. History's
   "By coin" card is replaced by "By session".
+- [x] Market mood on the Overview (`/api/market`, operator request
+  2026-10-17): bearish (-100) to bullish (+100) score from the breadth of the
+  20 most-traded USDT crypto markets (stablecoins, fiat and tokenized stocks
+  left out) over 15m/1h/4h/24h, weighted 15/25/30/30, moves under 0.1% flat;
+  gauge, per-horizon up/down bars with the median move, and the score over
+  the last 24 h, next to the Cumulative P&L chart. Public market data only.
 
 ## Post-Implementation Handoff
 

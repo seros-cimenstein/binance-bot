@@ -110,7 +110,9 @@ profiles `gui`/`paper`/`live`/`all`) serves the same fleet view plus Claude
 Spot trades, cycles (brain, tools, cost per cycle), journal, exit plans
 (Exits tab), results per session (Sessions tab: each setup ranked by realized
 P&L, the winner, and the session's configuration from the `run_config` the
-trader writes on every cycle summary), stop-file and failed-route-halt state at
+trader writes on every cycle summary), a market mood gauge on the Overview
+(bearish to bullish breadth of the 20 most-traded USDT crypto markets over
+15m/1h/4h/24h, from public Binance data), stop-file and failed-route-halt state at
 `http://localhost:8787` on the Docker host. It is published on `127.0.0.1`
 only and mounts the data dir read-only. From another machine:
 `ssh -L 8787:localhost:8787 <host>`. On a systemd host,

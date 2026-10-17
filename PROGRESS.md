@@ -5,6 +5,40 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-17 (late, 2): Market mood on the Overview (operator: "add a market
+  bearish-bullish indicator ... alongside the overview graph"). New
+  `cryptobot-gui` module `market.rs` and `GET /api/market` (cached 60 s):
+  the 20 USDT pairs with the most 24h quote volume (`ticker/24hr`; fiat,
+  stablecoins by price/range rule, idle pairs out), checked in
+  `exchangeInfo` (status `TRADING`, tokenized stocks/ETFs out via permission
+  group `TRD_GRP_261`, undocumented, observed today: SNDKB/SOXLB/SPCXB had
+  been in the top 20), 193 x 15m klines each. Score = 100 x weighted
+  (up - down) / coins over 15m/1h/4h/24h (weights 15/25/30/30, moves under
+  0.1% flat); labels at +-15 and +-50; 97-point 24 h history. Public client
+  when no credentials. Page: Market mood card right of Cumulative P&L
+  (gauge, per-horizon up/down bars with median move and hover tip, 24 h line
+  on a fixed -100..100 scale, scoring footnote); Allocation moved to a new
+  three-column bottom row with the latest call and recent trades; overview
+  P&L chart 330 px tall. `lineChart` takes `fmt`, `left`, `scale`, `dots`.
+  Checked in Chromium on the Pi mirror (port 8788, 1440 and 820 wide): -48
+  Bearish at 14:03 UTC (15m 0 up/7 down, 1h 12/3, 4h 1/19, 24h 1/19),
+  tooltips work, no page errors. 8 market tests; clippy clean, workspace
+  991 passed. Docs: plan phase 46, OPERATIONS, CODEX (GUI may use public
+  market-data GETs). Committed on `old-gold-way`; the laptop release binary
+  is rebuilt, restart the running dashboard to serve it.
+- 2026-10-17 (late): "Bot is so pessimistic" (operator remark, analysis
+  only, no code change). 18 cycles in a row held from 08:56 to 13:27 UTC
+  (gpt-6.1-sol, v11). Binance 15m closes 08:55 -> 13:45 UTC: 14 of 15
+  scanned/recent assets fell (median -1.56%; INJ -2.56%, NEAR -2.19%, UNI
+  -2.14%; only TRX +0.33%); the best 2 h rise from any 15m open, with
+  perfect timing, was +1.09% (NEAR), most under +0.7%, against about 0.2%
+  round-trip fees. All five round trips earlier today lost (APT, INJ,
+  PENDLE, ICP, ZEC; -0.14% to -0.89%, 20-60 min holds). The system prompt
+  already says "Trade actively ... Holding is a decision, not a default";
+  the bot's "need compelling continuation" stance comes from its own
+  session and journal, and staying in cash avoided the drop. Levers left
+  for the operator: prompt wording, allowing dip buys (the bot only buys
+  rising momentum, so it sits out falling markets), position size.
 - 2026-10-17 (night): Sessions tab (operator: "per session wins, not per
   coin"). Trader: `TraderConfig::run_config` (non-secret setup: model,
   thinking, fallbacks, timeouts, cycle interval, exit-plan settings,

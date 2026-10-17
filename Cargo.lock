@@ -1009,6 +1009,7 @@ dependencies = [
  "bb-trader",
  "chrono",
  "clap",
+ "futures",
  "rust_decimal",
  "rust_decimal_macros",
  "serde",
