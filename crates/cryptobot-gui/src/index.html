@@ -1239,7 +1239,7 @@ function planRules(spec) {
     if (key === "trail") rules.push("Sell all " + value + "% below the highest price since entry");
     else if (key === "atr") rules.push("Sell all " + a + "× the average " + b + " candle range below the highest price since entry");
     else if (key === "part") rules.push("Sell " + share(b) + " once at +" + a + "%");
-    else if (key === "stretch") rules.push("Sell " + share(b) + " when the price spikes " + a + " standard deviations above its 20-minute average (only above entry)");
+    else if (key === "stretch") rules.push("Sell " + share(b) + " when the price spikes " + a + " standard deviations above its 20-minute average (only above entry plus fees)");
     else if (key === "slow") rules.push("Sell " + share(a) + " when the " + b + "-minute climb slows 3 minutes in a row (only above entry)");
     else if (key === "fade") rules.push("After +" + a + "%, sell all when no new high prints for " + b + " minutes");
     else if (key === "deadline") rules.push("Sell all " + duration(num(a) * 60) + " after entry");

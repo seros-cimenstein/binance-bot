@@ -288,6 +288,30 @@ pub struct WatchView {
     pub fills: Vec<FillView>,
 }
 
+/// Closed positions with a plan kept in the watch state for the cycle prompt.
+pub const RECENT_CLOSED: usize = 5;
+
+/// One position with a plan, after it closed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClosedView {
+    pub asset: String,
+    pub spec: String,
+    pub entry_ms: i64,
+    pub entry_price: Decimal,
+    pub exit_ms: i64,
+    /// Price of the sale that closed the position.
+    pub exit_price: Decimal,
+    /// The plan's sells before the close, with the rule that fired (live: real sells at
+    /// the trigger price; paper: would-be sells).
+    pub plan_fills: Vec<FillView>,
+    /// Fee per side used for the returns.
+    pub fee_rate: Decimal,
+    /// Net return after fees with the plan's sells, in percent.
+    pub plan_net_pct: Decimal,
+    /// Net return after fees of the closing sale alone, in percent.
+    pub exit_net_pct: Decimal,
+}
+
 /// Watch state written by `claude-spot-exit-watch` every loop.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WatchState {
@@ -300,6 +324,9 @@ pub struct WatchState {
     pub closed_trials: usize,
     /// Sum over closed trials of (with plan - Claude alone), in USDT.
     pub plan_vs_claude_usdt: Decimal,
+    /// The newest closed trials (at most [`RECENT_CLOSED`]), oldest first.
+    #[serde(default)]
+    pub recent_closed: Vec<ClosedView>,
 }
 
 impl WatchState {
@@ -353,8 +380,67 @@ fn plan_line(view: &WatchView, live: bool) -> String {
     parts.join(", ")
 }
 
+fn signed_pct(value: Decimal) -> String {
+    let value = value.round_dp(2).normalize();
+    if value > Decimal::ZERO {
+        format!("+{value}%")
+    } else {
+        format!("{value}%")
+    }
+}
+
+/// One closed position: which rule sold what at which price, and the result after fees.
+fn closed_line(view: &ClosedView, live: bool) -> String {
+    let sells: Vec<String> = view
+        .plan_fills
+        .iter()
+        .map(|fill| {
+            format!(
+                "{} {}% at {} by {} ({})",
+                if live { "plan sold" } else { "plan would have sold" },
+                (fill.fraction * Decimal::ONE_HUNDRED)
+                    .round_dp(1)
+                    .normalize(),
+                price(fill.price),
+                fill.reason,
+                hhmm(fill.ts_ms)
+            )
+        })
+        .collect();
+    let sells = if sells.is_empty() {
+        "no plan rule fired".to_owned()
+    } else {
+        sells.join(", ")
+    };
+    let fees = format!(
+        "fees {}% per side",
+        (view.fee_rate * Decimal::ONE_HUNDRED).round_dp(4).normalize()
+    );
+    let result = if live {
+        format!("net after fees {} ({fees})", signed_pct(view.plan_net_pct))
+    } else {
+        format!(
+            "net after fees: your exit {}, with the plan {} ({fees})",
+            signed_pct(view.exit_net_pct),
+            signed_pct(view.plan_net_pct)
+        )
+    };
+    format!(
+        "- closed {} {}: bought at {} ({}); {}; position closed at {} ({}, after {} min); {result}",
+        view.asset,
+        view.spec,
+        price(view.entry_price),
+        hhmm(view.entry_ms),
+        sells,
+        price(view.exit_price),
+        hhmm(view.exit_ms),
+        (view.exit_ms - view.entry_ms) / 60_000
+    )
+}
+
 /// Cycle-prompt section on exit plans; empty when there is nothing to show. Lists every
-/// running plan (Claude's or the default) and Claude's plans not picked up yet.
+/// running plan (Claude's or the default), Claude's plans not picked up yet, and the
+/// newest closed positions with the rule that sold and the result after fees.
 /// `watcher_stale_ms` marks the watcher as not running when its state is older.
 pub fn prompt_section(paths: &ExitPaths, now_ms: i64, watcher_stale_ms: i64, live: bool) -> String {
     let book = PlanBook::load(&paths.plans).unwrap_or_default();
@@ -394,6 +480,9 @@ pub fn prompt_section(paths: &ExitPaths, now_ms: i64, watcher_stale_ms: i64, liv
             price(plan.entry_price),
             hhmm(plan.set_at_ms)
         );
+    }
+    for view in state.recent_closed.iter().rev() {
+        let _ = writeln!(out, "{}", closed_line(view, live));
     }
     if state.closed_trials > 0 {
         let _ = writeln!(
@@ -531,6 +620,23 @@ mod tests {
                 }],
             },
         );
+        state.recent_closed.push(ClosedView {
+            asset: "ZEC".into(),
+            spec: "atr=3:1h,stretch=2.5:1".into(),
+            entry_ms: 1_000,
+            entry_price: dec!(1172.13),
+            exit_ms: 4_021_000,
+            exit_price: dec!(1172.85),
+            plan_fills: vec![FillView {
+                ts_ms: 4_020_000,
+                price: dec!(1172.94),
+                fraction: Decimal::ONE,
+                reason: "stretch".into(),
+            }],
+            fee_rate: dec!(0.001),
+            plan_net_pct: dec!(-0.1309),
+            exit_net_pct: dec!(-0.1385),
+        });
         state.save(&paths.state).unwrap();
 
         let section = prompt_section(&paths, 10_000, 60_000, false);
@@ -550,5 +656,13 @@ mod tests {
             "{live}"
         );
         assert!(live.contains("plan fired: sell 100% at 0.2036"), "{live}");
+        assert!(
+            live.contains("- closed ZEC atr=3:1h,stretch=2.5:1: bought at 1172.13 (00:00:01); plan sold 100% at 1172.94 by stretch (01:07:00); position closed at 1172.85 (01:07:01, after 67 min); net after fees -0.13% (fees 0.1% per side)"),
+            "{live}"
+        );
+        assert!(
+            section.contains("net after fees: your exit -0.14%, with the plan -0.13%"),
+            "{section}"
+        );
     }
 }

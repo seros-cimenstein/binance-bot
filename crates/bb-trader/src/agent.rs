@@ -200,12 +200,16 @@ pub fn cycle_prompt(
     for outcome in memory.recent_outcomes.iter().rev().take(5) {
         let _ = writeln!(
             out,
-            "- {} {}->{} {} pnl {} bps",
+            "- {} {}->{} {} pnl {} bps{}",
             outcome.timestamp,
             outcome.source_asset,
             outcome.destination_asset,
             outcome.status,
-            outcome.pnl_bps.map_or("?".into(), |v| format!("{v:.1}"))
+            outcome.pnl_bps.map_or("?".into(), |v| format!("{v:.1}")),
+            outcome
+                .exit_plan
+                .as_ref()
+                .map_or(String::new(), |reason| format!(" — sold by {reason}"))
         );
     }
 

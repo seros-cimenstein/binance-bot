@@ -14,8 +14,9 @@ use rust_decimal::prelude::FromPrimitive;
 use crate::error::{Result, TraderError};
 use crate::scope::ScopeConfig;
 
-/// Prompt/audit version tag of the agentic trader.
-pub const PROMPT_VERSION: &str = "claude-spot-v7-agentic";
+/// Prompt/audit version tag of the agentic trader (v11: the v7 prompt restored on the
+/// old-gold-way branch, plus the stretch fee floor and closed-position feedback).
+pub const PROMPT_VERSION: &str = "claude-spot-v11-agentic";
 /// The only accepted value of `CLAUDE_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 

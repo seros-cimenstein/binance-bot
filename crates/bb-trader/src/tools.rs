@@ -31,7 +31,7 @@ fn object(properties: Value, required: &[&str]) -> Value {
 }
 
 /// Menu part of the `set_exit_plan` description.
-const EXIT_PLAN_MENU: &str = "One plan per asset; setting again replaces it. Rules, in any combination: trail_pct (sell all once the price falls this % below the highest price since entry) or atr_multiple with atr_timeframe 1m|5m|15m|1h (Chandelier: that many average true ranges of those candles below the highest price); take_part_gain_pct with take_part_fraction (sell that fraction once at that gain); stretch_z with stretch_fraction (sell that fraction once the price is z standard deviations above its 20-minute average, upper Bollinger band, while above entry); slowdown_fraction with slowdown_minutes (sell that fraction once the speed over that many minutes is still positive but has fallen 3 minutes in a row, while above entry); fade_min_gain_pct with fade_minutes (after being up at least that %, sell all when no new high for that many minutes); deadline_minutes (sell all that long after entry). Fractions are of the original position. clear: true removes the plan.";
+const EXIT_PLAN_MENU: &str = "One plan per asset; setting again replaces it. Rules, in any combination: trail_pct (sell all once the price falls this % below the highest price since entry) or atr_multiple with atr_timeframe 1m|5m|15m|1h (Chandelier: that many average true ranges of those candles below the highest price); take_part_gain_pct with take_part_fraction (sell that fraction once at that gain); stretch_z with stretch_fraction (sell that fraction once the price is z standard deviations above its 20-minute average, upper Bollinger band, and only above break-even: entry plus the buy and sell fees); slowdown_fraction with slowdown_minutes (sell that fraction once the speed over that many minutes is still positive but has fallen 3 minutes in a row, while above entry); fade_min_gain_pct with fade_minutes (after being up at least that %, sell all when no new high for that many minutes); deadline_minutes (sell all that long after entry). Fractions are of the original position. clear: true removes the plan.";
 
 /// `set_exit_plan` description for the configured mode (live sells or paper trial).
 fn exit_plan_description(config: &TraderConfig) -> String {
@@ -591,8 +591,12 @@ impl TraderTools {
             "plan": entry.spec,
             "symbol": entry.symbol,
             "entry_price": decimal_json(entry.entry_price),
-            "paper_only": true,
-            "note": "Paper trial: the watcher records what this plan would sell; it places no orders. Sell with execute_route."
+            "paper_only": !config.exit.live,
+            "note": if config.exit.live {
+                "LIVE: between cycles the trader sells this position into USDT when the plan fires."
+            } else {
+                "Paper trial: the watcher records what this plan would sell; it places no orders. Sell with execute_route."
+            }
         }))
     }
 
