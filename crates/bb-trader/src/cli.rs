@@ -144,7 +144,7 @@ async fn claude_spot(args: ClaudeSpotArgs) -> Result<ExitCode> {
     let mut exit = ExitCode::SUCCESS;
     let mut exit_guard = (args.daemon && mode == CycleMode::Live && config.exit.live).then(|| {
         tracing::info!(
-            default_plan = ?config.exit.default_plan.map(|d| d.plan.to_string()),
+            plan_rules = ?config.exit.rules.map(|r| r.to_string()),
             poll_seconds = config.exit.poll_seconds,
             "live exit plans enabled"
         );

@@ -23,10 +23,10 @@ use serde_json::{Value, json};
 use crate::config::DEFAULT_AUDIT_PATH;
 use crate::error::{Result, TraderError};
 use crate::exit_book::{
-    DefaultPlan, ExitPaths, ExitSettings, FillView, PlanBook, PlanEntry, WatchState, WatchView,
+    ExitPaths, ExitSettings, FillView, PlanBook, PlanEntry, WatchState, WatchView,
 };
 use crate::exit_plan::{
-    ATR_PERIODS, AtrTimeframe, ExitFill, ExitWatch, PriceBar, average_true_range,
+    ATR_PERIODS, AtrTimeframe, ExitFill, ExitWatch, PriceBar, RuleSet, average_true_range,
 };
 use crate::exit_replay::{ActualExit, RoundTrip, read_audit, round_trips};
 
@@ -202,7 +202,8 @@ pub struct Watcher {
     trials: BTreeMap<String, Trial>,
     state: WatchState,
     slippage: Decimal,
-    default_plan: Option<DefaultPlan>,
+    /// Locked rule set (`CLAUDE_SPOT_EXIT_PLAN_RULES`): only plans with exactly these run.
+    rules: Option<RuleSet>,
     /// Fills already logged per key before a restart (not logged again on catch-up).
     logged_fills: BTreeMap<String, usize>,
 }
@@ -221,7 +222,7 @@ impl Watcher {
     pub fn new(
         state: WatchState,
         slippage_bps: Decimal,
-        default_plan: Option<DefaultPlan>,
+        rules: Option<RuleSet>,
     ) -> Self {
         let logged_fills = state
             .active
@@ -235,7 +236,7 @@ impl Watcher {
                 ..state
             },
             slippage: slippage_bps / BPS,
-            default_plan,
+            rules,
             logged_fills,
         }
     }
@@ -244,42 +245,26 @@ impl Watcher {
         &self.state
     }
 
-    /// Plans to run, by asset. With a default plan it is the only plan: every position
-    /// opened since it applies runs it and Claude's plan book is ignored. Without one,
-    /// Claude's plan for an open position runs; Claude's plans for positions no longer
-    /// open stay (they close or orphan their trial) unless the asset has a newer position.
+    /// Plans to run, by asset: Claude's plan for an open position; Claude's plans for
+    /// positions no longer open stay (they close or orphan their trial) unless the asset
+    /// has a newer position. With a locked rule set, plans with other rules are ignored.
     fn effective_plans(&self, book: &PlanBook, trips: &[RoundTrip]) -> BTreeMap<String, PlanEntry> {
-        let open = trips.iter().filter(|t| t.exit.is_none());
-        if let Some(default) = self.default_plan {
-            return open
-                .filter(|trip| trip.entry_ms >= default.from_ms)
-                .map(|trip| {
-                    let entry = PlanEntry {
-                        asset: trip.asset.clone(),
-                        symbol: trip.symbol.clone(),
-                        spec: default.plan.to_string(),
-                        plan: default.plan,
-                        entry_ms: trip.entry_ms,
-                        entry_price: trip.entry_price,
-                        set_at_ms: trip.entry_ms,
-                        cycle_id: "default".into(),
-                    };
-                    (trip.asset.clone(), entry)
-                })
-                .collect();
-        }
+        let allowed = |entry: &&PlanEntry| self.rules.is_none_or(|r| RuleSet::of(&entry.plan) == r);
         let mut plans = BTreeMap::new();
-        for trip in open {
+        for trip in trips.iter().filter(|t| t.exit.is_none()) {
             if let Some(entry) = book
                 .plans
                 .get(&trip.asset)
                 .filter(|p| p.entry_ms == trip.entry_ms)
+                .filter(allowed)
             {
                 plans.insert(trip.asset.clone(), entry.clone());
             }
         }
         for (asset, entry) in &book.plans {
-            plans.entry(asset.clone()).or_insert_with(|| entry.clone());
+            if allowed(&entry) {
+                plans.entry(asset.clone()).or_insert_with(|| entry.clone());
+            }
         }
         plans
     }
@@ -518,6 +503,17 @@ impl Watcher {
             }
         }
 
+        // Plans with other rules than the locked set never run.
+        if let Some(rules) = self.rules {
+            for entry in book.plans.values() {
+                let key = entry.key();
+                if RuleSet::of(&entry.plan) != rules && !self.state.finalized.contains(&key) {
+                    log.append(json!({"event": "rejected", "key": key, "asset": entry.asset, "spec": entry.spec, "error": format!("exit-plan rules are locked to {rules}")}));
+                    self.state.finalized.insert(key);
+                }
+            }
+        }
+
         // New plans.
         for entry in plans.values() {
             let key = entry.key();
@@ -713,7 +709,7 @@ pub async fn run_cli(args: ExitWatchArgs) -> Result<ExitCode> {
     let mut watcher = Watcher::new(
         WatchState::load(&paths.state),
         args.slippage_bps,
-        settings.default_plan,
+        settings.rules,
     );
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
@@ -899,32 +895,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_plan_runs_on_new_positions_and_returns_sell_signals() {
+    async fn locked_rules_run_only_matching_plans_and_return_sell_signals() {
         let bars: Vec<PriceBar> = (40..105).map(|m| bar(m, dec!(1.01), dec!(1))).collect();
         let prices = FakePrices {
             bars,
             bid: Mutex::new(dec!(1.0)),
         };
-        let default = DefaultPlan {
-            plan: ExitPlan::parse_spec("part=5:0.5,trail=3").unwrap(),
-            from_ms: 100 * M,
-        };
-        let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(default));
+        let rules = RuleSet::parse("part,trail").unwrap();
+        let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(rules));
         let mut log: Vec<Value> = Vec::new();
-        let empty = PlanBook::default();
 
-        // A position opened before the default applies gets no plan.
-        let mut old = trip(None);
-        old.entry_ms = 99 * M;
-        let signals = watcher
-            .step(&empty, &[old], &prices, 105 * M, &mut log)
-            .await;
-        assert!(signals.is_empty());
-        assert!(watcher.state().active.is_empty());
+        // A plan with other rules (stored before the rules were locked) is rejected once
+        // and never runs; a position without a plan has none.
+        let other = book("deadline=90", 104 * M);
+        for plans in [&other, &other, &PlanBook::default()] {
+            let signals = watcher
+                .step(plans, &[trip(None)], &prices, 105 * M, &mut log)
+                .await;
+            assert!(signals.is_empty());
+            assert!(watcher.state().active.is_empty());
+        }
+        assert_eq!(events(&log), ["rejected"]);
+        assert_eq!(log[0]["error"], "exit-plan rules are locked to trail,part");
 
-        // A new position runs the default plan.
+        // Claude's numbers for the locked rules run.
+        let locked = book("trail=3,part=5:0.5", 104 * M + 1_000);
         watcher
-            .step(&empty, &[trip(None)], &prices, 105 * M, &mut log)
+            .step(&locked, &[trip(None)], &prices, 105 * M, &mut log)
             .await;
         assert_eq!(watcher.state().active["ENA"].spec, "trail=3,part=5:0.5");
 
@@ -932,46 +929,18 @@ mod tests {
         // the 3% trail sells the rest (share 1 of what is left).
         *prices.bid.lock() = dec!(1.06);
         let first = watcher
-            .step(&empty, &[trip(None)], &prices, 105 * M + 5_000, &mut log)
+            .step(&locked, &[trip(None)], &prices, 105 * M + 5_000, &mut log)
             .await;
         assert_eq!(first.len(), 1);
         assert_eq!((first[0].share, first[0].source), (dec!(0.5), "live"));
         assert_eq!(first[0].asset, "ENA");
         *prices.bid.lock() = dec!(1.02);
         let second = watcher
-            .step(&empty, &[trip(None)], &prices, 105 * M + 10_000, &mut log)
+            .step(&locked, &[trip(None)], &prices, 105 * M + 10_000, &mut log)
             .await;
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].share, Decimal::ONE);
-
-        // With a default plan, Claude's plan is ignored: the position runs the default
-        // alone and its 3% trail below the 1.01 peak still sells.
-        let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(default));
-        let deadline = book("deadline=90", 104 * M);
-        *prices.bid.lock() = dec!(1.0);
-        watcher
-            .step(&deadline, &[trip(None)], &prices, 105 * M, &mut log)
-            .await;
-        assert_eq!(watcher.state().active["ENA"].spec, "trail=3,part=5:0.5");
-        *prices.bid.lock() = dec!(0.97);
-        let sold = watcher
-            .step(&deadline, &[trip(None)], &prices, 105 * M + 5_000, &mut log)
-            .await;
-        assert_eq!(sold.len(), 1);
-        assert_eq!(sold[0].fill.reason, ExitReason::FollowPeak);
-        assert_eq!(sold[0].share, Decimal::ONE);
-
-        // Nor does Claude's plan run on a position opened before the default applies.
-        let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(default));
-        let mut early = book("deadline=90", 104 * M);
-        early.plans.get_mut("ENA").unwrap().entry_ms = 99 * M;
-        let mut old = trip(None);
-        old.entry_ms = 99 * M;
-        *prices.bid.lock() = dec!(1.0);
-        watcher
-            .step(&early, &[old], &prices, 105 * M, &mut log)
-            .await;
-        assert!(watcher.state().active.is_empty());
+        assert_eq!(second[0].fill.reason, ExitReason::FollowPeak);
     }
 
     #[tokio::test]

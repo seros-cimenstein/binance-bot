@@ -48,28 +48,20 @@ Preserve exactly: current holdings and their entry values, every open thesis wit
 review horizon, lessons learned from closed trades, the most recent fills and failures (route ids, amounts, \
 status), and any operator halt. Drop raw tool payloads, candle data and superseded route quotes.";
 
-/// Plain words for the exit-plan spec keys, shown with the fixed default plan.
-const EXIT_PLAN_KEYS: &str = "trail/atr: sell all once the price falls that % or that many average true \
-ranges of those candles below its peak since entry; part: sell that share once at that gain; stretch: sell that \
-share once the price is z standard deviations above its 20-minute average, while above entry; slow: sell that \
-share once the climb slows 3 minutes in a row; fade: after that gain, sell all when no new high prints for \
-that many minutes; deadline: sell all that many minutes after entry";
-
 /// The system-prompt rule about exit plans for the configured mode.
 fn exit_plan_rule(config: &TraderConfig) -> String {
-    match (config.exit.default_plan, config.exit.live) {
-        (Some(d), true) => format!(
-            "- Exit plans run LIVE: every position you open runs the fixed exit plan {} ({EXIT_PLAN_KEYS}). \
-Between cycles the trader checks the bid every few seconds and, when the plan fires, sells into USDT for you \
-(real orders, same safety checks as execute_route). You cannot change or remove it; sells it made show in \
-the next cycle and in your trade history.",
-            d.plan
+    match (config.exit.rules, config.exit.live) {
+        (Some(set), true) => format!(
+            "- Exit plans run LIVE: after you buy, set_exit_plan gives that position its sell plan. Every plan has \
+exactly the rules {set}; you choose their numbers for each position. You can set it once per position: it \
+cannot be changed or removed afterwards, and a position without a plan is not sold automatically. Between \
+cycles the trader checks the bid every few seconds and, when the plan fires, sells into USDT for you (real \
+orders, same safety checks as execute_route); sells it made show in the next cycle and in your trade history."
         ),
-        (Some(d), false) => format!(
-            "- Exit plans are a paper trial: every position you open runs the fixed exit plan {} \
-({EXIT_PLAN_KEYS}) and a watcher records between cycles what it would have sold. It places no orders; \
-selling stays your decision through execute_route.",
-            d.plan
+        (Some(set), false) => format!(
+            "- Exit plans are a paper trial: set_exit_plan gives a position you hold a sell plan with exactly the \
+rules {set} and your numbers, once per position, and a watcher records between cycles what it would have sold. \
+It places no orders; selling stays your decision through execute_route."
         ),
         (None, true) => "- Exit plans run LIVE: between cycles the trader checks the bid every few seconds \
 and, when a position's plan fires, sells it into USDT for you (real orders, same safety checks as \

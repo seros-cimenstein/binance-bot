@@ -396,6 +396,76 @@ impl fmt::Display for ExitPlan {
     }
 }
 
+/// Spec keys of the menu rules, in [`ExitPlan`] spec order.
+pub const RULE_KEYS: [&str; 7] = ["trail", "atr", "part", "stretch", "slow", "fade", "deadline"];
+
+/// A set of menu rules by spec key, e.g. `atr,stretch`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuleSet(u8);
+
+impl RuleSet {
+    /// The rules `plan` sets.
+    pub fn of(plan: &ExitPlan) -> Self {
+        let present = [
+            matches!(plan.trail, Some(Trail::Pct(_))),
+            matches!(plan.trail, Some(Trail::Atr { .. })),
+            plan.take_part.is_some(),
+            plan.stretch.is_some(),
+            plan.slowdown.is_some(),
+            plan.fade.is_some(),
+            plan.deadline_minutes.is_some(),
+        ];
+        Self(
+            present
+                .iter()
+                .enumerate()
+                .filter(|(_, set)| **set)
+                .fold(0, |bits, (i, _)| bits | 1 << i),
+        )
+    }
+
+    /// A comma-separated list of spec keys, e.g. `atr,stretch`.
+    pub fn parse(list: &str) -> Result<Self, String> {
+        let mut bits = 0u8;
+        for key in list.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+            let index = RULE_KEYS.iter().position(|k| *k == key).ok_or_else(|| {
+                format!(
+                    "unknown exit-plan rule {key:?} (menu: {})",
+                    RULE_KEYS.join(", ")
+                )
+            })?;
+            bits |= 1 << index;
+        }
+        let set = Self(bits);
+        if bits == 0 {
+            return Err(format!("no exit-plan rule in {list:?}"));
+        }
+        if set.contains("trail") && set.contains("atr") {
+            return Err("only one of trail / atr may be set".into());
+        }
+        Ok(set)
+    }
+
+    /// Spec keys in the set, in spec order.
+    pub fn keys(self) -> impl Iterator<Item = &'static str> {
+        RULE_KEYS
+            .into_iter()
+            .enumerate()
+            .filter(move |(i, _)| self.0 & (1 << i) != 0)
+            .map(|(_, key)| key)
+    }
+
+    pub fn contains(self, key: &str) -> bool {
+        self.keys().any(|k| k == key)
+    }
+}
+
+impl fmt::Display for RuleSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.keys().collect::<Vec<_>>().join(","))
+    }
+}
+
 fn decimal(value: &str) -> Result<Decimal, String> {
     value
         .parse::<Decimal>()
@@ -808,6 +878,23 @@ mod tests {
     fn run(spec: &str, bars: &[PriceBar]) -> Vec<ExitFill> {
         let mut watch = ExitWatch::new(&plan(spec), dec!(100), 0, Some(dec!(0.5))).unwrap();
         bars.iter().flat_map(|b| watch.on_bar(b)).collect()
+    }
+
+    #[test]
+    fn rule_sets_parse_menu_keys_and_match_plans() {
+        let set = RuleSet::parse(" stretch , atr ").unwrap();
+        assert_eq!(set.to_string(), "atr,stretch");
+        assert_eq!(RuleSet::of(&plan("stretch=2:1,atr=3:1h")), set);
+        assert_ne!(RuleSet::of(&plan("trail=3,stretch=2:1")), set);
+        assert_ne!(RuleSet::of(&plan("atr=3:1h,stretch=2:1,deadline=60")), set);
+        for (bad, message) in [
+            ("atr,stop", "unknown exit-plan rule \"stop\""),
+            ("trail,atr", "only one of trail / atr"),
+            (" , ", "no exit-plan rule"),
+        ] {
+            let error = RuleSet::parse(bad).unwrap_err();
+            assert!(error.contains(message), "{bad}: {error}");
+        }
     }
 
     #[test]

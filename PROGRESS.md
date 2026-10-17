@@ -5,6 +5,67 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-17: Exit plan = locked rules, the bot picks the numbers
+  (operator decision; replaces the fixed `atr=3:1h,stretch=2:1` of
+  2026-10-16). New `CLAUDE_SPOT_EXIT_PLAN_RULES` (menu keys; `.env.docker`
+  `atr,stretch`): every plan is exactly `atr=x:y,stretch=z:t` with the
+  bot's numbers (menu limits only), once per position. If the bot sets no
+  plan, nothing sells the position automatically (operator choice). `set_exit_plan`
+  shows only `asset`, `atr_multiple`, `atr_timeframe`, `stretch_z`,
+  `stretch_fraction` (all required) and refuses other rules, `clear` and a
+  second plan for the same position; its reply now says LIVE or paper (it
+  said `paper_only: true` even when live). `exit_plan::RuleSet`;
+  watcher/live guard ignore book plans with other rules and log them once
+  as `rejected`. `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`/`_FROM` and `DefaultPlan`
+  removed (no longer read). System prompt and tool text name the rules;
+  `PROMPT_VERSION` v9. Dashboard Exits: "Plan rules" KPI, default-plan chip
+  and wording gone, mirror script reads the new var. CODEX, README,
+  OPERATIONS, `.env.example`, `.env.docker`, plan step 5 updated. Tests:
+  locked tool (schema, wrong rules, clear, once per position, stale plan
+  doesn't count), watcher (other-rule plan rejected, locked plan sells),
+  `RuleSet` parse errors. Smoke: release `bb claude-spot-exit-watch`
+  (paper, temp dir, live Binance prices) with ENA `atr=3:1h,stretch=2:1`
+  and SOL `deadline=60` in the book: locked ran ENA only and rejected SOL;
+  unlocked ran both; `atr,trail` failed config. Dashboard on that dir in
+  Chromium: Plan rules `atr,stretch`, no page errors. `cargo clippy` clean,
+  `cargo test --workspace` 981 passed, `scripts/smoke.sh` passed. Not
+  deployed. On the Pi: rebuild the image, in `.env.docker` set
+  `CLAUDE_SPOT_EXIT_PLAN_RULES=atr,stretch`, drop the two default-plan
+  vars, set `CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v9-agentic`, and
+  recreate `claude-spot` between cycles. A position still open at that
+  moment loses the fixed plan; the bot can then set its own plan for it.
+- 2026-10-16: Does gpt-6.1-sol think an exit-plan-sold coin is still held?
+  (operator question, analysis only.) No. The first live exit-plan sell
+  under sol: UNI bought 19:24 UTC (cycle 586), held at 19:45 (cycle 587),
+  sold by the default plan's `stretch` rule at 19:57:06 (audit row
+  `cycle_id` `exit-plan`, `submitted`, `submission_attempted` true). Cycle
+  588 (20:06 UTC) journaled "HOLD cash 15.4778 USDT; UNI position CLOSED
+  automatically at 19:57:06" and placed no order. It learns this from the
+  live wallet and trade memory (the sell row makes USDT the current
+  holding and closes the UNI outcome); the prompt's "Last cycle" section
+  lists only its own routes and no input names the firing rule, so sol
+  wrote it could not tell ATR from stretch. That sell was the first
+  under the fixed plan: fills 7.286 -> 7.295 (+0.01467 USDT, +12.4 bps
+  gross), BNB fees about 0.0178 USDT, net about -0.003 USDT. `stretch`
+  and `slowdown` only require the price above entry, not above entry plus
+  round-trip fees, so they can sell a fee-negative "win". UNI then fell
+  to 7.255 (20:03) and was 7.288 at 20:09, never back above the fee
+  break-even (about 7.297). A fee-aware floor was proposed; the operator
+  chose to keep the fixed plan `atr=3:1h,stretch=2:1` unchanged and watch
+  it, knowing `deadline` led the 9-trip replay. Open: compare the fixed
+  plan with `deadline=60`/`120` once more trips close under it. No
+  change made.
+- 2026-10-16: Why UNI and NEAR won (operator question, analysis only).
+  20 closed trips in the mirrored audit, compared with Binance 1m closes
+  for the 12 scanned assets. UNI +3.71% over 134 min was mostly market
+  move: the basket rose +3.10% while it was held (BTC +1.18%), so the
+  coin beat it by only +0.61. NEAR +2.52% over 120 min beat the basket by
+  +2.01; it bought a leader after a +6.5% 4h basket rally. Both were held
+  through drawdowns (UNI -1.18% before +5.77%) under the v5+ prompt (no
+  invalidation levels). gpt-6.1-sol on v4: 6 trips, 1 win, -0.64 USDT,
+  mean hold 38 min. On v7: 8 trips, 5 wins, +0.75 USDT, mean hold 70 min.
+  Trips held 60+ min: 6 of 8 won; under 60 min: 2 of 12. All 20 trips:
+  -0.11 USDT before BNB fees. The sample is small. No change made.
 - 2026-10-16: Trader moved to a fresh omp session (operator: Sonnet's
   history kept gpt-6.1-sol from trading). The old session (one file since
   2026-10-13, 58 MB, cycles up to 581, compacted) is archived on the Pi

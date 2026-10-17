@@ -15,7 +15,7 @@ use crate::error::{Result, TraderError};
 use crate::scope::ScopeConfig;
 
 /// Prompt/audit version tag of the agentic trader.
-pub const PROMPT_VERSION: &str = "claude-spot-v8-agentic";
+pub const PROMPT_VERSION: &str = "claude-spot-v9-agentic";
 /// The only accepted value of `CLAUDE_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 
@@ -185,7 +185,7 @@ pub struct TraderConfig {
     pub stop_path: PathBuf,
     /// Phase 45 exit plans: plan book (written by `set_exit_plan`), watch state and log.
     pub exit_paths: crate::exit_book::ExitPaths,
-    /// Phase 45 exit plans: live or paper, default plan, poll interval.
+    /// Phase 45 exit plans: live or paper, locked rule set, poll interval.
     pub exit: crate::exit_book::ExitSettings,
     // telegram
     pub telegram_explain: bool,

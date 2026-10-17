@@ -121,21 +121,22 @@ driven project.
 - Phase 45 live exit plans (operator decision 2026-10-15, before a paper
   run, after the 40-trade backtest): with `CLAUDE_SPOT_EXIT_PLANS_LIVE=true`
   the `claude-spot` daemon follows positions between cycles and sells a
-  position into USDT when its plan (Claude's, or the default
-  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`, deployed `stretch=2:1,atr=3:1h`, for
-  positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM`) fires. These
-  sells use `Runtime::exit_sell`: the cycle lock (never during a Claude
-  route), live arming, the emergency stop file, the failed-route halt,
+  position into USDT when the plan Claude set for it with `set_exit_plan`
+  fires. These sells use `Runtime::exit_sell`: the cycle lock (never during
+  a Claude route), live arming, the emergency stop file, the failed-route halt,
   operator scope, `order/test` per leg, exchange filters, fill
   reconciliation, and one durable audit row (`cycle_id` `exit-plan`) before
   the alert; an ambiguous sell halts live trading like any route. Only the
   trader writes the watch files then; the paper watcher refuses to start.
-  Exit plans only sell, never buy. Changing the default plan or the menu
-  needs a new operator decision. Since the operator decision of 2026-10-16
-  the default plan is the only plan: every position opened from
-  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` runs it unchanged, `set_exit_plan`
-  is not offered (and refuses calls) while a default plan is set, and
-  Claude's stored plans are ignored.
+  Exit plans only sell, never buy. Changing the locked rules or the menu
+  needs a new operator decision. Since the operator decision of 2026-10-17
+  the fixed default plan (`atr=3:1h,stretch=2:1`, 2026-10-16) is replaced
+  by locked rules: `CLAUDE_SPOT_EXIT_PLAN_RULES=atr,stretch` makes every
+  plan exactly `atr=x:y,stretch=z:t` with numbers Claude picks (menu limits
+  only), once per position; `set_exit_plan` refuses other rules, `clear`
+  and a second plan for the same position, plans with other rules in the
+  book are ignored, and a position without a plan is not sold
+  automatically.
 - Claude Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

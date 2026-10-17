@@ -1011,6 +1011,22 @@ this plan, locked" over layering Claude's rules on top):
 - [x] Deploy to the Pi (image rebuild, `CLAUDE_SPOT_PROMPT_VERSION=
   claude-spot-v8-agentic` in the Pi's `.env.docker`, recreate `claude-spot`).
 
+Step 5, locked rules with Claude's numbers (operator decision 2026-10-17;
+replaces the fixed default plan of step 4):
+
+- [x] `CLAUDE_SPOT_EXIT_PLAN_RULES` (menu keys, `.env.docker` `atr,stretch`):
+  every plan sets exactly those rules; Claude picks the numbers (menu
+  limits only) once per position; `set_exit_plan` shows only those fields,
+  all required, and refuses other rules, `clear` and a second plan for the
+  same position. No plan = no automatic sell. `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`
+  and `_FROM` removed.
+- [x] Watcher and live guard ignore book plans with other rules.
+- [x] System prompt, tool text, dashboard Exits tab, docs; prompt v9.
+- [ ] Deploy to the Pi (image rebuild, `.env.docker`
+  `CLAUDE_SPOT_EXIT_PLAN_RULES=atr,stretch`, default-plan vars removed,
+  `CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v9-agentic`, recreate
+  `claude-spot`).
+
 ## 46. Dashboard On The Pi's Live Data (operator request 2026-10-15)
 
 `cryptobot-gui` started on the laptop showed empty History and Claude tabs:

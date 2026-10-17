@@ -448,11 +448,13 @@ live arming variables in `.env` and the stop file.
 
 Claude may give an open position a sell plan with the `set_exit_plan` tool
 (fixed menu: follow the peak by percent or ATR, take part, stretch, slowdown,
-momentum fade, deadline). Positions opened from
-`CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` all run `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`
-(deployed: `stretch=2:1,atr=3:1h`). Since 2026-10-16 a set default plan is
-the only plan: `set_exit_plan` is not offered and Claude's stored plans are
-ignored; Claude chooses plans only when no default is set.
+momentum fade, deadline). Since 2026-10-17 `CLAUDE_SPOT_EXIT_PLAN_RULES`
+(`.env.docker`: `atr,stretch`) locks the rules: every plan is `atr=x:y,stretch=z:t`
+with numbers Claude picks once per position; the tool refuses other rules,
+`clear` and a second plan for the same position, and a position without a
+plan is not sold automatically. Blank means the free menu (any combination,
+replace or clear at will). The fixed default plan
+(`CLAUDE_SPOT_DEFAULT_EXIT_PLAN`) is gone.
 
 - **Live** (`CLAUDE_SPOT_EXIT_PLANS_LIVE=true`, deployed since 2026-10-15):
   between cycles `claude-spot` checks each planned position's bid every

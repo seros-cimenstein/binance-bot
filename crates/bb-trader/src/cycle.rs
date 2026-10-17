@@ -1476,31 +1476,88 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_exit_plan_withdraws_set_exit_plan() {
+    async fn locked_exit_rules_take_the_bots_numbers_once_per_position() {
         let server = MockServer::start().await;
         let dir = tempfile::tempdir().unwrap();
-        let config = trader_config(
-            dir.path(),
-            &[
-                ("CLAUDE_SPOT_DEFAULT_EXIT_PLAN", "atr=3:1h,stretch=2:1"),
-                ("CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM", "2026-10-15T09:17:34Z"),
-            ],
+        let config = trader_config(dir.path(), &[("CLAUDE_SPOT_EXIT_PLAN_RULES", "stretch,atr")]);
+        let tool = crate::tools::tool_definitions(&config)
+            .into_iter()
+            .find(|tool| tool.name == "set_exit_plan")
+            .unwrap();
+        assert_eq!(
+            tool.parameters["required"],
+            json!(["asset", "atr_multiple", "atr_timeframe", "stretch_z", "stretch_fraction"])
         );
-        assert!(
-            crate::tools::tool_definitions(&config)
-                .iter()
-                .all(|tool| tool.name != "set_exit_plan")
-        );
+        assert_eq!(tool.parameters["properties"].as_object().unwrap().len(), 5);
         let runtime = runtime(&server, config, CycleMode::PlanOnly).await;
         let tools = TraderTools::new(Arc::clone(&runtime));
-        for args in [
-            json!({"asset": "ENA", "deadline_minutes": 60}),
-            json!({"asset": "ENA", "clear": true}),
+        let buy = json!({
+            "row_type": "route",
+            "status": "submitted",
+            "selected_route": {"legs": [{"fee_rate": 0.001}]},
+            "submitted_legs": [{
+                "symbol": "ENA/USDT",
+                "side": "buy",
+                "final_order": {"average": 0.1983, "filled": 75.11, "timestamp": 1_791_990_000_000_i64}
+            }]
+        });
+        std::fs::write(&runtime.config.audit_path, format!("{buy}\n")).unwrap();
+
+        for (args, message) in [
+            (json!({"asset": "ENA", "deadline_minutes": 60}), "rules atr,stretch"),
+            (
+                json!({"asset": "ENA", "atr_multiple": 3, "atr_timeframe": "1h"}),
+                "this plan sets atr",
+            ),
+            (
+                json!({"asset": "ENA", "atr_multiple": 3, "atr_timeframe": "1h", "stretch_z": 2, "stretch_fraction": 1, "deadline_minutes": 60}),
+                "this plan sets atr,stretch,deadline",
+            ),
+            (json!({"asset": "ENA", "clear": true}), "cannot be removed"),
         ] {
             let error = tools.dispatch("set_exit_plan", args).await.unwrap_err();
-            assert!(error.contains("atr=3:1h,stretch=2:1"), "{error}");
+            assert!(error.contains(message), "{error}");
         }
         assert!(!runtime.config.exit_paths.plans.exists());
+
+        // A plan with other rules stored for this position before the lock does not count.
+        let stale = crate::exit_plan::ExitPlan::parse_spec("deadline=60").unwrap();
+        let mut book = crate::exit_book::PlanBook::default();
+        book.plans.insert(
+            "ENA".into(),
+            crate::exit_book::PlanEntry {
+                asset: "ENA".into(),
+                symbol: "ENA/USDT".into(),
+                spec: stale.to_string(),
+                plan: stale,
+                entry_ms: 1_791_990_000_000,
+                entry_price: Decimal::new(1983, 4),
+                set_at_ms: 1_791_990_060_000,
+                cycle_id: "c0".into(),
+            },
+        );
+        book.save(&runtime.config.exit_paths.plans).unwrap();
+
+        let set = tools
+            .dispatch(
+                "set_exit_plan",
+                json!({"asset": "ena", "atr_multiple": 2, "atr_timeframe": "15m", "stretch_z": 2.5, "stretch_fraction": 0.5}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(set["plan"], "atr=2:15m,stretch=2.5:0.5");
+
+        // Once per position: new numbers for the same position are refused.
+        let error = tools
+            .dispatch(
+                "set_exit_plan",
+                json!({"asset": "ENA", "atr_multiple": 4, "atr_timeframe": "1h", "stretch_z": 2, "stretch_fraction": 1}),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("set once per position"), "{error}");
+        let book = crate::exit_book::PlanBook::load(&runtime.config.exit_paths.plans).unwrap();
+        assert_eq!(book.plans["ENA"].spec, "atr=2:15m,stretch=2.5:0.5");
     }
 
     /// Alert sink that snapshots the audit file at the moment it is invoked.

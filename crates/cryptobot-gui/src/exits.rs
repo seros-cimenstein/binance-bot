@@ -20,10 +20,9 @@ pub const STATE_STALE_MS: i64 = 120_000;
 
 /// Env vars that configure exit plans; when none is set this host does not know how the
 /// trader runs them.
-const SETTING_VARS: [&str; 4] = [
+const SETTING_VARS: [&str; 3] = [
     "CLAUDE_SPOT_EXIT_PLANS_LIVE",
-    "CLAUDE_SPOT_DEFAULT_EXIT_PLAN",
-    "CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM",
+    "CLAUDE_SPOT_EXIT_PLAN_RULES",
     "CLAUDE_SPOT_EXIT_POLL_SECONDS",
 ];
 
@@ -41,8 +40,7 @@ pub fn exits_view(
         Ok(s) => json!({
             "configured": configured,
             "live": s.live,
-            "default_plan": s.default_plan.map(|d| d.plan.to_string()),
-            "default_plan_from": s.default_plan.and_then(|d| iso(d.from_ms)),
+            "plan_rules": s.rules.map(|r| r.to_string()),
             "poll_seconds": s.poll_seconds,
         }),
         Err(error) => json!({"configured": configured, "error": error}),
@@ -74,10 +72,7 @@ pub fn exits_view(
     let active: Vec<Value> = state
         .active
         .iter()
-        .map(|(asset, view)| {
-            let by_claude = book.plans.get(asset).is_some_and(|p| p.key() == view.key);
-            active_view(asset, view, by_claude)
-        })
+        .map(|(asset, view)| active_view(asset, view))
         .collect();
     let waiting: Vec<Value> = book
         .plans
@@ -115,7 +110,7 @@ pub fn exits_view(
     })
 }
 
-fn active_view(asset: &str, view: &WatchView, by_claude: bool) -> Value {
+fn active_view(asset: &str, view: &WatchView) -> Value {
     let pct = |num: Decimal, den: Decimal| {
         (den > Decimal::ZERO)
             .then(|| bb_core::money::to_f64((num / den - Decimal::ONE) * Decimal::ONE_HUNDRED))
@@ -126,7 +121,6 @@ fn active_view(asset: &str, view: &WatchView, by_claude: bool) -> Value {
         "key": view.key,
         "spec": view.spec,
         "symbol": view.symbol,
-        "source": if by_claude { "claude" } else { "default" },
         "entry_price": view.entry_price,
         "peak": view.peak,
         "sell_line": view.sell_line,
@@ -226,10 +220,10 @@ mod tests {
     }
 
     #[test]
-    fn running_plans_show_their_source_and_sell_line_and_unwatched_plans_wait() {
+    fn running_plans_show_their_sell_line_and_unwatched_plans_wait() {
         let dir = tempfile::tempdir().unwrap();
         let paths = paths(dir.path());
-        // Claude set plans for SOL (running) and ENA (not picked up yet); ETH runs the default.
+        // Claude set plans for SOL (running) and ENA (not picked up yet).
         let sol = entry("SOL", "trail=5", 2_000);
         let ena = entry("ENA", "deadline=60", 3_000);
         let book = PlanBook {
@@ -238,10 +232,7 @@ mod tests {
         std::fs::write(&paths.plans, serde_json::to_vec(&book).unwrap()).unwrap();
         let state = WatchState {
             updated_at_ms: 10_000,
-            active: BTreeMap::from([
-                ("SOL".to_owned(), watch(sol.key(), "trail=5")),
-                ("ETH".to_owned(), watch("ETH@1000@0".into(), "stretch=2:1")),
-            ]),
+            active: BTreeMap::from([("SOL".to_owned(), watch(sol.key(), "trail=5"))]),
             closed_trials: 2,
             plan_vs_claude_usdt: dec!(0.125),
             ..WatchState::default()
@@ -255,23 +246,22 @@ mod tests {
 
         let settings = |name: &str| match name {
             "CLAUDE_SPOT_EXIT_PLANS_LIVE" => Some("true".to_owned()),
-            "CLAUDE_SPOT_DEFAULT_EXIT_PLAN" => Some("stretch=2:1".to_owned()),
-            "CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM" => Some("2026-10-15T09:17:34Z".to_owned()),
+            "CLAUDE_SPOT_EXIT_PLAN_RULES" => Some("atr,stretch".to_owned()),
             _ => None,
         };
         let view = exits_view(&paths, settings, 10_000 + STATE_STALE_MS);
 
         assert_eq!(view["settings"]["live"], json!(true));
-        assert_eq!(view["settings"]["default_plan"], json!("stretch=2:1"));
+        assert_eq!(view["settings"]["plan_rules"], json!("atr,stretch"));
         assert_eq!(view["stale"], json!(false));
-        let sources: Vec<(&str, &str)> = view["active"]
+        let assets: Vec<&str> = view["active"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|a| (a["asset"].as_str().unwrap(), a["source"].as_str().unwrap()))
+            .map(|a| a["asset"].as_str().unwrap())
             .collect();
-        assert_eq!(sources, [("ETH", "default"), ("SOL", "claude")]);
-        let sol_view = &view["active"][1];
+        assert_eq!(assets, ["SOL"]);
+        let sol_view = &view["active"][0];
         // Bid 2.4 on entry 2 is +20%; the 2.375 sell line is ~1.05% below the bid.
         assert!((sol_view["gain_pct"].as_f64().unwrap() - 20.0).abs() < 1e-9);
         assert!(
