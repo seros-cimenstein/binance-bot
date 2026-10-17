@@ -122,7 +122,8 @@ driven project.
   run, after the 40-trade backtest): with `CLAUDE_SPOT_EXIT_PLANS_LIVE=true`
   the `claude-spot` daemon follows positions between cycles and sells a
   position into USDT when its plan (Claude's from `set_exit_plan`, or the
-  default `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`, deployed `stretch=2:1,atr=3:1h`,
+  default `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`, deployed `atr=3:1h,deadline=120`
+  since 2026-10-17 (was `stretch=2:1,atr=3:1h`),
   for positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM`) fires.
   These sells use `Runtime::exit_sell`: the cycle lock (never during a
   Claude route), live arming, the emergency stop file, the failed-route
