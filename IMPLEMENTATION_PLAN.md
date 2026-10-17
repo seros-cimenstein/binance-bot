@@ -1052,7 +1052,7 @@ the v7 system comes back.
   gpt-6.1-sol cycle before Sonnet took over (cycle 542, 2026-10-16 05:02
   UTC; 7394 of 7885 lines) and the journal cut at the same point (476 of
   582 notes); staged on the Pi in `docker-data/archive/old-gold-staging`.
-- [ ] Deploy: image from the branch, `.env.docker` v7 exit settings, swap
+- [x] Deploy: image from the branch, `.env.docker` v7 exit settings, swap
   in the staged session and journal between cycles with no open position.
 
 ## 46. Dashboard On The Pi's Live Data (operator request 2026-10-15)
