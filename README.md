@@ -118,7 +118,8 @@ the net return times the USDT value the route spent. Plans come from a fixed
 menu, repeatable as `--plan`: `trail=<pct>` or `atr=<multiple>:<1m|5m|15m|1h>`
 (follow the peak by a percent or by average true ranges, Chandelier exit),
 `part=<gain_pct>:<fraction>` (take part), `stretch=<z>:<fraction>` (sell at
-the upper Bollinger band of the last 20 minutes, above entry),
+the upper Bollinger band of the last 20 minutes, only above entry plus the
+buy and sell fees),
 `slow=<fraction>:<minutes>` (still rising but slowing 3 minutes in a row),
 `fade=<min_gain_pct>:<minutes>` (momentum fade), `deadline=<minutes>` and
 `hold`. `docs/exit-plan-candidates.md` lists the researched functions not in

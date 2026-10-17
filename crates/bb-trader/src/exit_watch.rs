@@ -23,7 +23,8 @@ use serde_json::{Value, json};
 use crate::config::DEFAULT_AUDIT_PATH;
 use crate::error::{Result, TraderError};
 use crate::exit_book::{
-    ExitPaths, ExitSettings, FillView, PlanBook, PlanEntry, WatchState, WatchView,
+    ClosedView, ExitPaths, ExitSettings, FillView, PlanBook, PlanEntry, RECENT_CLOSED,
+    WatchState, WatchView,
 };
 use crate::exit_plan::{
     ATR_PERIODS, AtrTimeframe, ExitFill, ExitWatch, PriceBar, RuleSet, average_true_range,
@@ -343,14 +344,19 @@ impl Watcher {
         let cost = trial.entry.entry_price * (Decimal::ONE + fee);
         let mut sold = Decimal::ZERO;
         let mut with_plan = Decimal::ZERO;
+        // The plan's sells at their trigger prices, no modelled slippage.
+        let mut plan_proceeds = Decimal::ZERO;
         let mut plan_fills = Vec::new();
         for fill in trial.fills.iter().filter(|f| f.ts_ms < exit.ts_ms) {
             sold += fill.fraction;
             with_plan += fill.fraction * fill.price * (Decimal::ONE - fee - self.slippage);
+            plan_proceeds += fill.fraction * fill.price * (Decimal::ONE - fee);
             plan_fills.push(fill.clone());
         }
         let alone = claude_price * (Decimal::ONE - fee);
-        with_plan += (Decimal::ONE - sold).max(Decimal::ZERO) * alone;
+        let rest = (Decimal::ONE - sold).max(Decimal::ZERO) * alone;
+        with_plan += rest;
+        plan_proceeds += rest;
         let diff = (with_plan - alone) / cost * trip.entry_value_usdt;
         let pct = |proceeds: Decimal| {
             ((proceeds / cost - Decimal::ONE) * Decimal::ONE_HUNDRED).round_dp(4)
@@ -375,6 +381,20 @@ impl Watcher {
         }));
         self.state.closed_trials += 1;
         self.state.plan_vs_claude_usdt += diff.round_dp(6);
+        self.state.recent_closed.push(ClosedView {
+            asset: asset.to_owned(),
+            spec: trial.entry.spec.clone(),
+            entry_ms: trial.entry.entry_ms,
+            entry_price: trial.entry.entry_price,
+            exit_ms: exit.ts_ms,
+            exit_price: claude_price,
+            plan_fills,
+            fee_rate: fee,
+            plan_net_pct: pct(plan_proceeds),
+            exit_net_pct: pct(alone),
+        });
+        let excess = self.state.recent_closed.len().saturating_sub(RECENT_CLOSED);
+        self.state.recent_closed.drain(..excess);
         self.state.finalized.insert(key);
     }
 
@@ -407,7 +427,13 @@ impl Watcher {
                 average_true_range(&candles)
             }
         };
-        let mut watch = match ExitWatch::new(&entry.plan, entry.entry_price, entry.entry_ms, atr) {
+        let mut watch = match ExitWatch::new(
+            &entry.plan,
+            entry.entry_price,
+            entry.entry_ms,
+            atr,
+            trip.fee_rate,
+        ) {
             Ok(watch) => watch,
             Err(error) => {
                 log.append(json!({"event": "rejected", "key": entry.key(), "asset": entry.asset, "spec": entry.spec, "error": error}));
@@ -886,6 +912,16 @@ mod tests {
         assert!(state.active.is_empty());
         assert_eq!(state.closed_trials, 1);
         assert!(state.finalized.contains(&book.plans["ENA"].key()));
+        // The prompt's record: the rule that sold, and net results after fees with the
+        // plan's sell (no modelled slippage) and with the closing sale alone.
+        let view = &state.recent_closed[0];
+        assert_eq!(
+            (view.plan_fills[0].reason.as_str(), view.plan_fills[0].price, view.exit_price),
+            ("follow_peak", dec!(1.06), dec!(1.00))
+        );
+        let pct = |proceeds: Decimal| ((proceeds / cost - Decimal::ONE) * dec!(100)).round_dp(4);
+        assert_eq!(view.plan_net_pct, pct(dec!(1.06) * dec!(0.999)));
+        assert_eq!(view.exit_net_pct, pct(alone));
 
         // A finished trial is never restarted from the same plan.
         watcher

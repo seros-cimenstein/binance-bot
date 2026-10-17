@@ -136,7 +136,11 @@ driven project.
   only), once per position; `set_exit_plan` refuses other rules, `clear`
   and a second plan for the same position, plans with other rules in the
   book are ignored, and a position without a plan is not sold
-  automatically.
+  automatically. Since a further operator decision the same day, `stretch`
+  sells only when its line is above break-even (entry plus buy and sell
+  fees at the trip's fee rate), and the cycle prompt and trade history show
+  Claude which rule sold each position and the result after fees
+  (information only).
 - Claude Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

@@ -15,7 +15,7 @@ use crate::error::{Result, TraderError};
 use crate::scope::ScopeConfig;
 
 /// Prompt/audit version tag of the agentic trader.
-pub const PROMPT_VERSION: &str = "claude-spot-v9-agentic";
+pub const PROMPT_VERSION: &str = "claude-spot-v10-agentic";
 /// The only accepted value of `CLAUDE_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 

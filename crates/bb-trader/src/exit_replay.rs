@@ -441,7 +441,8 @@ pub fn replay_trip(
         let atr = plan
             .atr_timeframe()
             .and_then(|tf| prices.atr.get(&tf).copied());
-        let Ok(mut watch) = ExitWatch::new(plan, trip.entry_price, trip.entry_ms, atr) else {
+        let Ok(mut watch) = ExitWatch::new(plan, trip.entry_price, trip.entry_ms, atr, trip.fee_rate)
+        else {
             continue;
         };
         for bar in &prices.history {

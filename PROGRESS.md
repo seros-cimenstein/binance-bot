@@ -5,6 +5,28 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-17 (later): Stretch fee floor and exit feedback for the bot
+  (operator decision, after the ZEC stretch sale: +6 bps gross, about
+  -0.006 USDT net; the bot wrote it could not tell which rule sold).
+  `ExitWatch::new` takes the trip's fee rate; `stretch` fires only when its
+  line is above break-even = entry x (1 + fee) / (1 - fee) (live guard,
+  paper watcher and replay). Watch state keeps `recent_closed` (5 newest
+  closed positions with a plan: rule, share and trigger price of each plan
+  sell, closing price, fee rate, net after fees with the plan and with the
+  closing sale); the cycle prompt's exit-plan section lists them. Trade
+  outcomes carry `exit_plan` (the sell row's reason: plan, rule, share,
+  trigger price) in the prompt and `get_trade_history`. Tool text, GUI rule
+  wording, README, OPERATIONS, CODEX, plan step 6; prompt v10. Tests:
+  stretch above entry but below break-even does not sell (sells with fee
+  0), closed record with rule and net returns, prompt line, exit-plan
+  reason on the outcome. Smoke: release `bb claude-spot-exit-watch` (paper,
+  temp dir) on the real ZEC buy/sell rows and the bot's
+  `atr=3:1h,stretch=2.5:1`: no plan sell before the 08:51 exit (break-even
+  1174.48, highest 1172.69); rendered prompt line "closed ZEC ...: no plan
+  rule fired; position closed at 1172.85 ... net after fees -0.14% (fees
+  0.1% per side)". Clippy clean, `cargo test --workspace` 981 passed,
+  `scripts/smoke.sh` passed. Fees use the route's taker rate (0.1%); BNB
+  payment is 0.075%, so the floor is slightly conservative.
 - 2026-10-17: Exit plan = locked rules, the bot picks the numbers
   (operator decision; replaces the fixed `atr=3:1h,stretch=2:1` of
   2026-10-16). New `CLAUDE_SPOT_EXIT_PLAN_RULES` (menu keys; `.env.docker`

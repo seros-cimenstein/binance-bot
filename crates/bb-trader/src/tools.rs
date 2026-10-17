@@ -51,7 +51,7 @@ const EXIT_RULES: [(&str, &[&str], &str); 7] = [
     (
         "stretch",
         &["stretch_z", "stretch_fraction"],
-        "stretch_z with stretch_fraction (sell that fraction once the price is z standard deviations above its 20-minute average, upper Bollinger band, while above entry)",
+        "stretch_z with stretch_fraction (sell that fraction once the price is z standard deviations above its 20-minute average, upper Bollinger band, and only above break-even: entry plus the buy and sell fees)",
     ),
     (
         "slow",

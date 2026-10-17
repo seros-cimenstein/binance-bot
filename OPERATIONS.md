@@ -454,7 +454,10 @@ with numbers Claude picks once per position; the tool refuses other rules,
 `clear` and a second plan for the same position, and a position without a
 plan is not sold automatically. Blank means the free menu (any combination,
 replace or clear at will). The fixed default plan
-(`CLAUDE_SPOT_DEFAULT_EXIT_PLAN`) is gone.
+(`CLAUDE_SPOT_DEFAULT_EXIT_PLAN`) is gone. `stretch` fires only when its
+line is above break-even (entry plus the buy and sell fees at the trip's fee
+rate), so it cannot sell a fee-negative "win" (UNI 2026-10-16, ZEC
+2026-10-17).
 
 - **Live** (`CLAUDE_SPOT_EXIT_PLANS_LIVE=true`, deployed since 2026-10-15):
   between cycles `claude-spot` checks each planned position's bid every
@@ -471,7 +474,10 @@ replace or clear at will). The fixed default plan
   no orders. It refuses to start while plans run live.
 - Files: `CLAUDE_SPOT_EXIT_PLANS_PATH` (written by the trader's tool),
   `CLAUDE_SPOT_EXIT_WATCH_STATE_PATH` and `CLAUDE_SPOT_EXIT_WATCH_LOG_PATH`
-  (written by whichever of the two runs). The cycle prompt shows each plan.
+  (written by whichever of the two runs). The cycle prompt shows each plan
+  and the 5 newest closed positions with the rule that sold, prices and the
+  net result after fees (watch state `recent_closed`); trade history marks
+  plan sells with the plan, rule, share and trigger price (`exit_plan`).
 - Results: `bb claude-spot-exit-watch --summary` compares, for each closed
   position with a plan, "with the plan" and "Claude alone".
 

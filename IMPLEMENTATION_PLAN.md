@@ -1027,6 +1027,18 @@ replaces the fixed default plan of step 4):
   `CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v9-agentic`, recreate
   `claude-spot`).
 
+Step 6, fee floor and feedback (operator decision 2026-10-17, after the ZEC
+stretch sale at +6 bps gross, a net loss):
+
+- [x] `stretch` fires only when its line is above break-even: entry ×
+  (1 + fee) / (1 − fee) at the trip's fee rate (watcher, live guard, replay).
+- [x] The cycle prompt lists the 5 newest closed positions with a plan: the
+  rule that sold, share, trigger price, closing price, hold time and net
+  result after fees (watch state `recent_closed`).
+- [x] Trade outcomes (prompt and `get_trade_history`) mark exit-plan sells
+  with the plan, rule, share and trigger price (`exit_plan`); prompt v10.
+- [ ] Deploy to the Pi (`CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v10-agentic`).
+
 ## 46. Dashboard On The Pi's Live Data (operator request 2026-10-15)
 
 `cryptobot-gui` started on the laptop showed empty History and Claude tabs:
