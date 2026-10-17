@@ -26,7 +26,18 @@ the durable roadmap and use this file for the current working state.
   rule fired; position closed at 1172.85 ... net after fees -0.14% (fees
   0.1% per side)". Clippy clean, `cargo test --workspace` 981 passed,
   `scripts/smoke.sh` passed. Fees use the route's taker rate (0.1%); BNB
-  payment is 0.075%, so the floor is slightly conservative.
+  payment is 0.075%, so the floor is slightly conservative. Commit
+  `96733db`. Deployed 10:57 UTC after the 10:56 cycle (no open position):
+  rollback tag `binance-bot:pre-fee-floor-20261017`, Pi `.env.docker`
+  (backup `*-20261017T105715Z-prefeefloor`) prompt v10, `claude-spot`
+  recreated. Verified: log `plan_rules=Some("atr,stretch")`, 11:01 cycle
+  row v10 (held), watch state has `recent_closed`, the session's cycle
+  prompt carries "sold by exit plan atr=3:1h,stretch=2.5:1 fired
+  (stretch, live) ...", and the bot journaled: "NEW runtime detail now
+  explicitly identifies the 08:51:30 ZEC automatic exit as STRETCH firing"
+  plus the lesson that a small gross gain can fail to cover fees. ZEC
+  closed before this deploy, so it is not in `recent_closed`; the next
+  closed position will be.
 - 2026-10-17: Exit plan = locked rules, the bot picks the numbers
   (operator decision; replaces the fixed `atr=3:1h,stretch=2:1` of
   2026-10-16). New `CLAUDE_SPOT_EXIT_PLAN_RULES` (menu keys; `.env.docker`

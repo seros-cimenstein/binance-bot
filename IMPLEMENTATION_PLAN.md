@@ -1037,7 +1037,7 @@ stretch sale at +6 bps gross, a net loss):
   result after fees (watch state `recent_closed`).
 - [x] Trade outcomes (prompt and `get_trade_history`) mark exit-plan sells
   with the plan, rule, share and trigger price (`exit_plan`); prompt v10.
-- [ ] Deploy to the Pi (`CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v10-agentic`).
+- [x] Deploy to the Pi (`CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v10-agentic`).
 
 ## 46. Dashboard On The Pi's Live Data (operator request 2026-10-15)
 
