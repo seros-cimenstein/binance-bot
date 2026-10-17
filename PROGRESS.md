@@ -5,6 +5,33 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-17 (night, later): Why v11 held 19 cycles in a row (operator
+  forwarded an analysis). Checked against the code and data; fixed what was
+  wrong, left the v7 prompt alone (commit `50c3972`):
+  - Trade memory showed sales into USDT with a fake P&L: the "exit" of a
+    coin -> USDT route was the next route's whole USDT balance (PENDLE->USDT
+    -1794.9 bps, ICP->USDT -403.2 bps, "current holding INJ->USDT +9541
+    bps"). Sales into cash or fiat are now `cash` (no P&L), a wallet parked
+    in USDT is `cash`, the loss streak skips cash, and the prompt prints
+    "to cash" / "current holding: cash USDT (x USDT)".
+  - Route friction counted input left unspent by lot rounding and sizing
+    (BCH 164.5 bps friction on a 3.7 bps spread, 101.7 bps of it unspent;
+    XAUT 204 bps, 145 unspent). Friction is now on the spent part only.
+  - Each container restart ran a cycle at once (12:54-13:27: 6 cycles, 6
+    long HOLD notes in 33 min, filling the 8-note journal window). A
+    restarted daemon now waits until one interval after the last cycle
+    (exit plans keep running).
+  - The 12:55 compaction of the restored session ran on Sonnet before the
+    switch to sol (the session reopened on Sonnet). A session on a model
+    outside the chain now switches to the primary before compacting.
+  Not changed: the v7 system prompt and the evidence weighting of "edge
+  after friction" (information only). Tests: cash parking, friction on
+  the spent part, restart cadence, primary-before-compaction; clippy clean,
+  `cargo test --workspace` 993 passed. Deployed 14:38 UTC (rollback tag
+  `binance-bot:pre-honest-memory-20261017`) with TAO open (bought 14:30 by
+  the bot, its own plan `deadline=90`): log "keeping the cycle cadence ...
+  wait_seconds=741", the exit guard kept following TAO. The session and
+  journal were not re-cut, so the bot keeps its TAO thesis.
 - 2026-10-17 (late, 2): Market mood on the Overview (operator: "add a market
   bearish-bullish indicator ... alongside the overview graph"). New
   `cryptobot-gui` module `market.rs` and `GET /api/market` (cached 60 s):
