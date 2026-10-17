@@ -647,7 +647,10 @@ impl TraderAgent {
                 self.notices.push(format!("back on primary {name} ({why})"));
             }
         } else {
-            if self.primary_retry_at.is_none() {
+            if self.model_index(name).is_none() {
+                // Not one of ours (a resumed session's old model): no cooldown to wait out.
+                self.primary_retry_at = Some(Instant::now());
+            } else if self.primary_retry_at.is_none() {
                 self.primary_retry_at = Some(Instant::now() + self.cooldown);
             }
             tracing::warn!(model = name, reason = why, "trader on a fallback model");
@@ -726,6 +729,8 @@ impl TraderAgent {
     }
 
     /// Cycle start: return to the primary once the fallback cooldown ended, then compact.
+    /// A session found on a model outside the chain (e.g. a resumed session's old model)
+    /// moves to the primary before the turn.
     pub async fn prepare_cycle(&mut self) {
         self.cycle_attempts.clear();
         if self.fallback_enabled()
@@ -735,6 +740,9 @@ impl TraderAgent {
             self.return_to_primary().await;
         }
         self.maybe_compact().await;
+        if !self.on_primary() && self.model_index(&self.effective).is_none() {
+            self.return_to_primary().await;
+        }
     }
 
     /// Switch back to the primary. A context too large for the primary's window is compacted
@@ -1465,6 +1473,29 @@ mod tests {
             notices[1],
             "back on primary anthropic/claude-haiku-5-5 (fallback cooldown ended)"
         );
+    }
+
+    #[tokio::test]
+    async fn resumed_session_on_a_model_outside_the_chain_moves_to_the_primary_at_once() {
+        // A restored session comes back on an old model that is not in the chain: the turn
+        // must run on the primary, without waiting out a fallback cooldown.
+        const OLD: &str = "anthropic/claude-sonnet-5-5";
+        let config = fallback_config("1800");
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        let script = tokio::spawn(async move {
+            server.state(OLD, 10_000, 200_000).await;
+            server.state(OLD, 10_000, 200_000).await;
+            server.switch(PRIMARY, "high", 100_000).await;
+            let pid = server.prompt().await;
+            server.finish_ok(&pid, PRIMARY).await;
+            server.quiet().await;
+        });
+        agent.prepare_cycle().await;
+        let report = agent.run_turn("# Cycle 1", &CancellationToken::new()).await;
+        script.await.unwrap();
+        assert_eq!(report.model, PRIMARY);
+        assert!(!report.fallback_active);
     }
 
     #[tokio::test]
