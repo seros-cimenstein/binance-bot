@@ -22,6 +22,12 @@ the durable roadmap and use this file for the current working state.
   realized, 10 closed, 60% wins, avg hold 68 min; 56 sol + 36 Sonnet
   cycles), then v9 -0.006, v8 -0.339 (8 closed, 25%), v4 -1.19 (10 closed,
   10%). Checked in Chromium: no page errors. Clippy clean, tests pass.
+  Commit `b9a2d4b`. Trader deployed 13:26 UTC (rollback tag
+  `binance-bot:pre-sessions-20261017`, no open position): the 13:27 cycle
+  row carries `run_config` (gpt-6.1-sol, fallback argon-high, interval
+  1200 s, default plan `deadline=120`, no credentials). From here each
+  config change starts a new session on the tab. Laptop release
+  `cryptobot-gui` rebuilt; restart the running dashboard to serve the tab.
 - 2026-10-17 (evening): Branch `old-gold-way` (operator decision): the v7
   way back. Round trips v7 (10-15 09:18 -> 10-16 16:00): 10 trips, mean
   hold 68 min, wins 4, summed net +7.5% (UNI +3.51% 134 min, NEAR +2.31%
