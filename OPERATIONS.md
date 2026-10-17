@@ -450,9 +450,8 @@ Claude may give an open position a sell plan with the `set_exit_plan` tool
 (fixed menu: follow the peak by percent or ATR, take part, stretch, slowdown,
 momentum fade, deadline; setting again replaces it, `clear` removes it).
 Positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` run
-`CLAUDE_SPOT_DEFAULT_EXIT_PLAN` (`.env.docker`: `atr=3:1h,deadline=120`, sell
-all 2 hours after entry with a 3 x 1h ATR crash trail; v7 used
-`stretch=2:1,atr=3:1h`)
+`CLAUDE_SPOT_DEFAULT_EXIT_PLAN` (`.env.docker`: `deadline=120`, sell all 2
+hours after entry; v7 used `stretch=2:1,atr=3:1h`)
 unless Claude sets its own plan; in the v7 runs it set deadline plans
 (`deadline=60..180`). This is the v7 system restored on 2026-10-17 (branch
 `old-gold-way`) after the fixed plan and the locked rules cut winners short.
