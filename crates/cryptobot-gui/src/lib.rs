@@ -13,6 +13,8 @@
 //! - `GET /api/fleet`: `bb bot-status --json` bots (activity, trades, P&L).
 //! - `GET /api/exits`: Phase 45 exit plans: settings, running plans with their sell lines,
 //!   plans waiting for the watcher and the newest watch-log events ([`exits`]).
+//! - `GET /api/sessions`: results per trading session (setup), ranked, with the winner and
+//!   each session's configuration ([`sessions`]).
 //! - `GET /api/signals`: Phase 43 X insighter (paper only): collector health, focus, traction
 //!   curves, Haiku takes, recent signals and the weekly report ([`signals`]).
 //!
@@ -23,6 +25,7 @@
 
 pub mod exits;
 pub mod history;
+pub mod sessions;
 pub mod signals;
 pub mod wallet;
 
@@ -183,6 +186,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/fleet", get(fleet))
         .route("/api/exits", get(exits_handler))
         .route("/api/signals", get(signals_handler))
+        .route("/api/sessions", get(sessions_handler))
         .layer(middleware::from_fn(localhost_only))
         .with_state(Arc::new(state))
 }
@@ -235,6 +239,17 @@ async fn history_handler(State(app): State<Arc<AppState>>) -> Response {
         Err(error) => return internal_error("history", &error),
     };
     json_response(history_view(&audit, &wallet))
+}
+
+async fn sessions_handler(State(app): State<Arc<AppState>>) -> Response {
+    let wallet = app.wallet().await;
+    let state = app.clone();
+    blocking_json(move || {
+        let audit = state.audit();
+        let trades = build_trades(&audit.routes, |asset| wallet.mark(asset), bb_core::time::now());
+        sessions::sessions_view(&audit, &trades, &state.claude_spot.exits.log)
+    })
+    .await
 }
 
 async fn wallet_handler(State(app): State<Arc<AppState>>) -> Response {

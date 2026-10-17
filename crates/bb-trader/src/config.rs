@@ -481,6 +481,58 @@ impl TraderConfig {
         }
     }
 
+    /// Non-secret run configuration, recorded on every cycle summary so the dashboard can
+    /// group cycles and trades by the setup that produced them. Never includes credentials.
+    pub fn run_config(&self, cycle_interval_seconds: Option<u64>) -> serde_json::Value {
+        let decimal = |value: Decimal| value.normalize().to_string();
+        serde_json::json!({
+            "mode": self.mode(),
+            "prompt_version": self.prompt_version,
+            "model": self.model,
+            "thinking": self.thinking.as_str(),
+            "fallback_models": self
+                .fallback_models
+                .iter()
+                .map(|m| format!("{}:{}", m.name(), m.thinking.as_str()))
+                .collect::<Vec<_>>(),
+            "turn_timeout_seconds": self.timeout.as_secs(),
+            "primary_timeout_seconds": self.primary_timeout.as_secs(),
+            "fallback_cooldown_seconds": self.fallback_cooldown.as_secs(),
+            "web_search": self.web_search,
+            "cycle_interval_seconds": cycle_interval_seconds,
+            "journal_prompt_entries": self.journal_prompt_entries,
+            "compact_at_percent": self.compact_at_percent,
+            "compact_at_tokens": self.compact_at_tokens,
+            "max_daily_llm_cost_usd": decimal(self.max_daily_llm_cost_usd),
+            "exit_plans": {
+                "live": self.exit.live,
+                "default_plan": self.exit.default_plan.map(|d| d.plan.to_string()),
+                "default_plan_from_ms": self.exit.default_plan.map(|d| d.from_ms),
+                "poll_seconds": self.exit.poll_seconds,
+            },
+            "routing": {
+                "market_pick_mode": self.market_pick_mode.as_str(),
+                "max_route_legs": self.max_route_legs,
+                "max_candidate_routes": self.max_candidate_routes,
+                "candidate_limit": self.candidate_limit,
+                "small_candidate_limit": self.small_candidate_limit,
+                "min_quote_volume_usdt": decimal(self.min_quote_volume_usdt),
+                "max_spread_bps": decimal(self.max_spread_bps),
+                "small_min_quote_volume_usdt": decimal(self.small_min_quote_volume_usdt),
+                "small_max_spread_bps": decimal(self.small_max_spread_bps),
+                "slippage_buffer_bps": decimal(self.slippage_buffer_bps),
+                "leg_rounding_reserve_bps": decimal(self.leg_rounding_reserve_bps),
+            },
+            "market_evidence": {
+                "enabled": self.market_evidence_enabled,
+                "lookback_hours": self.market_evidence_lookback_hours,
+                "max_symbols": self.market_evidence_max_symbols,
+            },
+            "trade_memory_limit": self.trade_memory_limit,
+            "scope": self.scope,
+        })
+    }
+
     /// Hard safety: every live arming flag must be set. Checked before any LLM call and
     /// again before every route execution.
     pub fn check_live_arming(&self) -> Result<()> {
@@ -673,6 +725,25 @@ pub(crate) mod tests {
             ("DRY_RUN", "false"),
             ("CONFIRM_LIVE_TRADING", "yes"),
         ]
+    }
+
+    #[test]
+    fn run_config_records_the_setup_without_credentials() {
+        let config = TraderConfig::from_lookup(lookup(&[
+            ("BINANCE_API_KEY", "KEY-must-not-leak"),
+            ("BINANCE_API_SECRET", "SECRET-must-not-leak"),
+            ("CONFIRM_LIVE_TRADING", "yes"),
+            ("CLAUDE_SPOT_MODEL", "openai-codex/gpt-6.1-sol"),
+            ("CLAUDE_SPOT_DEFAULT_EXIT_PLAN", "deadline=120"),
+            ("CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM", "2026-10-15T09:17:34Z"),
+        ]))
+        .unwrap();
+        let snapshot = config.run_config(Some(1200));
+        let text = snapshot.to_string();
+        assert!(!text.contains("must-not-leak"), "{text}");
+        assert_eq!(snapshot["model"], "openai-codex/gpt-6.1-sol");
+        assert_eq!(snapshot["cycle_interval_seconds"], 1200);
+        assert_eq!(snapshot["exit_plans"]["default_plan"], "deadline=120");
     }
 
     #[test]

@@ -256,6 +256,7 @@
     <nav class="tabs" id="tabs">
       <a href="#overview" data-tab="overview">Overview</a>
       <a href="#history" data-tab="history">History</a>
+      <a href="#sessions" data-tab="sessions">Sessions</a>
       <a href="#wallet" data-tab="wallet">Wallet</a>
       <a href="#bot" data-tab="bot">Bot</a>
       <a href="#exits" data-tab="exits">Exits</a>
@@ -279,8 +280,8 @@
 // textContent / createTextNode; nothing is parsed as HTML.
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
-const TABS = ["overview", "history", "wallet", "bot", "exits", "fleet", "signals"];
-const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", fleet: "/api/fleet", exits: "/api/exits", signals: "/api/signals" };
+const TABS = ["overview", "history", "sessions", "wallet", "bot", "exits", "fleet", "signals"];
+const ENDPOINTS = { status: "/api/status", history: "/api/history", sessions: "/api/sessions", wallet: "/api/wallet", fleet: "/api/fleet", exits: "/api/exits", signals: "/api/signals" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
@@ -772,7 +773,7 @@ function renderHeader() {
 function render() {
   renderHeader();
   const view = document.getElementById("view");
-  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, bot: claudePage, exits: exitsPage, fleet: fleetPage, signals: signalsPage };
+  const pages = { overview: overviewPage, history: historyPage, sessions: sessionsPage, wallet: walletPage, bot: claudePage, exits: exitsPage, fleet: fleetPage, signals: signalsPage };
   ui.pendingRender = false;
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
@@ -950,32 +951,24 @@ function historyPage() {
   return el("div", { class: "grid" }, head, kpis,
     el("div", { class: "grid split" }, equity, mix),
     el("div", { class: "grid halves" }, perTrade, daily),
-    assetCard(trades),
+    sessionCard(),
     card("Trades", tradeTable([...trades].reverse(), { expandable: true }), { flush: true, hint: "click a row for the bot's reasoning" }),
     failedRoutesCard(history),
     el("details", { class: "footnote" }, el("summary", null, "How results are calculated"),
       el("p", null, "Each route the bot submits opens a trade in the coin it bought. The trade closes when that coin is sold, by the bot or by its exit plan. Cost is what the exchange filled the buy for; the result is what the coins fetched when sold (or are worth right now, if still held) minus that cost and the exchange fees of both orders. So spread and slippage are in the fill prices and the trade results add up to the whole run. Fees paid in BNB are valued at today's BNB price. Parking in stablecoins costs nothing and counts toward neither wins nor losses. Routes without fill data (or quoted in another coin than USDT) use the bot's quote at execution time instead, with fees inside the quote.")));
 }
-function assetCard(trades) {
-  const groups = new Map();
-  for (const t of trades) {
-    if (!["win", "loss", "open"].includes(t.status)) continue;
-    const g = groups.get(t.destination_asset) || { asset: t.destination_asset, n: 0, wins: 0, losses: 0, pnl: 0 };
-    g.n++; g.pnl += num(t.pnl_usdt) || 0;
-    if (t.status === "win") g.wins++; else if (t.status === "loss") g.losses++;
-    groups.set(t.destination_asset, g);
-  }
-  const rows = [...groups.values()].sort((a, b) => b.pnl - a.pnl);
-  if (!rows.length) return null;
-  const maxAbs = Math.max(...rows.map((g) => Math.abs(g.pnl)), 1e-9);
-  return card("By coin", table([["Coin"], ["Trades", "r"], ["Win rate", "r"], ["P&L", "r"]], rows.map((g) =>
-    el("tr", null,
-      el("td", null, assetLabel(g.asset)),
-      el("td", { class: "r" }, String(g.n)),
-      el("td", { class: "r" }, g.wins + g.losses ? pct((g.wins / (g.wins + g.losses)) * 100, { sign: false, dp: 0 }) : "—"),
-      el("td", { class: "r" }, el("div", { class: "bar-cell" }, signed(g.pnl),
-        el("div", { class: "bar-track" }, el("div", { class: "bar-fill " + tone(g.pnl), style: "width:" + Math.max(3, (Math.abs(g.pnl) / maxAbs) * 100) + "%" }))))))),
-    { flush: true, hint: "which coins made or lost money" });
+// Top sessions by realized P&L (the Sessions tab has the full ranking and configurations).
+function sessionCard() {
+  const data = ui.data.sessions;
+  if (!data || !data.sessions.length) return null;
+  const rows = data.sessions.slice(0, 5).map((s) => el("tr", { class: "click", onclick: () => { ui.expanded.add("session:" + s.key); location.hash = "#sessions"; } },
+    el("td", { class: "r faint num" }, String(s.rank)),
+    el("td", null, el("b", null, s.label), s.winner ? [" ", chip("Winner", "pos")] : null),
+    el("td", { class: "r" }, s.stats.closed + " closed"),
+    el("td", { class: "r" }, s.stats.win_rate_pct === null ? "—" : pct(s.stats.win_rate_pct, { sign: false, dp: 0 })),
+    el("td", { class: "r" }, signed(s.stats.realized_pnl_usdt))));
+  return card("By session", table([["#", "r"], ["Session"], ["Trades", "r"], ["Win rate", "r"], ["Realized P&L", "r"]], rows),
+    { flush: true, action: el("a", { href: "#sessions", class: "small", style: "color:var(--accent);text-decoration:none" }, "All sessions and their setups →") });
 }
 function tradeKey(t) { return t.opened_at + "|" + t.route_id; }
 function tradeTable(trades, opts = {}) {
@@ -1326,6 +1319,91 @@ function exitsPage() {
     kpis, active, waiting, sells, events,
     el("details", { class: "footnote" }, el("summary", null, "How exit plans work"),
       el("p", null, "When a default plan is set, it is the only plan: every position runs it and the bot cannot change it. Without one, the bot can pick a sell plan for each position from a fixed menu (follow the peak by percent or by candle range, take part at a gain, stretch above the 20-minute band, slowdown, momentum fade, deadline). Between cycles the bot checks the bid every few seconds; when a rule fires it sells that share into USDT through the same checked order path as the bot's own trades. Exit plans only sell, never buy. The sell line is where the follow-the-peak rule sells; other rules fire on their own conditions.")));
+}
+
+// ---------- Sessions ----------
+function countList(items, fmt = (x) => x) {
+  return items && items.length ? items.map((x) => fmt(x.name) + " ×" + x.count).join(", ") : "—";
+}
+// Run configuration as setting/value rows; nested sections become dotted names.
+function flatConfig(obj, prefix = "") {
+  const rows = [];
+  for (const [k, v] of Object.entries(obj || {})) {
+    const key = prefix ? prefix + "." + k : k;
+    if (v && typeof v === "object" && !Array.isArray(v)) rows.push(...flatConfig(v, key));
+    else if (Array.isArray(v)) rows.push([key, v.length ? v.join(", ") : "none"]);
+    else if (k.endsWith("_ms") && num(v) !== null) rows.push([key, new Date(num(v)).toISOString()]);
+    else rows.push([key, v === null || v === undefined ? "—" : String(v)]);
+  }
+  return rows;
+}
+function sessionDetail(s) {
+  const st = s.stats;
+  const facts = el("div", { class: "facts" },
+    fact("Prompt", s.prompt_version || "—"),
+    fact("omp session", s.session_id || "—"),
+    fact("Ran", stamp(s.first_at) + " → " + stamp(s.last_at)),
+    fact("Models (cycles)", countList(s.models)),
+    fact("Thinking", countList(s.thinking)),
+    fact("Market pick", countList(s.market_pick_modes)),
+    fact("Exit plans run", countList(s.exit_plans)),
+    fact("Closed by a plan", String(st.closed_by_plan) + " of " + st.closed),
+    fact("Best / worst", pct(st.best_pct) + " / " + pct(st.worst_pct)),
+    fact("Fees paid", usd(st.fees_usdt)),
+    fact("Open P&L", st.open ? el("span", null, signed(st.open_pnl_usdt), " (" + st.open + " open)") : "—"),
+    fact("Bot cost", usd(s.llm_cost_usd)));
+  const config = s.run_config
+    ? table([["Setting"], ["Value"]], flatConfig(s.run_config).map(([k, v]) => el("tr", null, el("td", { class: "code small" }, k), el("td", { class: "code small" }, v))))
+    : el("div", { class: "small muted" }, "Full configuration not recorded: this session ran before the trader started writing its setup on every cycle (2026-10-17). The facts above come from the audit log.");
+  const trades = s.trades.length
+    ? table([["Opened"], ["Coin"], ["Result"], ["P&L", "r"], ["Return", "r"], ["Held", "r"], ["Exit plan"]], s.trades.map((t) => el("tr", null,
+      el("td", { class: "nw muted" }, stamp(t.opened_at)),
+      el("td", null, assetLabel(t.asset)),
+      el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
+      el("td", { class: "r" }, signed(t.pnl_usdt)),
+      el("td", { class: "r" }, el("span", { class: tone(t.pnl_pct) }, pct(t.pnl_pct))),
+      el("td", { class: "r muted" }, duration(t.hold_seconds) + (t.status === "open" ? "+" : "")),
+      el("td", { class: "code small muted" }, t.plan || "—"))))
+    : el("div", { class: "small muted" }, "No trades in this session.");
+  return el("div", { class: "grid", style: "gap:12px;padding:8px 0" }, facts,
+    el("div", null, el("div", { class: "small muted", style: "margin-bottom:4px" }, "Configuration"), config),
+    el("div", null, el("div", { class: "small muted", style: "margin-bottom:4px" }, "Trades"), trades));
+}
+function sessionsPage() {
+  const data = ui.data.sessions;
+  const head = pageHead("Sessions", "Each setup the bot ran (prompt, session, configuration), ranked by realized P&L after fees.", null);
+  if (!data) return el("div", { class: "grid" }, head, ui.errors.sessions ? card(null, errorBox(ui.errors.sessions)) : loadingView());
+  if (!data.sessions.length) return el("div", { class: "grid" }, head, card(null, claudeEmpty("No sessions yet", "Sessions appear once the bot has written cycles.")));
+  const winner = data.sessions.find((s) => s.winner);
+  const current = [...data.sessions].sort((a, b) => (ms(b.last_at) || 0) - (ms(a.last_at) || 0))[0];
+  const summary = (s) => el("span", null, signed(s.stats.realized_pnl_usdt), " realized · ", s.stats.closed + " closed · ",
+    s.stats.win_rate_pct === null ? "no win rate" : pct(s.stats.win_rate_pct, { sign: false, dp: 0 }) + " wins");
+  const kpis = el("div", { class: "grid kpis" },
+    kpi("Winner", winner ? winner.label : "None yet", winner ? summary(winner) : "no session has closed a trade", winner ? "pos" : null),
+    kpi("Current session", current.label, summary(current)),
+    kpi("Sessions", String(data.sessions.length), data.unattributed_trades ? data.unattributed_trades + " trades outside any session" : "every trade belongs to one"));
+  const rows = [];
+  for (const s of data.sessions) {
+    const key = "session:" + s.key, open = ui.expanded.has(key), st = s.stats;
+    rows.push(el("tr", { class: "click", title: open ? "" : "click for the configuration and trades",
+      onclick: () => { if (String(getSelection())) return; open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } },
+      el("td", { class: "r faint num" }, String(s.rank)),
+      el("td", null, el("b", null, s.label), s.winner ? [" ", chip("Winner", "pos")] : null, s === current ? [" ", chip("Now", "accent")] : null),
+      el("td", { class: "nw muted" }, stamp(s.first_at) + " → " + stamp(s.last_at)),
+      el("td", { class: "r" }, String(s.cycles)),
+      el("td", { class: "r" }, st.closed + (st.open ? " + " + st.open + " open" : "")),
+      el("td", { class: "r" }, st.win_rate_pct === null ? "—" : pct(st.win_rate_pct, { sign: false, dp: 0 })),
+      el("td", { class: "r" }, signed(st.realized_pnl_usdt)),
+      el("td", { class: "r" }, el("span", { class: tone(st.realized_pct) }, pct(st.realized_pct))),
+      el("td", { class: "r muted" }, st.avg_hold_minutes === null ? "—" : duration(st.avg_hold_minutes * 60)),
+      el("td", { class: "r muted" }, usd(s.llm_cost_usd))));
+    if (open) rows.push(el("tr", { class: "detail" }, el("td", { colspan: 10 }, sessionDetail(s))));
+  }
+  const ranking = card("Ranking", table([["#", "r"], ["Session"], ["Ran"], ["Cycles", "r"], ["Trades", "r"], ["Win rate", "r"], ["Realized P&L", "r"], ["Return", "r"], ["Avg hold", "r"], ["Bot cost", "r"]], rows),
+    { flush: true, hint: "click a session for its configuration and trades" });
+  return el("div", { class: "grid" }, head, data.error ? card(null, errorBox(data.error)) : null, kpis, ranking,
+    el("details", { class: "footnote" }, el("summary", null, "What a session is"),
+      el("p", null, "A session is one setup of the bot: the same prompt version, the same conversation (omp session) and, from 2026-10-17 on, the same recorded configuration (model, fallbacks, cycle interval, exit plans, routing). A trade belongs to the session whose cycle bought it. Realized P&L counts closed trades after exchange fees; open trades are shown apart. The winner is the session with the highest realized P&L.")));
 }
 
 // ---------- Fleet ----------

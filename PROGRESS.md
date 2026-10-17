@@ -5,6 +5,23 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-17 (night): Sessions tab (operator: "per session wins, not per
+  coin"). Trader: `TraderConfig::run_config` (non-secret setup: model,
+  thinking, fallbacks, timeouts, cycle interval, exit-plan settings,
+  routing, evidence, scope) on every cycle summary row (`run_config`; test:
+  no credentials in it). Dashboard: `/api/sessions` (`sessions.rs`) groups
+  cycles by prompt version + omp session + recorded config, attributes each
+  trade to the session of the cycle that bought it (older rows without a
+  cycle id: the next cycle summary), matches watch-log plans to trades, ranks
+  by realized P&L after fees and names the winner; Sessions tab with the
+  ranking, the winner and current session, and per session its facts
+  (models, thinking, market pick, exit plans run, best/worst, fees, bot
+  cost), the full configuration (or "not recorded" for sessions before
+  today) and its trades; History's "By coin" card replaced by "By session".
+  On the Pi data (mirror, 13:12 UTC): winner v7 · 01a13523 (+0.740 USDT
+  realized, 10 closed, 60% wins, avg hold 68 min; 56 sol + 36 Sonnet
+  cycles), then v9 -0.006, v8 -0.339 (8 closed, 25%), v4 -1.19 (10 closed,
+  10%). Checked in Chromium: no page errors. Clippy clean, tests pass.
 - 2026-10-17 (evening): Branch `old-gold-way` (operator decision): the v7
   way back. Round trips v7 (10-15 09:18 -> 10-16 16:00): 10 trips, mean
   hold 68 min, wins 4, summed net +7.5% (UNI +3.51% 134 min, NEAR +2.31%

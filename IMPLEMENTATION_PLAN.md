@@ -1083,6 +1083,13 @@ localhost-only.
   each order) instead of the trader's pre-trade quote, which counted the
   planned spend; fees of both orders subtracted, quote fallback for routes
   without USDT-quoted fills.
+- [x] Sessions tab (`/api/sessions`, operator request 2026-10-17: "per
+  session wins, not per coin"): a session is one setup (prompt version, omp
+  session, recorded `run_config`); trades join the session of the cycle that
+  bought them; ranking by realized P&L after fees with the winner, win rate,
+  hold, bot cost, models, exit plans run and the full configuration. The
+  trader writes its non-secret `run_config` on every cycle summary. History's
+  "By coin" card is replaced by "By session".
 
 ## Post-Implementation Handoff
 

@@ -108,7 +108,9 @@ Docker: `docker compose ps`, `docker compose logs -f <service>`, and
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
 profiles `gui`/`paper`/`live`/`all`) serves the same fleet view plus Claude
 Spot trades, cycles (brain, tools, cost per cycle), journal, exit plans
-(Exits tab), stop-file and failed-route-halt state at
+(Exits tab), results per session (Sessions tab: each setup ranked by realized
+P&L, the winner, and the session's configuration from the `run_config` the
+trader writes on every cycle summary), stop-file and failed-route-halt state at
 `http://localhost:8787` on the Docker host. It is published on `127.0.0.1`
 only and mounts the data dir read-only. From another machine:
 `ssh -L 8787:localhost:8787 <host>`. On a systemd host,

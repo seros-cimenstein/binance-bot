@@ -131,6 +131,9 @@ async fn claude_spot(args: ClaudeSpotArgs) -> Result<ExitCode> {
         alerter,
         Some(social),
     ));
+    let _ = runtime
+        .run_config
+        .set(config.run_config(args.daemon.then_some(args.interval_seconds)));
     if args.evidence_only {
         let snapshot = runtime.build_snapshot().await?;
         print_json(&snapshot.context.as_payload())?;

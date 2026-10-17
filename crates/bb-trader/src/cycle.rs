@@ -94,6 +94,8 @@ pub struct Runtime {
     shutting_down: AtomicBool,
     /// Final-order poll interval (1 s live).
     pub poll_interval: Duration,
+    /// Recorded on every cycle summary (`run_config`); set once by the CLI.
+    pub run_config: std::sync::OnceLock<Value>,
 }
 
 impl Runtime {
@@ -120,6 +122,7 @@ impl Runtime {
             cycle: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             poll_interval: Duration::from_secs(1),
+            run_config: std::sync::OnceLock::new(),
             config,
         }
     }
@@ -302,6 +305,7 @@ impl Runtime {
             fallback_active: report.fallback_active,
         });
         row.telegram_sent_routes = Some(state.telegram_sent_routes.clone());
+        row.run_config = self.run_config.get().cloned();
         let route_alerts = state.executions.len();
         row.telegram_sent = route_alerts > 0 && state.telegram_sent_routes.len() == route_alerts;
         // Durable first; the cycle's own alert (only when no route alerted) follows the write.
@@ -339,6 +343,7 @@ impl Runtime {
             attempts: Vec::new(),
             fallback_active: false,
         });
+        row.run_config = self.run_config.get().cloned();
         // Durable first: the halt / cost-cap record must survive a crash during the alert.
         self.audit.append(&row)?;
         row.telegram_sent = self.alerter.send(&row).await;

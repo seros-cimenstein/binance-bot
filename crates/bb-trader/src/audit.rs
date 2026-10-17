@@ -208,6 +208,10 @@ pub struct AuditRow {
     pub agent: Option<AgentRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator_review: Option<OperatorReview>,
+    /// Cycle summaries: the trader's non-secret run configuration
+    /// ([`TraderConfig::run_config`]), so each cycle says what setup produced it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_config: Option<Value>,
 }
 
 impl AuditRow {
@@ -240,6 +244,7 @@ impl AuditRow {
             session_id: String::new(),
             agent: None,
             operator_review: None,
+            run_config: None,
         }
     }
 }

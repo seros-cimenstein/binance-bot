@@ -61,6 +61,8 @@ pub struct Fee {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouteRecord {
     pub timestamp: String,
+    /// The cycle that placed it (`exit-plan` for plan sells; empty in older rows).
+    pub cycle_id: String,
     pub route_id: String,
     pub source_asset: String,
     pub destination_asset: String,
@@ -93,11 +95,27 @@ pub struct FailedRoute {
     pub error: String,
 }
 
+/// One cycle summary: who ran it and under which setup.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CycleRecord {
+    pub timestamp: String,
+    pub cycle_id: String,
+    pub prompt_version: String,
+    pub session_id: String,
+    pub model: String,
+    pub thinking: String,
+    pub market_pick_mode: String,
+    pub cost_usd: Option<Decimal>,
+    /// The trader's run configuration (cycles from 2026-10-17 on).
+    pub run_config: Option<Value>,
+}
+
 /// The audit log reduced to what the history needs.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParsedAudit {
     pub routes: Vec<RouteRecord>,
     pub failed: Vec<FailedRoute>,
+    pub cycles: Vec<CycleRecord>,
     pub error: Option<String>,
 }
 
@@ -125,6 +143,20 @@ pub fn parse_audit(path: &Path) -> ParsedAudit {
         let Ok(row) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        if text(&row, "/row_type") == "cycle_summary" {
+            parsed.cycles.push(CycleRecord {
+                timestamp: text(&row, "/timestamp"),
+                cycle_id: text(&row, "/cycle_id"),
+                prompt_version: text(&row, "/prompt_version"),
+                session_id: text(&row, "/session_id"),
+                model: text(&row, "/agent/model"),
+                thinking: text(&row, "/agent/thinking"),
+                market_pick_mode: text(&row, "/market_pick_mode"),
+                cost_usd: value_decimal(row.pointer("/agent/usage/cost_usd")),
+                run_config: row.get("run_config").filter(|v| v.is_object()).cloned(),
+            });
+            continue;
+        }
         if !row_attempted_submission(&row) {
             continue;
         }
@@ -158,6 +190,7 @@ fn route_record(row: &Value) -> RouteRecord {
         .map_or(0, Vec::len);
     let mut record = RouteRecord {
         timestamp: text(row, "/timestamp"),
+        cycle_id: text(row, "/cycle_id"),
         route_id: row_route_id(row),
         reason: text(row, "/decision/reason"),
         legs,
@@ -345,6 +378,8 @@ pub enum TradeStatus {
 pub struct Trade {
     pub opened_at: String,
     pub closed_at: Option<String>,
+    /// The cycle that opened it.
+    pub cycle_id: String,
     pub route_id: String,
     pub source_asset: String,
     pub destination_asset: String,
@@ -442,6 +477,7 @@ pub fn build_trades(
             Trade {
                 opened_at: route.timestamp.clone(),
                 closed_at,
+                cycle_id: route.cycle_id.clone(),
                 route_id: route.route_id.clone(),
                 source_asset: route.source_asset.clone(),
                 destination_asset: route.destination_asset.clone(),
@@ -494,6 +530,7 @@ mod tests {
     fn route(at: &str, from: &str, to: &str, spent: Decimal, got: Decimal, input: Decimal, output: Decimal) -> RouteRecord {
         RouteRecord {
             timestamp: at.into(),
+            cycle_id: String::new(),
             route_id: format!("{from}>{to}"),
             source_asset: from.into(),
             destination_asset: to.into(),
