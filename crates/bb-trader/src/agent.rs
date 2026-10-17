@@ -181,31 +181,49 @@ pub fn cycle_prompt(
         memory.status, memory.recent_trade_count, memory.recent_loss_streak
     );
     if let Some(holding) = &memory.current_holding {
-        let _ = writeln!(
-            out,
-            "- current holding: {} {} entry {} USDT now {} USDT pnl {} bps",
-            holding.status,
-            holding.asset.as_deref().unwrap_or("?"),
-            holding
-                .entry_value_usdt
-                .map_or("?".into(), |v| fmt_decimal(v, 2)),
-            holding
-                .current_value_usdt
-                .map_or("?".into(), |v| fmt_decimal(v, 2)),
-            holding
-                .unrealized_pnl_bps
-                .map_or("?".into(), |v| format!("{v:.1}")),
-        );
+        if holding.status == "cash" {
+            let _ = writeln!(
+                out,
+                "- current holding: cash {} ({} USDT)",
+                holding.asset.as_deref().unwrap_or("?"),
+                holding
+                    .current_value_usdt
+                    .map_or("?".into(), |v| fmt_decimal(v, 2)),
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "- current holding: {} {} entry {} USDT now {} USDT pnl {} bps",
+                holding.status,
+                holding.asset.as_deref().unwrap_or("?"),
+                holding
+                    .entry_value_usdt
+                    .map_or("?".into(), |v| fmt_decimal(v, 2)),
+                holding
+                    .current_value_usdt
+                    .map_or("?".into(), |v| fmt_decimal(v, 2)),
+                holding
+                    .unrealized_pnl_bps
+                    .map_or("?".into(), |v| format!("{v:.1}")),
+            );
+        }
     }
     for outcome in memory.recent_outcomes.iter().rev().take(5) {
+        let result = if outcome.status == "cash" {
+            "to cash".to_owned()
+        } else {
+            format!(
+                "{} pnl {} bps",
+                outcome.status,
+                outcome.pnl_bps.map_or("?".into(), |v| format!("{v:.1}"))
+            )
+        };
         let _ = writeln!(
             out,
-            "- {} {}->{} {} pnl {} bps{}",
+            "- {} {}->{} {result}{}",
             outcome.timestamp,
             outcome.source_asset,
             outcome.destination_asset,
-            outcome.status,
-            outcome.pnl_bps.map_or("?".into(), |v| format!("{v:.1}")),
             outcome
                 .exit_plan
                 .as_ref()
@@ -795,6 +813,14 @@ impl TraderAgent {
             }
         };
         self.observe_state(&state);
+        // A session reopened on a model outside the chain moves to the primary before any
+        // compaction, so the summary is written by a model the trader runs on.
+        if !self.on_primary()
+            && self.model_index(&self.effective).is_none()
+            && let Err(error) = self.switch_to(0, "the session was on a model outside the chain").await
+        {
+            tracing::warn!(%error, "switching to the primary failed; compacting on the session model");
+        }
         let usage = state.context_usage.as_ref();
         let tokens = usage.and_then(|usage| usage.tokens);
         let percent = usage.and_then(|usage| usage.percent);
@@ -1476,17 +1502,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resumed_session_on_a_model_outside_the_chain_moves_to_the_primary_at_once() {
-        // A restored session comes back on an old model that is not in the chain: the turn
-        // must run on the primary, without waiting out a fallback cooldown.
+    async fn resumed_session_on_a_model_outside_the_chain_moves_to_the_primary_before_compacting() {
+        // A restored session comes back on an old model that is not in the chain and over
+        // the compaction threshold: the primary is selected first, so the primary writes the
+        // summary and runs the turn, without waiting out a fallback cooldown.
         const OLD: &str = "anthropic/claude-sonnet-5-5";
         let config = fallback_config("1800");
         let (mut agent, script) = attach(&config, true).await;
         let (mut server, _) = script.await.unwrap();
         let script = tokio::spawn(async move {
-            server.state(OLD, 10_000, 200_000).await;
-            server.state(OLD, 10_000, 200_000).await;
+            server.state(OLD, 190_000, 200_000).await;
             server.switch(PRIMARY, "high", 100_000).await;
+            server.compact(None).await;
             let pid = server.prompt().await;
             server.finish_ok(&pid, PRIMARY).await;
             server.quiet().await;

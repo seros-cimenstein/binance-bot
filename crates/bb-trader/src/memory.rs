@@ -135,7 +135,7 @@ pub struct TradeOutcome {
     #[serde(with = "rust_decimal::serde::arbitrary_precision_option")]
     pub current_value_usdt: Option<Decimal>,
     pub pnl_bps: Option<f64>,
-    /// `closed`, `open` or `unknown`.
+    /// `closed`, `open`, `cash` (a sale into cash or fiat: parking, no P&L) or `unknown`.
     pub status: &'static str,
     pub route_friction_bps: Option<f64>,
     /// Set on sells an exit plan made between cycles: the spec, the rule that fired,
@@ -147,7 +147,7 @@ pub struct TradeOutcome {
 /// The asset bought by the last submitted route.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CurrentHolding {
-    /// `open`, `not_current` or `unknown`.
+    /// `open`, `cash` (parked in cash or fiat), `not_current` or `unknown`.
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
@@ -284,7 +284,12 @@ fn outcomes(
                         .to_owned()
                 }),
             };
-            if let (Some(entry), Some(exit)) = (entry, exit) {
+            if crate::evidence::is_low_upside(&destination) {
+                // Into cash or fiat: parking, not a bet. Its "exit" would be the next route's
+                // whole balance, which is no return of this route.
+                outcome.status = "cash";
+                outcome.exit_value_usdt = None;
+            } else if let (Some(entry), Some(exit)) = (entry, exit) {
                 outcome.status = "closed";
                 outcome.pnl_bps = pnl_bps(entry, exit);
             } else if let Some(entry) = entry
@@ -332,8 +337,19 @@ fn current_holding(
             ..blank
         };
     };
-    let entry = selected_decimal(last, "estimated_output_usdt");
     let current = value_usdt(&destination, amount);
+    if crate::evidence::is_low_upside(&destination) {
+        // Parked in cash: the balance is not a position with a return.
+        return CurrentHolding {
+            status: "cash",
+            reason: None,
+            amount: Some(amount),
+            current_value_usdt: current,
+            asset: Some(destination),
+            ..blank
+        };
+    }
+    let entry = selected_decimal(last, "estimated_output_usdt");
     CurrentHolding {
         status: "open",
         reason: None,
@@ -354,11 +370,13 @@ fn current_holding(
     }
 }
 
-/// Consecutive trailing outcomes with negative PnL (stops at unknown or non-negative).
+/// Consecutive trailing losing outcomes, skipping parking in cash (stops at unknown or
+/// non-negative).
 pub fn loss_streak(outcomes: &[TradeOutcome]) -> usize {
     outcomes
         .iter()
         .rev()
+        .filter(|outcome| outcome.status != "cash")
         .take_while(|outcome| outcome.pnl_bps.is_some_and(|pnl| pnl < 0.0))
         .count()
 }
@@ -435,8 +453,9 @@ pub(crate) mod tests {
         assert_eq!(outcomes.len(), 3);
         assert_eq!(outcomes[0].status, "closed");
         assert!((outcomes[0].pnl_bps.unwrap() - -500.0).abs() < 1e-9);
-        assert_eq!(outcomes[1].status, "closed");
-        assert!(outcomes[1].pnl_bps.unwrap() > 0.0);
+        // Selling into USDT is parking: no P&L from the next route's whole balance.
+        assert_eq!(outcomes[1].status, "cash");
+        assert_eq!(outcomes[1].pnl_bps, None);
         assert_eq!(outcomes[2].status, "unknown");
         // The plan's sell says which rule sold; the bot's own routes carry nothing.
         assert_eq!(
@@ -451,17 +470,36 @@ pub(crate) mod tests {
             "BTC not held any more"
         );
 
+        // Parking in cash between two losers does not break the streak.
         let losing = vec![
             TradeOutcome {
                 pnl_bps: Some(-1.0),
                 ..outcomes[0].clone()
             },
+            outcomes[1].clone(),
             TradeOutcome {
                 pnl_bps: Some(-2.0),
                 ..outcomes[0].clone()
             },
         ];
         assert_eq!(loss_streak(&losing), 2);
+
+        // The wallet parked in USDT is cash, not an open position with a return.
+        let parked = AuditRows {
+            rows: vec![
+                submitted_row("USDT", "ETH", 100.0, 100.0),
+                submitted_row("ETH", "USDT", 7.0, 7.1),
+            ],
+            error: None,
+        };
+        let free = BTreeMap::from([("USDT".to_owned(), dec!(15.25))]);
+        let holding = TradeMemory::from_rows(&parked, &free, value, 8)
+            .current_holding
+            .unwrap();
+        assert_eq!(
+            (holding.status, holding.current_value_usdt, holding.unrealized_pnl_bps),
+            ("cash", Some(dec!(15.25)), None)
+        );
     }
 
     #[test]

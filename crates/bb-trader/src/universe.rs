@@ -427,13 +427,17 @@ pub fn fmt_g6(value: Option<f64>) -> String {
     }
 }
 
-/// `(source - output) / source` in bps.
+/// `(spent - output) / spent` in bps, where `spent` is the source value minus `kept_usdt`:
+/// input a route leaves unspent (lot-size rounding, sizing reserve) stays in the wallet and
+/// is no cost of the trade.
 pub fn immediate_friction_bps(
     source_value_usdt: Option<Decimal>,
+    kept_usdt: Decimal,
     estimated_output_usdt: Option<Decimal>,
 ) -> Option<f64> {
-    let (source, output) = (source_value_usdt?, estimated_output_usdt?);
-    (source > Decimal::ZERO).then(|| to_f64((source - output) / source * BPS_PER_UNIT))
+    let spent = source_value_usdt? - kept_usdt;
+    let output = estimated_output_usdt?;
+    (spent > Decimal::ZERO).then(|| to_f64((spent - output) / spent * BPS_PER_UNIT))
 }
 
 /// Quote `amount` of `source` into `destination` and decorate it as a candidate.
@@ -457,7 +461,13 @@ pub async fn quote_candidate(
     }
     let estimated_output_usdt = view.usdt_value(destination, route.output_amount);
     let source_value_usdt = view.usdt_value(source, amount);
-    let friction = immediate_friction_bps(source_value_usdt, estimated_output_usdt);
+    let kept_usdt: Decimal = route
+        .legs
+        .iter()
+        .filter(|leg| leg.input_amount > leg.spent_amount)
+        .filter_map(|leg| view.usdt_value(&leg.source_asset, leg.input_amount - leg.spent_amount))
+        .sum();
+    let friction = immediate_friction_bps(source_value_usdt, kept_usdt, estimated_output_usdt);
     let market = focus_market(&route, &view.markets);
     let (score, reason) = pick_score(&route, market, source_value_usdt, friction, config);
     Ok(Some(RouteCandidate {
@@ -687,6 +697,15 @@ pub(crate) mod tests {
                 .windows(2)
                 .all(|pair| pair[0].market_pick_score >= pair[1].market_pick_score)
         );
+    }
+
+    #[test]
+    fn friction_counts_only_the_spent_part() {
+        // 15 USDT quoted, 1.5 USDT left unspent by lot rounding, 13.4 USDT of coin out:
+        // the cost is 0.1 on the 13.5 spent (74 bps), not 1.6 on 15 (1067 bps).
+        let friction = immediate_friction_bps(Some(dec!(15)), dec!(1.5), Some(dec!(13.4))).unwrap();
+        assert!((friction - 74.074).abs() < 0.01, "{friction}");
+        assert_eq!(immediate_friction_bps(Some(dec!(1)), dec!(1), Some(dec!(0))), None);
     }
 
     #[test]

@@ -153,7 +153,23 @@ async fn claude_spot(args: ClaudeSpotArgs) -> Result<ExitCode> {
         );
         crate::exit_guard::ExitGuard::new(Arc::clone(&runtime))
     });
-    loop {
+    let interval = Duration::from_secs(args.interval_seconds);
+    // A restart keeps the cadence: the first cycle waits until one interval after the last
+    // one (exit plans keep running meanwhile), so restarts do not add cycles.
+    if args.daemon
+        && let Some(wait) = cadence_wait(
+            &crate::journal::AgentState::load(&config.state_path),
+            interval,
+            bb_core::time::now(),
+        )
+    {
+        tracing::info!(
+            wait_seconds = wait.as_secs(),
+            "keeping the cycle cadence: first cycle one interval after the last one"
+        );
+        pause(tokio::time::Instant::now() + wait, exit_guard.as_mut(), &shutdown).await;
+    }
+    while !shutdown.is_cancelled() {
         match trader.run_cycle(&shutdown).await {
             Ok(outcome) => {
                 print_json(&serde_json::to_value(&outcome.summary)?)?;
@@ -172,22 +188,41 @@ async fn claude_spot(args: ClaudeSpotArgs) -> Result<ExitCode> {
         if !args.daemon || shutdown.is_cancelled() {
             break;
         }
-        let next_cycle = tokio::time::Instant::now() + Duration::from_secs(args.interval_seconds);
-        match exit_guard.as_mut() {
-            // Live exit plans: follow bids and sell when a plan fires until the next cycle.
-            Some(guard) => guard.run_until(next_cycle, &shutdown).await,
-            None => tokio::select! {
-                () = tokio::time::sleep_until(next_cycle) => {}
-                () = shutdown.cancelled() => {}
-            },
-        }
-        if shutdown.is_cancelled() {
-            break;
-        }
+        let next_cycle = tokio::time::Instant::now() + interval;
+        pause(next_cycle, exit_guard.as_mut(), &shutdown).await;
     }
     runtime.begin_shutdown();
     trader.close().await;
     Ok(exit)
+}
+
+/// Until `until` or shutdown: follow exit plans when they run live, else sleep.
+async fn pause(
+    until: tokio::time::Instant,
+    guard: Option<&mut crate::exit_guard::ExitGuard>,
+    shutdown: &CancellationToken,
+) {
+    match guard {
+        // Live exit plans: follow bids and sell when a plan fires until the next cycle.
+        Some(guard) => guard.run_until(until, shutdown).await,
+        None => tokio::select! {
+            () = tokio::time::sleep_until(until) => {}
+            () = shutdown.cancelled() => {}
+        },
+    }
+}
+
+/// How long a restarted daemon waits before its first cycle: the rest of the interval since
+/// the last finished cycle, if any is left.
+fn cadence_wait(
+    state: &crate::journal::AgentState,
+    interval: Duration,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    let finished = state.last_cycle.as_ref()?.finished_at.as_str();
+    let finished = chrono::DateTime::parse_from_rfc3339(finished).ok()?;
+    let elapsed = (now - finished.with_timezone(&chrono::Utc)).to_std().ok()?;
+    interval.checked_sub(elapsed).filter(|wait| !wait.is_zero())
 }
 
 /// SIGTERM / SIGINT: refuse new routes at once and cancel `token` (aborts the agent turn);
@@ -220,4 +255,38 @@ fn spawn_signal_listener(token: CancellationToken, runtime: Arc<Runtime>) {
         runtime.begin_shutdown();
         token.cancel();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::journal::{AgentState, LastCycle};
+
+    #[test]
+    fn restart_waits_out_the_rest_of_the_interval_since_the_last_cycle() {
+        let interval = Duration::from_secs(1200);
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-17T13:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let state = |finished_at: &str| AgentState {
+            last_cycle: Some(LastCycle {
+                cycle_id: "c".into(),
+                finished_at: finished_at.into(),
+                status: "held".into(),
+                turn_status: "completed".into(),
+                end_cycle: None,
+                executions: Vec::new(),
+                error: String::new(),
+            }),
+            ..AgentState::default()
+        };
+        assert_eq!(
+            cadence_wait(&state("2026-10-17T12:55:00+00:00"), interval, now),
+            Some(Duration::from_secs(900))
+        );
+        // A whole interval ago, no record or an unreadable time: cycle at once.
+        assert_eq!(cadence_wait(&state("2026-10-17T12:30:00+00:00"), interval, now), None);
+        assert_eq!(cadence_wait(&AgentState::default(), interval, now), None);
+        assert_eq!(cadence_wait(&state("yesterday"), interval, now), None);
+    }
 }
