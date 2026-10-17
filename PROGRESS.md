@@ -36,15 +36,15 @@ the durable roadmap and use this file for the current working state.
   in `archive/*-20261017T125453Z-v11-sonnet-blip`). Verified: 12:56 cycle
   v11 on `openai-codex/gpt-6.1-sol` (held: all 12 scanned coins down over
   5m), session = v7 conversation through cycle 542 followed directly by
-  sol's new turn, log `default_plan=Some("atr=3:1h,deadline=120")` after
-  the default change below. `main` still has the locked-rules version;
-  merge the branch once it proves out. Default plan then switched to
-  `atr=3:1h,deadline=120` (operator: "bring back deadline as the way we
-  operated"; the v7 wins were deadline holds, and in the 19-trip replay
-  `deadline=120` and `atr=3:1h,deadline=120` made +0.23 USDT against
-  -0.21 for `stretch=2:1,atr=3:1h`): Pi `.env.docker` backup
-  `*-predeadline`, `claude-spot` recreated at 12:57 UTC with no open
-  position. The bot can still set its own plan per position.
+  sol's new turn. `main` still has the locked-rules version; merge the
+  branch once it proves out. Default plan then switched to
+  `atr=3:1h,deadline=120` (12:57 UTC) and, on the operator's word, to
+  plain `deadline=120` (13:00 UTC; Pi `.env.docker` backups `*-predeadline`
+  and `*-predeadline120`): a position without its own plan is sold 2 hours
+  after entry. The v7 wins were deadline holds; in the 19-trip replay
+  `deadline=120` made +0.23 USDT against -0.21 for `stretch=2:1,atr=3:1h`.
+  Log `default_plan=Some("deadline=120")`; no position was open. The bot
+  still sets its own plan per position with the full menu.
 - 2026-10-17 (later): Stretch fee floor and exit feedback for the bot
   (operator decision, after the ZEC stretch sale: +6 bps gross, about
   -0.006 USDT net; the bot wrote it could not tell which rule sold).
