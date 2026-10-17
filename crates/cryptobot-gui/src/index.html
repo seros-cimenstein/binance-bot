@@ -413,7 +413,16 @@ function coinColor(asset) {
 }
 function coin(asset) { return el("span", { class: "coin", style: "background:" + coinColor(asset) }, String(asset || "?").slice(0, 3)); }
 function assetLabel(asset, extra) { return el("span", { class: "asset" }, coin(asset), asset || "?", extra || null); }
-function routeLabel(t) { return el("span", { class: "route" }, el("span", { class: "muted" }, t.source_asset || "?"), el("span", { class: "arrow" }, "→"), assetLabel(t.destination_asset)); }
+// A trade reads as its sale: the coin and what it was sold into; a coin still held has no sale yet.
+function tradeLabel(t) {
+  return el("span", { class: "route" }, assetLabel(t.destination_asset || t.asset), el("span", { class: "arrow" }, "→"),
+    t.closed_into ? el("span", { class: "muted" }, t.closed_into) : el("span", { class: "muted small" }, t.status === "open" ? "still held" : "not sold"));
+}
+function tradeTime(t) { return t.closed_at || t.opened_at; }
+// Trades in coins, newest sale first. Sales into cash are the closing half of those trades.
+function coinTrades(trades) {
+  return trades.filter((t) => t.status !== "cash").sort((a, b) => (ms(tradeTime(b)) ?? 0) - (ms(tradeTime(a)) ?? 0));
+}
 function table(head, rows, opts = {}) {
   return el("div", { class: "table-wrap" }, el("table", null,
     el("thead", null, el("tr", null, head.map(([label, cls]) => el("th", { class: cls || null }, label)))),
@@ -876,7 +885,7 @@ function overviewPage() {
         longText("journal:" + status.journal[0].timestamp, status.journal[0].text)) : null)
     : claudeEmpty("No cycles yet", "The bot's reasoning shows up here after its first cycle."), { action: el("a", { href: "#bot", class: "small", style: "color:var(--accent);text-decoration:none" }, "All cycles →") });
 
-  const recent = [...trades].reverse().slice(0, 5);
+  const recent = coinTrades(trades).slice(0, 5);
   const recentCard = card("Recent trades", recent.length ? tradeTable(recent, { compact: true })
     : claudeEmpty("No trades yet", "Trades appear here as soon as the bot executes one."), { flush: recent.length > 0,
     action: el("a", { href: "#history", class: "small", style: "color:var(--accent);text-decoration:none" }, "Full history →") });
@@ -984,10 +993,10 @@ function historyPage() {
   const equity = card("Cumulative P&L", timeline ? tradeChart(timeline, { height: 260 })
     : empty("No trades in this range", "Only USDT parking here; pick a longer range."), { hint: "hover anywhere for what happened" });
 
-  const bars = [...trades].filter((t) => num(t.pnl_usdt) !== null)
-    .sort((a, b) => (ms(a.opened_at) ?? 0) - (ms(b.opened_at) ?? 0))
-    .map((t) => ({ y: num(t.pnl_usdt), label: shortDate(t.opened_at), tone: t.status === "win" ? "pos" : t.status === "loss" ? "neg" : t.status === "open" ? "accent" : "muted",
-      tip: [t.source_asset + " → " + t.destination_asset, usd(t.pnl_usdt, { sign: true }) + " (" + pct(t.pnl_pct) + ")" + (t.status === "open" ? " · open" : t.status === "cash" ? " · to cash" : ""), stamp(t.opened_at) + " · held " + duration(t.hold_seconds)] }));
+  const bars = trades.filter((t) => num(t.pnl_usdt) !== null && t.status !== "cash")
+    .sort((a, b) => (ms(tradeTime(a)) ?? 0) - (ms(tradeTime(b)) ?? 0))
+    .map((t) => ({ y: num(t.pnl_usdt), label: shortDate(tradeTime(t)), tone: t.status === "win" ? "pos" : t.status === "loss" ? "neg" : t.status === "open" ? "accent" : "muted",
+      tip: [t.destination_asset + " → " + (t.closed_into || "still held"), usd(t.pnl_usdt, { sign: true }) + " (" + pct(t.pnl_pct) + ")" + (t.status === "open" ? " · open" : ""), (t.closed_at ? "sold " + stamp(t.closed_at) : "bought " + stamp(t.opened_at)) + " · held " + duration(t.hold_seconds)] }));
   const perTrade = card("Result per trade", bars.length ? barChart(bars, { height: 200 }) : empty("No results yet", ""), { hint: "green win · red loss · blue open" });
 
   const days = new Map();
@@ -1014,10 +1023,10 @@ function historyPage() {
     el("div", { class: "grid split" }, equity, mix),
     el("div", { class: "grid halves" }, perTrade, daily),
     sessionCard(),
-    card("Trades", tradeTable([...trades].reverse(), { expandable: true }), { flush: true, hint: "click a row for the bot's reasoning" }),
+    card("Trades", tradeTable(coinTrades(trades), { expandable: true }), { flush: true, hint: "each trade shown as its sale · click a row for the bot's reasoning" }),
     failedRoutesCard(history),
     el("details", { class: "footnote" }, el("summary", null, "How results are calculated"),
-      el("p", null, "Each route the bot submits opens a trade in the coin it bought. The trade closes when that coin is sold, by the bot or by its exit plan. Cost is what the exchange filled the buy for; the result is what the coins fetched when sold (or are worth right now, if still held) minus that cost and the exchange fees of both orders. So spread and slippage are in the fill prices and the trade results add up to the whole run. Fees paid in BNB are valued at today's BNB price. Parking in stablecoins costs nothing and counts toward neither wins nor losses. Routes without fill data (or quoted in another coin than USDT) use the bot's quote at execution time instead, with fees inside the quote.")));
+      el("p", null, "Each route the bot submits opens a trade in the coin it bought. The trade closes when that coin is sold, by the bot or by its exit plan, and is listed as that sale (coin → what it was sold into), newest sale first; a coin still held shows as open. Cost is what the exchange filled the buy for; the result is what the coins fetched when sold (or are worth right now, if still held) minus that cost and the exchange fees of both orders. So spread and slippage are in the fill prices and the trade results add up to the whole run. Fees paid in BNB are valued at today's BNB price. The sale into USDT itself is not listed again: parking in stablecoins costs nothing and counts toward neither wins nor losses. Routes without fill data (or quoted in another coin than USDT) use the bot's quote at execution time instead, with fees inside the quote.")));
 }
 // Top sessions by realized P&L (the Sessions tab has the full ranking and configurations).
 function sessionCard() {
@@ -1036,19 +1045,19 @@ function tradeKey(t) { return t.opened_at + "|" + t.route_id; }
 function tradeTable(trades, opts = {}) {
   const head = opts.compact
     ? [["Trade"], ["Result"], ["P&L", "r"], ["When", "r"]]
-    : [["Opened"], ["Trade"], ["Result"], ["Invested", "r"], ["P&L", "r"], ["Return", "r"], ["Fees", "r"], ["Held", "r"]];
+    : [["Sold"], ["Trade"], ["Result"], ["Invested", "r"], ["P&L", "r"], ["Return", "r"], ["Fees", "r"], ["Held", "r"]];
   const rows = [];
   for (const t of trades) {
     const key = tradeKey(t);
     if (opts.compact) {
-      rows.push(el("tr", null, el("td", null, routeLabel(t)), el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
-        el("td", { class: "r" }, signed(t.pnl_usdt)), el("td", { class: "r muted", title: stamp(t.opened_at) }, ago(t.opened_at))));
+      rows.push(el("tr", null, el("td", null, tradeLabel(t)), el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
+        el("td", { class: "r" }, signed(t.pnl_usdt)), el("td", { class: "r muted", title: stamp(tradeTime(t)) }, ago(tradeTime(t)))));
       continue;
     }
     const open = ui.expanded.has(key);
     rows.push(el("tr", { class: opts.expandable ? "click" : null, onclick: opts.expandable ? () => { open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } : null },
-      el("td", { class: "nw muted" }, stamp(t.opened_at)),
-      el("td", null, routeLabel(t)),
+      el("td", { class: "nw muted" }, t.closed_at ? stamp(t.closed_at) : t.status === "open" ? "open" : "—"),
+      el("td", null, tradeLabel(t)),
       el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
       el("td", { class: "r" }, usd(t.cost_usdt)),
       el("td", { class: "r" }, signed(t.pnl_usdt)),
@@ -1059,7 +1068,9 @@ function tradeTable(trades, opts = {}) {
       rows.push(el("tr", { class: "detail" }, el("td", { colspan: 8 }, el("div", { class: "grid", style: "gap:6px;padding:6px 0" },
         el("div", { class: "feed-text" }, t.reason || "No reasoning recorded for this route."),
         el("div", { class: "feed-meta" },
-          el("span", null, "Closed " + (t.closed_at ? stamp(t.closed_at) + (t.closed_by_plan ? " by its exit plan" : "") : t.status === "open" ? "— still held" : "—")),
+          el("span", null, "Bought " + stamp(t.opened_at) + (t.source_asset && t.source_asset !== "USDT" ? " with " + t.source_asset : "")),
+          el("span", { class: "sep" }, "·"),
+          el("span", null, "Sold " + (t.closed_at ? stamp(t.closed_at) + (t.closed_by_plan ? " by its exit plan" : "") : t.status === "open" ? "— still held" : "—")),
           el("span", { class: "sep" }, "·"), el("span", null, "Exit value " + usd(t.exit_usdt)),
           t.valuation === "quotes" ? [el("span", { class: "sep" }, "·"), el("span", { class: "warn" }, "valued from the quote, no fill data")] : null,
           el("span", { class: "sep" }, "·"), el("span", null, t.legs + " order" + (t.legs === 1 ? "" : "s")),
@@ -1367,7 +1378,7 @@ function exitsPage() {
     el("td", null, assetLabel(w.asset)), el("td", { class: "code" }, w.spec), el("td", { class: "r" }, px(w.entry_price)), el("td", { class: "r muted", title: stamp(w.set_at) }, ago(w.set_at))))),
     { flush: true, hint: "The bot set these; the watcher hasn't picked them up" }) : null;
 
-  const sells = planSells.length ? card("Trades closed by a plan", tradeTable([...planSells].reverse(), { expandable: true }), { flush: true }) : null;
+  const sells = planSells.length ? card("Trades closed by a plan", tradeTable(coinTrades(planSells), { expandable: true }), { flush: true }) : null;
 
   const events = card("Watch log", ex.events_error ? errorBox(ex.events_error) : ex.events.length ? el("div", { class: "feed" }, ex.events.map((e) => {
     const [label, t] = EXIT_EVENTS[e.event] || [pretty(e.event), ""];
@@ -1418,9 +1429,9 @@ function sessionDetail(s) {
     ? table([["Setting"], ["Value"]], flatConfig(s.run_config).map(([k, v]) => el("tr", null, el("td", { class: "code small" }, k), el("td", { class: "code small" }, v))))
     : el("div", { class: "small muted" }, "Full configuration not recorded: this session ran before the trader started writing its setup on every cycle (2026-10-17). The facts above come from the audit log.");
   const trades = s.trades.length
-    ? table([["Opened"], ["Coin"], ["Result"], ["P&L", "r"], ["Return", "r"], ["Held", "r"], ["Exit plan"]], s.trades.map((t) => el("tr", null,
-      el("td", { class: "nw muted" }, stamp(t.opened_at)),
-      el("td", null, assetLabel(t.asset)),
+    ? table([["Sold"], ["Trade"], ["Result"], ["P&L", "r"], ["Return", "r"], ["Held", "r"], ["Exit plan"]], coinTrades(s.trades).map((t) => el("tr", null,
+      el("td", { class: "nw muted", title: "bought " + stamp(t.opened_at) }, t.closed_at ? stamp(t.closed_at) : t.status === "open" ? "open" : "—"),
+      el("td", null, tradeLabel(t)),
       el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
       el("td", { class: "r" }, signed(t.pnl_usdt)),
       el("td", { class: "r" }, el("span", { class: tone(t.pnl_pct) }, pct(t.pnl_pct))),

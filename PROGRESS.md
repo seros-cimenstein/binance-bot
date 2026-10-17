@@ -5,6 +5,17 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-17 (night, 3): Dashboard lists each trade as its sale (operator:
+  "USDT -> coin with a loss is stupid; show coin -> USDT"). Dashboard only;
+  the trader is unchanged. `Trade.closed_into` (the closing route's
+  destination); History "Trades", Overview "Recent trades", Exits "Trades
+  closed by a plan" and the Sessions trade lists show `COIN -> USDT` (or
+  "still held"), sorted by sale time, first column "Sold"; the sale into
+  USDT is no longer listed as its own "To cash" row; the detail row says
+  when it was bought and sold; "Result per trade" bars follow the sale
+  time. Checked in Chromium on the Pi mirror (TAO open at the top, ZEC ->
+  USDT loss with Plan exit, no page errors); GUI tests pass. Restart the
+  running dashboard to serve it.
 - 2026-10-17 (night, later): Why v11 held 19 cycles in a row (operator
   forwarded an analysis). Checked against the code and data; fixed what was
   wrong, left the v7 prompt alone (commit `50c3972`):

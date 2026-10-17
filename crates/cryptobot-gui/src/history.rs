@@ -378,6 +378,8 @@ pub enum TradeStatus {
 pub struct Trade {
     pub opened_at: String,
     pub closed_at: Option<String>,
+    /// What the coin was sold into (the closing route's destination, usually USDT).
+    pub closed_into: Option<String>,
     /// The cycle that opened it.
     pub cycle_id: String,
     pub route_id: String,
@@ -477,6 +479,7 @@ pub fn build_trades(
             Trade {
                 opened_at: route.timestamp.clone(),
                 closed_at,
+                closed_into: closing.map(|later| later.destination_asset.clone()),
                 cycle_id: route.cycle_id.clone(),
                 route_id: route.route_id.clone(),
                 source_asset: route.source_asset.clone(),

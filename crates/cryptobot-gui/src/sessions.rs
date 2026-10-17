@@ -292,6 +292,7 @@ pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade], watch_log: &Path) ->
                 "trades": s.trades.iter().rev().map(|(t, plan)| json!({
                     "opened_at": t.opened_at,
                     "closed_at": t.closed_at,
+                    "closed_into": t.closed_into,
                     "asset": t.destination_asset,
                     "status": t.status,
                     "cost_usdt": t.cost_usdt,
@@ -337,6 +338,7 @@ mod tests {
         Trade {
             opened_at: at.into(),
             closed_at: None,
+            closed_into: None,
             cycle_id: cycle_id.into(),
             route_id: format!("USDT->{asset}"),
             source_asset: "USDT".into(),
