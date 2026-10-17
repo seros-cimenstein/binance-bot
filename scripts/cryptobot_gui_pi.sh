@@ -83,7 +83,7 @@ declare -A paths=(
 for name in "${!paths[@]}"; do
     export "$name=$MIRROR_DIR/${paths[$name]}"
 done
-settings_pattern='^CLAUDE_SPOT_(EXIT_PLANS_LIVE|EXIT_PLAN_RULES|EXIT_POLL_SECONDS|AUDIT_PATH|JOURNAL_PATH|STATE_PATH|STOP_PATH|EXIT_PLANS_PATH|EXIT_WATCH_STATE_PATH|EXIT_WATCH_LOG_PATH)='
+settings_pattern='^CLAUDE_SPOT_(EXIT_PLANS_LIVE|DEFAULT_EXIT_PLAN|DEFAULT_EXIT_PLAN_FROM|EXIT_POLL_SECONDS|AUDIT_PATH|JOURNAL_PATH|STATE_PATH|STOP_PATH|EXIT_PLANS_PATH|EXIT_WATCH_STATE_PATH|EXIT_WATCH_LOG_PATH)='
 if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "grep -E '$settings_pattern' $PI_ENV_FILE" 2>/dev/null)"; then
     while IFS='=' read -r name value; do
         [[ "$name" =~ ^CLAUDE_SPOT_[A-Z_]+$ ]] || continue

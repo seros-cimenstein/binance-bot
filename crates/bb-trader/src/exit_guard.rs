@@ -1,7 +1,7 @@
 //! Live exit plans (Phase 45 step 3, operator approval 2026-10-15). Between Claude's
-//! cycles the trader daemon follows the bid of every position with an exit plan (set
-//! by Claude with `set_exit_plan`) and, when the plan fires, sells through
-//! [`Runtime::exit_sell`] with the same hard safety as `execute_route`. The guard
+//! cycles the trader daemon follows the bid of every position with an exit plan
+//! (Claude's from `set_exit_plan`, else the default plan) and, when the plan fires, sells
+//! through [`Runtime::exit_sell`] with the same hard safety as `execute_route`. The guard
 //! writes the watch state and log itself; the paper watcher must not run alongside it.
 
 use std::collections::BTreeSet;
@@ -60,7 +60,7 @@ impl ExitGuard {
             watcher: Watcher::new(
                 WatchState::load(&paths.state),
                 COMPARISON_SLIPPAGE_BPS,
-                config.exit.rules,
+                config.exit.default_plan,
             ),
             prices: BinancePrices::new(runtime.client.clone()),
             audit: AuditCache::new(config.audit_path.clone()),

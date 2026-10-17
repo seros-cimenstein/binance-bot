@@ -15,7 +15,6 @@ use crate::config::TraderConfig;
 use crate::context::decimal_json;
 use crate::cycle::{Runtime, route_summary};
 use crate::exit_book::{PlanBook, PlanEntry, SetExitPlanArgs};
-use crate::exit_plan::{RULE_KEYS, RuleSet};
 use crate::exit_replay::{read_audit, round_trips};
 use crate::journal::MAX_ENTRY_CHARS;
 use crate::memory::value_decimal;
@@ -31,112 +30,29 @@ fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false})
 }
 
-/// Each menu rule: spec key, its `set_exit_plan` fields and what they do.
-const EXIT_RULES: [(&str, &[&str], &str); 7] = [
-    (
-        "trail",
-        &["trail_pct"],
-        "trail_pct (sell all once the price falls this % below the highest price since entry)",
-    ),
-    (
-        "atr",
-        &["atr_multiple", "atr_timeframe"],
-        "atr_multiple with atr_timeframe 1m|5m|15m|1h (Chandelier: sell all once the price falls that many average true ranges of those candles below the highest price since entry)",
-    ),
-    (
-        "part",
-        &["take_part_gain_pct", "take_part_fraction"],
-        "take_part_gain_pct with take_part_fraction (sell that fraction once at that gain)",
-    ),
-    (
-        "stretch",
-        &["stretch_z", "stretch_fraction"],
-        "stretch_z with stretch_fraction (sell that fraction once the price is z standard deviations above its 20-minute average, upper Bollinger band, and only above break-even: entry plus the buy and sell fees)",
-    ),
-    (
-        "slow",
-        &["slowdown_fraction", "slowdown_minutes"],
-        "slowdown_fraction with slowdown_minutes (sell that fraction once the speed over that many minutes is still positive but has fallen 3 minutes in a row, while above entry)",
-    ),
-    (
-        "fade",
-        &["fade_min_gain_pct", "fade_minutes"],
-        "fade_min_gain_pct with fade_minutes (after being up at least that %, sell all when no new high for that many minutes)",
-    ),
-    (
-        "deadline",
-        &["deadline_minutes"],
-        "deadline_minutes (sell all that long after entry)",
-    ),
-];
+/// Menu part of the `set_exit_plan` description.
+const EXIT_PLAN_MENU: &str = "One plan per asset; setting again replaces it. Rules, in any combination: trail_pct (sell all once the price falls this % below the highest price since entry) or atr_multiple with atr_timeframe 1m|5m|15m|1h (Chandelier: that many average true ranges of those candles below the highest price); take_part_gain_pct with take_part_fraction (sell that fraction once at that gain); stretch_z with stretch_fraction (sell that fraction once the price is z standard deviations above its 20-minute average, upper Bollinger band, while above entry); slowdown_fraction with slowdown_minutes (sell that fraction once the speed over that many minutes is still positive but has fallen 3 minutes in a row, while above entry); fade_min_gain_pct with fade_minutes (after being up at least that %, sell all when no new high for that many minutes); deadline_minutes (sell all that long after entry). Fractions are of the original position. clear: true removes the plan.";
 
-fn exit_rule(key: &str) -> Option<&'static (&'static str, &'static [&'static str], &'static str)> {
-    EXIT_RULES.iter().find(|(k, ..)| *k == key)
-}
-
-fn rules_help(keys: impl Iterator<Item = &'static str>) -> String {
-    keys.filter_map(|key| exit_rule(key).map(|(_, _, help)| *help))
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-/// `set_exit_plan` description for the configured mode (live sells or paper trial; free
-/// menu or locked rules).
+/// `set_exit_plan` description for the configured mode (live sells or paper trial).
 fn exit_plan_description(config: &TraderConfig) -> String {
-    let rules = match config.exit.rules {
-        None => format!(
-            "One plan per asset; setting again replaces it. Rules from the fixed menu, in any combination (trail_pct or atr_multiple, not both): {}. Fractions are of the original position. clear: true removes the plan.",
-            rules_help(RULE_KEYS.into_iter())
-        ),
-        Some(set) => format!(
-            "Every plan has exactly the rules {set}; you choose their numbers: {}. Fractions are of the original position. Once per position: a plan that is set cannot be changed or removed. A position without a plan is not sold automatically.",
-            rules_help(set.keys())
-        ),
-    };
+    let default = config.exit.default_plan.map_or_else(
+        || "No default plan: a position without a plan has none.".to_owned(),
+        |d| {
+            format!(
+                "Every new position gets the default plan {} unless you set another.",
+                d.plan
+            )
+        },
+    );
     if config.exit.live {
         format!(
-            "Give an open position a sell plan. LIVE: between cycles the trader checks the bid every few seconds and SELLS the position into USDT (real orders, same safety checks as execute_route) when its plan fires; the next cycle shows what was sold. {rules}"
+            "Give an open position a sell plan from a fixed menu. LIVE: between cycles the trader checks the bid every few seconds and SELLS the position into USDT (real orders, same safety checks as execute_route) when its plan fires; the next cycle shows what was sold. {default} {EXIT_PLAN_MENU}"
         )
     } else {
         format!(
-            "Optional. Give an open position a sell plan. A watcher follows the bid every few seconds between cycles and records what the plan would sell. Paper trial: it places no orders, so selling still goes through execute_route; the cycle prompt shows each plan's would-be sells. {rules}"
+            "Optional. Give an open position a sell plan from a fixed menu. A watcher follows the bid every few seconds between cycles and records what the plan would sell. Paper trial: it places no orders, so selling still goes through execute_route; the cycle prompt shows each plan's would-be sells. {default} {EXIT_PLAN_MENU}"
         )
     }
-}
-
-/// `set_exit_plan` parameters: the whole menu, or with locked rules only their fields,
-/// all required (no `clear`).
-fn exit_plan_schema(rules: Option<RuleSet>) -> Value {
-    let mut properties = json!({
-        "asset": {"type": "string", "description": "held asset, e.g. ENA"},
-        "clear": {"type": "boolean"},
-        "trail_pct": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 100},
-        "atr_multiple": {"type": "number", "exclusiveMinimum": 0},
-        "atr_timeframe": {"type": "string", "enum": ["1m", "5m", "15m", "1h"]},
-        "take_part_gain_pct": {"type": "number", "exclusiveMinimum": 0},
-        "take_part_fraction": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1},
-        "stretch_z": {"type": "number", "exclusiveMinimum": 0},
-        "stretch_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
-        "slowdown_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
-        "slowdown_minutes": {"type": "integer", "minimum": 2, "maximum": 60},
-        "fade_min_gain_pct": {"type": "number", "minimum": 0},
-        "fade_minutes": {"type": "integer", "minimum": 1},
-        "deadline_minutes": {"type": "integer", "minimum": 1}
-    });
-    let Some(set) = rules else {
-        return object(properties, &["asset"]);
-    };
-    let fields: Vec<&str> = std::iter::once("asset")
-        .chain(
-            set.keys()
-                .filter_map(exit_rule)
-                .flat_map(|(_, fields, _)| fields.iter().copied()),
-        )
-        .collect();
-    if let Value::Object(map) = &mut properties {
-        map.retain(|name, _| fields.contains(&name.as_str()));
-    }
-    object(properties, &fields)
 }
 
 /// Tool catalogue registered with omp.
@@ -229,7 +145,25 @@ pub fn tool_definitions(config: &TraderConfig) -> Vec<HostTool> {
                 "Exit plan (paper trial)"
             },
             exit_plan_description(config),
-            exit_plan_schema(config.exit.rules),
+            object(
+                json!({
+                    "asset": {"type": "string", "description": "held asset, e.g. ENA"},
+                    "clear": {"type": "boolean"},
+                    "trail_pct": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 100},
+                    "atr_multiple": {"type": "number", "exclusiveMinimum": 0},
+                    "atr_timeframe": {"type": "string", "enum": ["1m", "5m", "15m", "1h"]},
+                    "take_part_gain_pct": {"type": "number", "exclusiveMinimum": 0},
+                    "take_part_fraction": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1},
+                    "stretch_z": {"type": "number", "exclusiveMinimum": 0},
+                    "stretch_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+                    "slowdown_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+                    "slowdown_minutes": {"type": "integer", "minimum": 2, "maximum": 60},
+                    "fade_min_gain_pct": {"type": "number", "minimum": 0},
+                    "fade_minutes": {"type": "integer", "minimum": 1},
+                    "deadline_minutes": {"type": "integer", "minimum": 1}
+                }),
+                &["asset"],
+            ),
         ),
         HostTool::new(
             "journal_read",
@@ -605,19 +539,11 @@ impl TraderTools {
     }
 
     async fn set_exit_plan(&self, args: SetExitPlanArgs) -> ToolResult {
-        let config = &self.runtime.config;
-        let rules = config.exit.rules;
         let asset = args.asset.trim().to_uppercase();
         if asset.is_empty() {
             return Err("asset must not be blank".into());
         }
-        if args.clear
-            && let Some(set) = rules
-        {
-            return Err(format!(
-                "exit plans cannot be removed: every plan has the rules {set} and is set once per position"
-            ));
-        }
+        let config = &self.runtime.config;
         let path = &config.exit_paths.plans;
         let mut book =
             PlanBook::load(path).map_err(|e| format!("exit plan book unreadable: {e}"))?;
@@ -628,14 +554,6 @@ impl TraderTools {
             return Ok(json!({"cleared": cleared, "asset": asset}));
         }
         let plan = args.plan()?;
-        if let Some(set) = rules {
-            let found = RuleSet::of(&plan);
-            if found != set {
-                return Err(format!(
-                    "set exactly the rules {set} with your numbers; this plan sets {found}"
-                ));
-            }
-        }
         let rows = read_audit(&config.audit_path).map_err(|e| format!("audit unreadable: {e}"))?;
         let (trips, _) = round_trips(&rows, None, None);
         let trip = trips
@@ -647,19 +565,6 @@ impl TraderTools {
                     "no open {asset} position in the audit log; exit plans follow positions opened with execute_route"
                 )
             })?;
-        // A plan with other rules (stored before the rules were locked) never runs and
-        // does not count.
-        if let Some(set) = rules
-            && let Some(existing) = book
-                .plans
-                .get(&asset)
-                .filter(|p| p.entry_ms == trip.entry_ms && RuleSet::of(&p.plan) == set)
-        {
-            return Err(format!(
-                "the {asset} position already has its exit plan {}; it is set once per position and cannot be changed",
-                existing.spec
-            ));
-        }
         let cycle_id = {
             let guard = self.runtime.cycle.lock().await;
             guard
@@ -686,12 +591,8 @@ impl TraderTools {
             "plan": entry.spec,
             "symbol": entry.symbol,
             "entry_price": decimal_json(entry.entry_price),
-            "paper_only": !config.exit.live,
-            "note": if config.exit.live {
-                "LIVE: between cycles the trader sells this position into USDT when the plan fires."
-            } else {
-                "Paper trial: the watcher records what this plan would sell; it places no orders. Sell with execute_route."
-            }
+            "paper_only": true,
+            "note": "Paper trial: the watcher records what this plan would sell; it places no orders. Sell with execute_route."
         }))
     }
 

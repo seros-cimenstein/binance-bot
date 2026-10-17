@@ -23,11 +23,10 @@ use serde_json::{Value, json};
 use crate::config::DEFAULT_AUDIT_PATH;
 use crate::error::{Result, TraderError};
 use crate::exit_book::{
-    ClosedView, ExitPaths, ExitSettings, FillView, PlanBook, PlanEntry, RECENT_CLOSED,
-    WatchState, WatchView,
+    DefaultPlan, ExitPaths, ExitSettings, FillView, PlanBook, PlanEntry, WatchState, WatchView,
 };
 use crate::exit_plan::{
-    ATR_PERIODS, AtrTimeframe, ExitFill, ExitWatch, PriceBar, RuleSet, average_true_range,
+    ATR_PERIODS, AtrTimeframe, ExitFill, ExitWatch, PriceBar, average_true_range,
 };
 use crate::exit_replay::{ActualExit, RoundTrip, read_audit, round_trips};
 
@@ -203,8 +202,7 @@ pub struct Watcher {
     trials: BTreeMap<String, Trial>,
     state: WatchState,
     slippage: Decimal,
-    /// Locked rule set (`CLAUDE_SPOT_EXIT_PLAN_RULES`): only plans with exactly these run.
-    rules: Option<RuleSet>,
+    default_plan: Option<DefaultPlan>,
     /// Fills already logged per key before a restart (not logged again on catch-up).
     logged_fills: BTreeMap<String, usize>,
 }
@@ -223,7 +221,7 @@ impl Watcher {
     pub fn new(
         state: WatchState,
         slippage_bps: Decimal,
-        rules: Option<RuleSet>,
+        default_plan: Option<DefaultPlan>,
     ) -> Self {
         let logged_fills = state
             .active
@@ -237,7 +235,7 @@ impl Watcher {
                 ..state
             },
             slippage: slippage_bps / BPS,
-            rules,
+            default_plan,
             logged_fills,
         }
     }
@@ -246,26 +244,36 @@ impl Watcher {
         &self.state
     }
 
-    /// Plans to run, by asset: Claude's plan for an open position; Claude's plans for
-    /// positions no longer open stay (they close or orphan their trial) unless the asset
-    /// has a newer position. With a locked rule set, plans with other rules are ignored.
+    /// Plans to run, by asset: Claude's plan for an open position, else the default plan
+    /// for positions opened since it applies; Claude's plans for positions no longer open
+    /// stay (they close or orphan their trial) unless the asset has a newer position.
     fn effective_plans(&self, book: &PlanBook, trips: &[RoundTrip]) -> BTreeMap<String, PlanEntry> {
-        let allowed = |entry: &&PlanEntry| self.rules.is_none_or(|r| RuleSet::of(&entry.plan) == r);
         let mut plans = BTreeMap::new();
         for trip in trips.iter().filter(|t| t.exit.is_none()) {
-            if let Some(entry) = book
+            let chosen = book
                 .plans
                 .get(&trip.asset)
                 .filter(|p| p.entry_ms == trip.entry_ms)
-                .filter(allowed)
-            {
-                plans.insert(trip.asset.clone(), entry.clone());
+                .cloned()
+                .or_else(|| {
+                    let default = self.default_plan.filter(|d| trip.entry_ms >= d.from_ms)?;
+                    Some(PlanEntry {
+                        asset: trip.asset.clone(),
+                        symbol: trip.symbol.clone(),
+                        spec: default.plan.to_string(),
+                        plan: default.plan,
+                        entry_ms: trip.entry_ms,
+                        entry_price: trip.entry_price,
+                        set_at_ms: trip.entry_ms,
+                        cycle_id: "default".into(),
+                    })
+                });
+            if let Some(entry) = chosen {
+                plans.insert(trip.asset.clone(), entry);
             }
         }
         for (asset, entry) in &book.plans {
-            if allowed(&entry) {
-                plans.entry(asset.clone()).or_insert_with(|| entry.clone());
-            }
+            plans.entry(asset.clone()).or_insert_with(|| entry.clone());
         }
         plans
     }
@@ -344,19 +352,14 @@ impl Watcher {
         let cost = trial.entry.entry_price * (Decimal::ONE + fee);
         let mut sold = Decimal::ZERO;
         let mut with_plan = Decimal::ZERO;
-        // The plan's sells at their trigger prices, no modelled slippage.
-        let mut plan_proceeds = Decimal::ZERO;
         let mut plan_fills = Vec::new();
         for fill in trial.fills.iter().filter(|f| f.ts_ms < exit.ts_ms) {
             sold += fill.fraction;
             with_plan += fill.fraction * fill.price * (Decimal::ONE - fee - self.slippage);
-            plan_proceeds += fill.fraction * fill.price * (Decimal::ONE - fee);
             plan_fills.push(fill.clone());
         }
         let alone = claude_price * (Decimal::ONE - fee);
-        let rest = (Decimal::ONE - sold).max(Decimal::ZERO) * alone;
-        with_plan += rest;
-        plan_proceeds += rest;
+        with_plan += (Decimal::ONE - sold).max(Decimal::ZERO) * alone;
         let diff = (with_plan - alone) / cost * trip.entry_value_usdt;
         let pct = |proceeds: Decimal| {
             ((proceeds / cost - Decimal::ONE) * Decimal::ONE_HUNDRED).round_dp(4)
@@ -381,20 +384,6 @@ impl Watcher {
         }));
         self.state.closed_trials += 1;
         self.state.plan_vs_claude_usdt += diff.round_dp(6);
-        self.state.recent_closed.push(ClosedView {
-            asset: asset.to_owned(),
-            spec: trial.entry.spec.clone(),
-            entry_ms: trial.entry.entry_ms,
-            entry_price: trial.entry.entry_price,
-            exit_ms: exit.ts_ms,
-            exit_price: claude_price,
-            plan_fills,
-            fee_rate: fee,
-            plan_net_pct: pct(plan_proceeds),
-            exit_net_pct: pct(alone),
-        });
-        let excess = self.state.recent_closed.len().saturating_sub(RECENT_CLOSED);
-        self.state.recent_closed.drain(..excess);
         self.state.finalized.insert(key);
     }
 
@@ -427,13 +416,7 @@ impl Watcher {
                 average_true_range(&candles)
             }
         };
-        let mut watch = match ExitWatch::new(
-            &entry.plan,
-            entry.entry_price,
-            entry.entry_ms,
-            atr,
-            trip.fee_rate,
-        ) {
+        let mut watch = match ExitWatch::new(&entry.plan, entry.entry_price, entry.entry_ms, atr) {
             Ok(watch) => watch,
             Err(error) => {
                 log.append(json!({"event": "rejected", "key": entry.key(), "asset": entry.asset, "spec": entry.spec, "error": error}));
@@ -526,17 +509,6 @@ impl Watcher {
                 && let Some(trial) = self.trials.remove(&asset)
             {
                 self.finalize(key, "cleared", &asset, &trial.entry.spec, log);
-            }
-        }
-
-        // Plans with other rules than the locked set never run.
-        if let Some(rules) = self.rules {
-            for entry in book.plans.values() {
-                let key = entry.key();
-                if RuleSet::of(&entry.plan) != rules && !self.state.finalized.contains(&key) {
-                    log.append(json!({"event": "rejected", "key": key, "asset": entry.asset, "spec": entry.spec, "error": format!("exit-plan rules are locked to {rules}")}));
-                    self.state.finalized.insert(key);
-                }
             }
         }
 
@@ -735,7 +707,7 @@ pub async fn run_cli(args: ExitWatchArgs) -> Result<ExitCode> {
     let mut watcher = Watcher::new(
         WatchState::load(&paths.state),
         args.slippage_bps,
-        settings.rules,
+        settings.default_plan,
     );
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
@@ -772,7 +744,7 @@ pub async fn run_cli(args: ExitWatchArgs) -> Result<ExitCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exit_plan::{ExitPlan, ExitReason};
+    use crate::exit_plan::ExitPlan;
     use parking_lot::Mutex;
     use rust_decimal_macros::dec;
 
@@ -912,16 +884,6 @@ mod tests {
         assert!(state.active.is_empty());
         assert_eq!(state.closed_trials, 1);
         assert!(state.finalized.contains(&book.plans["ENA"].key()));
-        // The prompt's record: the rule that sold, and net results after fees with the
-        // plan's sell (no modelled slippage) and with the closing sale alone.
-        let view = &state.recent_closed[0];
-        assert_eq!(
-            (view.plan_fills[0].reason.as_str(), view.plan_fills[0].price, view.exit_price),
-            ("follow_peak", dec!(1.06), dec!(1.00))
-        );
-        let pct = |proceeds: Decimal| ((proceeds / cost - Decimal::ONE) * dec!(100)).round_dp(4);
-        assert_eq!(view.plan_net_pct, pct(dec!(1.06) * dec!(0.999)));
-        assert_eq!(view.exit_net_pct, pct(alone));
 
         // A finished trial is never restarted from the same plan.
         watcher
@@ -931,33 +893,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn locked_rules_run_only_matching_plans_and_return_sell_signals() {
+    async fn default_plan_runs_on_new_positions_and_returns_sell_signals() {
         let bars: Vec<PriceBar> = (40..105).map(|m| bar(m, dec!(1.01), dec!(1))).collect();
         let prices = FakePrices {
             bars,
             bid: Mutex::new(dec!(1.0)),
         };
-        let rules = RuleSet::parse("part,trail").unwrap();
-        let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(rules));
+        let default = DefaultPlan {
+            plan: ExitPlan::parse_spec("part=5:0.5,trail=3").unwrap(),
+            from_ms: 100 * M,
+        };
+        let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(default));
         let mut log: Vec<Value> = Vec::new();
+        let empty = PlanBook::default();
 
-        // A plan with other rules (stored before the rules were locked) is rejected once
-        // and never runs; a position without a plan has none.
-        let other = book("deadline=90", 104 * M);
-        for plans in [&other, &other, &PlanBook::default()] {
-            let signals = watcher
-                .step(plans, &[trip(None)], &prices, 105 * M, &mut log)
-                .await;
-            assert!(signals.is_empty());
-            assert!(watcher.state().active.is_empty());
-        }
-        assert_eq!(events(&log), ["rejected"]);
-        assert_eq!(log[0]["error"], "exit-plan rules are locked to trail,part");
+        // A position opened before the default applies gets no plan.
+        let mut old = trip(None);
+        old.entry_ms = 99 * M;
+        let signals = watcher
+            .step(&empty, &[old], &prices, 105 * M, &mut log)
+            .await;
+        assert!(signals.is_empty());
+        assert!(watcher.state().active.is_empty());
 
-        // Claude's numbers for the locked rules run.
-        let locked = book("trail=3,part=5:0.5", 104 * M + 1_000);
+        // A new position runs the default plan.
         watcher
-            .step(&locked, &[trip(None)], &prices, 105 * M, &mut log)
+            .step(&empty, &[trip(None)], &prices, 105 * M, &mut log)
             .await;
         assert_eq!(watcher.state().active["ENA"].spec, "trail=3,part=5:0.5");
 
@@ -965,18 +926,30 @@ mod tests {
         // the 3% trail sells the rest (share 1 of what is left).
         *prices.bid.lock() = dec!(1.06);
         let first = watcher
-            .step(&locked, &[trip(None)], &prices, 105 * M + 5_000, &mut log)
+            .step(&empty, &[trip(None)], &prices, 105 * M + 5_000, &mut log)
             .await;
         assert_eq!(first.len(), 1);
         assert_eq!((first[0].share, first[0].source), (dec!(0.5), "live"));
         assert_eq!(first[0].asset, "ENA");
         *prices.bid.lock() = dec!(1.02);
         let second = watcher
-            .step(&locked, &[trip(None)], &prices, 105 * M + 10_000, &mut log)
+            .step(&empty, &[trip(None)], &prices, 105 * M + 10_000, &mut log)
             .await;
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].share, Decimal::ONE);
-        assert_eq!(second[0].fill.reason, ExitReason::FollowPeak);
+
+        // Claude's own plan replaces the default for the same position.
+        let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(default));
+        watcher
+            .step(
+                &book("trail=1", 104 * M),
+                &[trip(None)],
+                &prices,
+                105 * M,
+                &mut log,
+            )
+            .await;
+        assert_eq!(watcher.state().active["ENA"].spec, "trail=1");
     }
 
     #[tokio::test]

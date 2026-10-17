@@ -50,29 +50,29 @@ status), and any operator halt. Drop raw tool payloads, candle data and supersed
 
 /// The system-prompt rule about exit plans for the configured mode.
 fn exit_plan_rule(config: &TraderConfig) -> String {
-    match (config.exit.rules, config.exit.live) {
-        (Some(set), true) => format!(
-            "- Exit plans run LIVE: after you buy, set_exit_plan gives that position its sell plan. Every plan has \
-exactly the rules {set}; you choose their numbers for each position. You can set it once per position: it \
-cannot be changed or removed afterwards, and a position without a plan is not sold automatically. Between \
-cycles the trader checks the bid every few seconds and, when the plan fires, sells into USDT for you (real \
-orders, same safety checks as execute_route); sells it made show in the next cycle and in your trade history."
-        ),
-        (Some(set), false) => format!(
-            "- Exit plans are a paper trial: set_exit_plan gives a position you hold a sell plan with exactly the \
-rules {set} and your numbers, once per position, and a watcher records between cycles what it would have sold. \
-It places no orders; selling stays your decision through execute_route."
-        ),
-        (None, true) => "- Exit plans run LIVE: between cycles the trader checks the bid every few seconds \
-and, when a position's plan fires, sells it into USDT for you (real orders, same safety checks as \
-execute_route). Use set_exit_plan to give a position a plan from the fixed menu, or clear: true to remove \
+    let default = config.exit.default_plan.map_or_else(
+        || "No default plan is set.".to_owned(),
+        |d| {
+            format!(
+                "Every new position gets the default plan {} unless you set another.",
+                d.plan
+            )
+        },
+    );
+    if config.exit.live {
+        format!(
+            "- Exit plans run LIVE: between cycles the trader checks the bid every few seconds and, when a \
+position's plan fires, sells it into USDT for you (real orders, same safety checks as execute_route). \
+{default} Use set_exit_plan to give a position another plan from the fixed menu, or clear: true to remove \
 it; sells made by plans show in the next cycle and in your trade history."
-            .to_owned(),
-        (None, false) => "- Exit plans are an optional paper trial: set_exit_plan lets you give a position a \
-sell plan from a fixed menu with your own parameters, and a watcher records between cycles what that plan \
-would have sold. It places no orders; selling stays your decision through execute_route. Use the recorded \
-results to learn which settings would have helped."
-            .to_owned(),
+        )
+    } else {
+        format!(
+            "- Exit plans are an optional paper trial: set_exit_plan lets you give a position a sell plan from a \
+fixed menu with your own parameters, and a watcher records between cycles what that plan would have sold. \
+It places no orders; selling stays your decision through execute_route. {default} Use the recorded results \
+to learn which settings would have helped."
+        )
     }
 }
 
@@ -200,16 +200,12 @@ pub fn cycle_prompt(
     for outcome in memory.recent_outcomes.iter().rev().take(5) {
         let _ = writeln!(
             out,
-            "- {} {}->{} {} pnl {} bps{}",
+            "- {} {}->{} {} pnl {} bps",
             outcome.timestamp,
             outcome.source_asset,
             outcome.destination_asset,
             outcome.status,
-            outcome.pnl_bps.map_or("?".into(), |v| format!("{v:.1}")),
-            outcome
-                .exit_plan
-                .as_ref()
-                .map_or(String::new(), |reason| format!(" — sold by {reason}"))
+            outcome.pnl_bps.map_or("?".into(), |v| format!("{v:.1}"))
         );
     }
 

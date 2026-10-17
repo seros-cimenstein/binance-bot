@@ -1239,7 +1239,7 @@ function planRules(spec) {
     if (key === "trail") rules.push("Sell all " + value + "% below the highest price since entry");
     else if (key === "atr") rules.push("Sell all " + a + "× the average " + b + " candle range below the highest price since entry");
     else if (key === "part") rules.push("Sell " + share(b) + " once at +" + a + "%");
-    else if (key === "stretch") rules.push("Sell " + share(b) + " when the price spikes " + a + " standard deviations above its 20-minute average (only above entry plus fees)");
+    else if (key === "stretch") rules.push("Sell " + share(b) + " when the price spikes " + a + " standard deviations above its 20-minute average (only above entry)");
     else if (key === "slow") rules.push("Sell " + share(a) + " when the " + b + "-minute climb slows 3 minutes in a row (only above entry)");
     else if (key === "fade") rules.push("After +" + a + "%, sell all when no new high prints for " + b + " minutes");
     else if (key === "deadline") rules.push("Sell all " + duration(num(a) * 60) + " after entry");
@@ -1259,7 +1259,7 @@ function ladder(a) {
 }
 function activePlanCard(a, live) {
   return card(null, el("div", { class: "grid", style: "gap:10px" },
-    el("div", { class: "token-head" }, assetLabel(a.asset),
+    el("div", { class: "token-head" }, assetLabel(a.asset), chip(a.source === "claude" ? "Bot's plan" : "Default plan", a.source === "claude" ? "accent" : ""),
       el("span", { class: "code muted" }, a.spec), el("span", { class: "val", title: stamp(a.last_at) }, "bid checked " + ago(a.last_at))),
     el("ul", { class: "rules" }, planRules(a.spec).map((r) => el("li", null, r))),
     ladder(a),
@@ -1298,15 +1298,15 @@ function exitsPage() {
   const watchSub = ex.state_present ? (ex.stale ? "watch state " + ago(ex.updated_at) + ", not updating" : "bids checked " + ago(ex.updated_at)) : "no watch state file yet";
   const kpis = el("div", { class: "grid kpis" },
     kpi("Mode", mode[0], mode[2], mode[1]),
-    kpi("Plan rules", s.plan_rules || (s.configured ? "Any" : "Unknown"), s.plan_rules ? "the bot picks the numbers, once per position"
-      : s.configured ? "the bot picks rules and numbers from the menu" : "unknown here"),
+    kpi("Default plan", s.default_plan || "None", s.default_plan ? el("span", null, planRules(s.default_plan).length + " rules · positions opened since " + stamp(s.default_plan_from))
+      : s.configured ? "only plans the bot sets run" : "unknown here"),
     kpi("Watching", String(ex.active.length) + (ex.active.length === 1 ? " position" : " positions"), watchSub, ex.stale && ex.state_present ? "warn" : null),
     live ? kpi("Plan sells", String(planSells.length), planSells.length ? el("span", null, signed(planPnl), " on the trades they closed") : "no position sold by a plan yet", planSells.length ? tone(planPnl) : null)
       : kpi("Paper trial", String(ex.closed_trials) + " closed", ex.closed_trials ? el("span", null, "plan vs bot ", signed(ex.plan_vs_claude_usdt)) : "no closed trial yet"));
 
   const active = ex.active.length ? el("div", { class: "grid halves" }, ex.active.map((a) => activePlanCard(a, live)))
     : card("Open positions", empty("Nothing to watch", noClaudeData() ? NO_DATA[1]
-      : "The bot holds no position with a plan. When it buys and sets a plan, the position shows up here within seconds."));
+      : "The bot holds no position with a plan. When it buys" + (s.default_plan ? ", the fixed plan " + s.default_plan : ", the plan the bot sets") + " shows up here within seconds."));
 
   const waiting = ex.waiting.length ? card("Waiting for the watcher", table([["Coin"], ["Plan"], ["Entry", "r"], ["Set", "r"]], ex.waiting.map((w) => el("tr", null,
     el("td", null, assetLabel(w.asset)), el("td", { class: "code" }, w.spec), el("td", { class: "r" }, px(w.entry_price)), el("td", { class: "r muted", title: stamp(w.set_at) }, ago(w.set_at))))),
@@ -1325,7 +1325,7 @@ function exitsPage() {
     [ex.state_error, ex.book_error].filter(Boolean).map((e) => card(null, errorBox(e))),
     kpis, active, waiting, sells, events,
     el("details", { class: "footnote" }, el("summary", null, "How exit plans work"),
-      el("p", null, "The bot gives each position a sell plan from a fixed menu (follow the peak by percent or by candle range, take part at a gain, stretch above the 20-minute band, slowdown, momentum fade, deadline). When the plan rules are locked, every plan has exactly those rules: the bot only picks their numbers, once per position, and cannot change or remove the plan; a position without a plan is not sold automatically. Between cycles the bot checks the bid every few seconds; when a rule fires it sells that share into USDT through the same checked order path as the bot's own trades. Exit plans only sell, never buy. The sell line is where the follow-the-peak rule sells; other rules fire on their own conditions.")));
+      el("p", null, "When a default plan is set, it is the only plan: every position runs it and the bot cannot change it. Without one, the bot can pick a sell plan for each position from a fixed menu (follow the peak by percent or by candle range, take part at a gain, stretch above the 20-minute band, slowdown, momentum fade, deadline). Between cycles the bot checks the bid every few seconds; when a rule fires it sells that share into USDT through the same checked order path as the bot's own trades. Exit plans only sell, never buy. The sell line is where the follow-the-peak rule sells; other rules fire on their own conditions.")));
 }
 
 // ---------- Fleet ----------

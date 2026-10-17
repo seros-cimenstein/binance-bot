@@ -8,8 +8,7 @@
 //!   average true range on a chosen candle size (Chandelier exit);
 //! - take part: sell a fraction of the position once, at a set gain;
 //! - stretch: sell a fraction once the price is a set number of standard deviations
-//!   above its 20-minute average (upper Bollinger band), while that line is above the
-//!   break-even price (entry plus the buy and sell fees);
+//!   above its 20-minute average (upper Bollinger band), while above entry;
 //! - slowdown: sell a fraction once the price is still rising but its speed has fallen
 //!   for 3 minutes in a row (velocity > 0, acceleration < 0), while above entry;
 //! - momentum fade: after being up at least a set gain, sell everything once no new
@@ -129,7 +128,7 @@ pub struct TakePart {
 }
 
 /// Sell `fraction` once the price reaches `z` standard deviations above its 20-minute
-/// average, while that line is above the break-even price (entry plus both fees).
+/// average, while that line is above entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stretch {
     pub z: Decimal,
@@ -397,76 +396,6 @@ impl fmt::Display for ExitPlan {
     }
 }
 
-/// Spec keys of the menu rules, in [`ExitPlan`] spec order.
-pub const RULE_KEYS: [&str; 7] = ["trail", "atr", "part", "stretch", "slow", "fade", "deadline"];
-
-/// A set of menu rules by spec key, e.g. `atr,stretch`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RuleSet(u8);
-
-impl RuleSet {
-    /// The rules `plan` sets.
-    pub fn of(plan: &ExitPlan) -> Self {
-        let present = [
-            matches!(plan.trail, Some(Trail::Pct(_))),
-            matches!(plan.trail, Some(Trail::Atr { .. })),
-            plan.take_part.is_some(),
-            plan.stretch.is_some(),
-            plan.slowdown.is_some(),
-            plan.fade.is_some(),
-            plan.deadline_minutes.is_some(),
-        ];
-        Self(
-            present
-                .iter()
-                .enumerate()
-                .filter(|(_, set)| **set)
-                .fold(0, |bits, (i, _)| bits | 1 << i),
-        )
-    }
-
-    /// A comma-separated list of spec keys, e.g. `atr,stretch`.
-    pub fn parse(list: &str) -> Result<Self, String> {
-        let mut bits = 0u8;
-        for key in list.split(',').map(str::trim).filter(|k| !k.is_empty()) {
-            let index = RULE_KEYS.iter().position(|k| *k == key).ok_or_else(|| {
-                format!(
-                    "unknown exit-plan rule {key:?} (menu: {})",
-                    RULE_KEYS.join(", ")
-                )
-            })?;
-            bits |= 1 << index;
-        }
-        let set = Self(bits);
-        if bits == 0 {
-            return Err(format!("no exit-plan rule in {list:?}"));
-        }
-        if set.contains("trail") && set.contains("atr") {
-            return Err("only one of trail / atr may be set".into());
-        }
-        Ok(set)
-    }
-
-    /// Spec keys in the set, in spec order.
-    pub fn keys(self) -> impl Iterator<Item = &'static str> {
-        RULE_KEYS
-            .into_iter()
-            .enumerate()
-            .filter(move |(i, _)| self.0 & (1 << i) != 0)
-            .map(|(_, key)| key)
-    }
-
-    pub fn contains(self, key: &str) -> bool {
-        self.keys().any(|k| k == key)
-    }
-}
-
-impl fmt::Display for RuleSet {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.keys().collect::<Vec<_>>().join(","))
-    }
-}
-
 fn decimal(value: &str) -> Result<Decimal, String> {
     value
         .parse::<Decimal>()
@@ -605,9 +534,6 @@ enum TrailDistance {
 #[derive(Debug, Clone)]
 pub struct ExitWatch {
     entry_price: Decimal,
-    /// Price whose sale returns the entry cost after the buy and sell fees; the stretch
-    /// line must be above it.
-    break_even: Decimal,
     entry_ms: i64,
     trail: Option<TrailDistance>,
     take_part: Option<TakePart>,
@@ -628,21 +554,16 @@ pub struct ExitWatch {
 
 impl ExitWatch {
     /// Start watching. An ATR trail needs `atr`, the average true range of its timeframe
-    /// before entry (see [`average_true_range`]). `fee_rate` is the fee per side, as a
-    /// fraction of the traded value.
+    /// before entry (see [`average_true_range`]).
     pub fn new(
         plan: &ExitPlan,
         entry_price: Decimal,
         entry_ms: i64,
         atr: Option<Decimal>,
-        fee_rate: Decimal,
     ) -> Result<Self, String> {
         plan.validate()?;
         if entry_price <= Decimal::ZERO {
             return Err(format!("entry price must be positive, got {entry_price}"));
-        }
-        if fee_rate < Decimal::ZERO || fee_rate >= Decimal::ONE {
-            return Err(format!("fee rate must be in [0, 1), got {fee_rate}"));
         }
         let trail = match plan.trail {
             None => None,
@@ -662,7 +583,6 @@ impl ExitWatch {
         };
         Ok(Self {
             entry_price,
-            break_even: entry_price * (Decimal::ONE + fee_rate) / (Decimal::ONE - fee_rate),
             entry_ms,
             trail,
             take_part: plan.take_part,
@@ -798,7 +718,7 @@ impl ExitWatch {
             }
         }
         if let (Some(stretch), Some(line)) = (self.stretch, self.stretch_line())
-            && line > self.break_even
+            && line > self.entry_price
             && bar.high >= line
         {
             self.stretch_taken = true;
@@ -886,26 +806,8 @@ mod tests {
     }
 
     fn run(spec: &str, bars: &[PriceBar]) -> Vec<ExitFill> {
-        let mut watch =
-            ExitWatch::new(&plan(spec), dec!(100), 0, Some(dec!(0.5)), Decimal::ZERO).unwrap();
+        let mut watch = ExitWatch::new(&plan(spec), dec!(100), 0, Some(dec!(0.5))).unwrap();
         bars.iter().flat_map(|b| watch.on_bar(b)).collect()
-    }
-
-    #[test]
-    fn rule_sets_parse_menu_keys_and_match_plans() {
-        let set = RuleSet::parse(" stretch , atr ").unwrap();
-        assert_eq!(set.to_string(), "atr,stretch");
-        assert_eq!(RuleSet::of(&plan("stretch=2:1,atr=3:1h")), set);
-        assert_ne!(RuleSet::of(&plan("trail=3,stretch=2:1")), set);
-        assert_ne!(RuleSet::of(&plan("atr=3:1h,stretch=2:1,deadline=60")), set);
-        for (bad, message) in [
-            ("atr,stop", "unknown exit-plan rule \"stop\""),
-            ("trail,atr", "only one of trail / atr"),
-            (" , ", "no exit-plan rule"),
-        ] {
-            let error = RuleSet::parse(bad).unwrap_err();
-            assert!(error.contains(message), "{bad}: {error}");
-        }
     }
 
     #[test]
@@ -1001,7 +903,6 @@ mod tests {
             dec!(100),
             0,
             average_true_range(&candles),
-            Decimal::ZERO,
         )
         .unwrap();
         assert!(
@@ -1015,7 +916,7 @@ mod tests {
             (fills[0].price, fills[0].reason),
             (dec!(105.0), ExitReason::FollowPeak)
         );
-        assert!(ExitWatch::new(&plan("atr=2:1h"), dec!(100), 0, None, Decimal::ZERO).is_err());
+        assert!(ExitWatch::new(&plan("atr=2:1h"), dec!(100), 0, None).is_err());
     }
 
     #[test]
@@ -1041,8 +942,7 @@ mod tests {
 
     #[test]
     fn stretch_sells_when_the_price_leaves_the_upper_band_above_entry() {
-        let mut watch =
-            ExitWatch::new(&plan("stretch=2:0.5"), dec!(100), 0, None, Decimal::ZERO).unwrap();
+        let mut watch = ExitWatch::new(&plan("stretch=2:0.5"), dec!(100), 0, None).unwrap();
         // 20 minutes alternating 101 / 103 before entry: mean 102, stdev 1 → band 104.
         for m in -20..0 {
             let price = if m % 2 == 0 { dec!(101) } else { dec!(103) };
@@ -1067,35 +967,18 @@ mod tests {
     }
 
     #[test]
-    fn stretch_line_below_break_even_never_sells() {
-        // Below entry.
-        let mut watch =
-            ExitWatch::new(&plan("stretch=1:1"), dec!(100), 0, None, Decimal::ZERO).unwrap();
+    fn stretch_line_below_entry_never_sells() {
+        let mut watch = ExitWatch::new(&plan("stretch=1:1"), dec!(100), 0, None).unwrap();
         for m in -20..0 {
             watch.warm_up_before_entry(&flat(m, if m % 2 == 0 { dec!(90) } else { dec!(92) }));
         }
         assert!(watch.on_bar(&flat(0, dec!(95))).is_empty());
         assert!(watch.on_bar(&flat(1, dec!(96))).is_empty());
-
-        // Above entry but below break-even: 0.1% fees each side put it at about 100.2002,
-        // and the 1-sigma line of 99.9 / 100.1 minutes is 100.1.
-        let quiet = |fee_rate: Decimal| {
-            let mut watch =
-                ExitWatch::new(&plan("stretch=1:1"), dec!(100), 0, None, fee_rate).unwrap();
-            for m in -20..1 {
-                watch.warm_up_before_entry(&flat(m, if m % 2 == 0 { dec!(99.9) } else { dec!(100.1) }));
-            }
-            assert_eq!(watch.stretch_line(), Some(dec!(100.1)));
-            watch.on_bar(&bar(1, dec!(100.1), dec!(100.15), dec!(100.1), dec!(100.15)))
-        };
-        assert!(quiet(dec!(0.001)).is_empty());
-        assert_eq!(quiet(Decimal::ZERO)[0].reason, ExitReason::Stretch);
     }
 
     #[test]
     fn slowdown_sells_after_three_slowing_minutes_while_rising() {
-        let mut watch =
-            ExitWatch::new(&plan("slow=0.5:2"), dec!(100), 0, None, Decimal::ZERO).unwrap();
+        let mut watch = ExitWatch::new(&plan("slow=0.5:2"), dec!(100), 0, None).unwrap();
         // Rising fast, then still rising but each minute by less.
         let closes = [100, 104, 108, 112, 115, 117, 118, 118];
         let mut fills = Vec::new();
@@ -1109,8 +992,7 @@ mod tests {
         // Sold at the price observed after the third slowing minute, never at a past price.
         assert!(fills[0].price >= dec!(117));
         // An accelerating climb (each minute up more than the last) never slows.
-        let mut climbing =
-            ExitWatch::new(&plan("slow=1:2"), dec!(100), 0, None, Decimal::ZERO).unwrap();
+        let mut climbing = ExitWatch::new(&plan("slow=1:2"), dec!(100), 0, None).unwrap();
         for m in 0..9 {
             let price = Decimal::from(100 + (1_i64 << m));
             assert!(climbing.on_bar(&flat(m, price)).is_empty());
@@ -1119,8 +1001,7 @@ mod tests {
 
     #[test]
     fn slowdown_below_entry_is_ignored() {
-        let mut watch =
-            ExitWatch::new(&plan("slow=1:2"), dec!(200), 0, None, Decimal::ZERO).unwrap();
+        let mut watch = ExitWatch::new(&plan("slow=1:2"), dec!(200), 0, None).unwrap();
         let closes = [100, 104, 108, 112, 115, 117, 118, 118, 118];
         for (m, close) in closes.iter().enumerate() {
             assert!(
@@ -1168,8 +1049,7 @@ mod tests {
 
     #[test]
     fn ticks_drive_the_same_rules() {
-        let mut watch =
-            ExitWatch::new(&plan("trail=1"), dec!(100), 0, None, Decimal::ZERO).unwrap();
+        let mut watch = ExitWatch::new(&plan("trail=1"), dec!(100), 0, None).unwrap();
         assert!(watch.on_bar(&PriceBar::tick(1_000, dec!(103))).is_empty());
         assert!(watch.on_bar(&PriceBar::tick(2_000, dec!(102))).is_empty());
         let fills = watch.on_bar(&PriceBar::tick(3_000, dec!(101.9)));
@@ -1190,8 +1070,7 @@ mod tests {
 
     #[test]
     fn warm_up_since_entry_raises_the_peak_without_selling() {
-        let mut watch =
-            ExitWatch::new(&plan("trail=2"), dec!(100), 0, None, Decimal::ZERO).unwrap();
+        let mut watch = ExitWatch::new(&plan("trail=2"), dec!(100), 0, None).unwrap();
         watch.warm_up_since_entry(&bar(0, dec!(100), dec!(110), dec!(90), dec!(105)));
         assert_eq!(watch.peak(), dec!(110));
         assert_eq!(watch.remaining(), Decimal::ONE);
