@@ -5,6 +5,17 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-18 (07:55 UTC): "Losing money for a while" (operator; analysis
+  only, no change). 40 closed coin round trips 10-13 -> 10-18: 13 wins,
+  net -1.074 USDT (gross -0.472, fees 0.602, ~15 bps per trip on 406 USDT
+  traded). Every entry (40/40) came after a rise in the prior 30 min (mean
+  +1.15%); the 1m price after entry averaged -0.15% at +20 min, -0.17% at
+  +90 min, -0.20% at +120 min (19/40 up at +90 min). The bot's own early
+  exits (31, -1.47 USDT) beat holding to 90 min (-0.29% gross mean vs
+  -0.49% net if held); the 9 plan exits were all wins (+0.40). The loss
+  is in the entries (buying after short run-ups), not the exits. Options
+  put to the operator: pause, add these numbers to the prompt as
+  information, or change the entry style (needs an operator decision).
 - 2026-10-18 (06:20 UTC): Renamed Claude to bot everywhere (operator: the
   name was misleading, since the trader runs on gpt-6.1-sol/argon; operator
   chose the full rename over renaming only the visible text). Old -> new:
