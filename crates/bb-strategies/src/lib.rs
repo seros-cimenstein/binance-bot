@@ -29,6 +29,7 @@ pub mod basis_arb_backtest;
 pub mod bot_spot_backtest;
 pub mod cli;
 pub mod common;
+pub mod entry_study;
 pub mod error;
 pub mod funding_arb;
 pub mod funding_arb_backtest;

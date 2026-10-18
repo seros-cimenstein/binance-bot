@@ -4,9 +4,9 @@
 use std::process::ExitCode;
 
 use crate::{
-    basis_arb_backtest, bot_spot_backtest, funding_arb, funding_arb_backtest, grid_backtest,
-    mean_reversion, mean_reversion_backtest, news_event_backtest, spec_snapshot, stat_arb_backtest,
-    trend_filter, trend_filter_backtest,
+    basis_arb_backtest, bot_spot_backtest, entry_study, funding_arb, funding_arb_backtest,
+    grid_backtest, mean_reversion, mean_reversion_backtest, news_event_backtest, spec_snapshot,
+    stat_arb_backtest, trend_filter, trend_filter_backtest,
 };
 
 #[derive(clap::Subcommand, Debug)]
@@ -35,6 +35,8 @@ pub enum Command {
     BotSpotBacktest(bot_spot_backtest::Args),
     /// Public-data Binance speculation snapshot (CSVs + facts-only SUMMARY.md).
     SpecSnapshot(spec_snapshot::Args),
+    /// Research: net forward return after each kind of entry over liquid USDT coins.
+    EntryStudy(entry_study::Args),
 }
 
 pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
@@ -51,6 +53,7 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
         Command::StatArbBacktest(args) => stat_arb_backtest::run_cli(args).await,
         Command::BotSpotBacktest(args) => bot_spot_backtest::run_cli(args).await,
         Command::SpecSnapshot(args) => spec_snapshot::run_cli(args).await,
+        Command::EntryStudy(args) => entry_study::run_cli(args).await,
     }
 }
 

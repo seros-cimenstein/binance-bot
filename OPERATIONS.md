@@ -571,6 +571,20 @@ return > 0), `edge_marginal` (positive return, modest Sharpe), `no_edge` (did
 not clear its cost bar), or `no_trades` / `no_data` (insufficient window or
 signals; rerun with more data).
 
+`bb entry-study` asks when buying pays at all. It samples every 20 minutes
+× the 20 most-traded USDT crypto markets over the last `--days` (default 90)
+of public 1m candles (cached in `data/entry-study-cache`). For each sample it
+records the 5m-24h returns, the volume ratio and the market breadth, and the
+move to +20/+60/+90/+120 minutes. It then reports the mean net return (after
+`--fee-bps`, default 15 per round trip, plus a spread proxy) per bucket,
+train period vs the last `--test-days` (default 30). `--audit` also measures
+the bot's real entries with the same candles. Public data only, no order path.
+
+```bash
+bb entry-study --audit docker-data/bot-spot-decisions.jsonl \
+  --output data/entry-study.json --markdown docs/research/entry-study.md
+```
+
 ## Capital Pool, Bot Allocator, Auto-Convert
 
 `bb capital-pool` shows the capital plan and persisted state
