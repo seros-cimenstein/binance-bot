@@ -91,3 +91,27 @@ The five best test buckets at any horizon:
    -0.206% gross at +90 min (sd 1.48%) against the universe's +0.023%:
    -0.229 percentage points, t -1.0. Even a perfectly average picker would have lost about 0.19% per
    trip after costs.
+
+## C4. Dip buying: `bb mean-reversion-backtest` sweep
+
+Same 20 coins and windows (train 2026-07-20 09:00 to 2026-09-18 08:43, test to 2026-10-18 08:43),
+1m candles, fee 7.5 bps per side plus 5 bps slippage, 100 USDT per position, at most 5 open.
+Default exits: take profit at a 50% retrace of the dump, stop at a further -3%, or 60 minutes.
+"Per trade" is the mean net P&L in % of the position; t is over trades.
+
+| dump | lookback | train trades | train net % (wallet) | per trade | t | Sharpe | win % | verdict | test trades | test net % (wallet) | per trade | t | Sharpe | win % | verdict |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---|
+| -1% | 15m | 2595 | -47.6 | -0.184% | -9.2 | -14.4 | 67 | no_edge | 3018 | -58.2 | -0.193% | -9.4 | -22.9 | 71 | no_edge |
+| -2% | 15m | 405 | -0.7 | -0.018% | -0.2 | -0.3 | 65 | no_edge | 773 | -1.8 | -0.023% | -0.4 | -0.9 | 66 | no_edge |
+| -3% | 15m | 129 | +3.0 | +0.236% | +1.2 | +2.0 | 68 | edge_likely | 252 | +0.8 | +0.033% | +0.3 | +0.8 | 62 | edge_marginal |
+| -1% | 30m | 3059 | -61.0 | -0.200% | -11.7 | -17.8 | 62 | no_edge | 3124 | -63.3 | -0.203% | -10.4 | -24.1 | 67 | no_edge |
+| -2% | 30m | 702 | -5.7 | -0.082% | -1.5 | -2.3 | 58 | no_edge | 1008 | -14.4 | -0.143% | -2.9 | -7.1 | 61 | no_edge |
+| -3% | 30m | 206 | +5.5 | +0.269% | +1.9 | +3.3 | 65 | edge_likely | 396 | -4.2 | -0.107% | -1.1 | -2.8 | 54 | no_edge |
+
+C4 findings: buying small dumps (1-2%) loses after costs in both periods: -0.18% to -0.20% per
+trade at 1%, t around -9 to -12, and win rates of 60-70% that do not cover the losers and fees.
+Only the deepest dump (-3%) was positive in train: +0.24%/trade over 15m (n=129, t 1.2) and +0.27%
+over 30m (n=206, t 1.9). Neither held up out of sample: +0.03%/trade over 15m (n=252, t 0.3) and
+-0.11% over 30m (n=396, t -1.1). No threshold reaches n >= 200 with t > 2 in test. The harness's
+own verdict calls the -3%/15m test `edge_marginal`, but that is +0.8% on the wallet over 30 days,
+inside noise.
