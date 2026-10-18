@@ -551,6 +551,8 @@ pub struct TraderAgent {
     route_calls: Arc<AtomicU64>,
     /// Compaction failures of the current cycle that moved it to another model.
     cycle_attempts: Vec<AttemptEntry>,
+    /// Context tokens before and after the last successful [`Self::maybe_compact`].
+    pub last_compaction: Option<(Option<u64>, Option<u64>)>,
     /// Model switch notices for the operator, sent after the cycle's audit row.
     notices: Vec<String>,
     pub session_id: String,
@@ -626,6 +628,7 @@ impl TraderAgent {
             primary_window: None,
             route_calls,
             cycle_attempts: Vec::new(),
+            last_compaction: None,
             notices: Vec::new(),
             session_id: opened.session_id.unwrap_or_default(),
             resumed: opened.resumed,
@@ -890,8 +893,30 @@ impl TraderAgent {
         }
         loop {
             let model = self.current_model();
-            let Err(error) = self.session.compact(Some(COMPACT_INSTRUCTIONS)).await else {
-                return;
+            let error = match self.session.compact(Some(COMPACT_INSTRUCTIONS)).await {
+                Ok(result) => {
+                    let after = match self.session.state().await {
+                        Ok(state) => {
+                            self.observe_state(&state);
+                            state.context_usage.as_ref().and_then(|usage| usage.tokens)
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "get_state after compaction failed");
+                            None
+                        }
+                    };
+                    let before = result.tokens_before.or(tokens);
+                    tracing::info!(
+                        tokens_before = ?before,
+                        tokens_after = ?after,
+                        summary_chars = result.summary.as_deref().map_or(0, str::len),
+                        %model,
+                        "compacted trader context"
+                    );
+                    self.last_compaction = Some((before, after));
+                    return;
+                }
+                Err(error) => error,
             };
             tracing::warn!(%error, %model, "compaction failed");
             let why = format!("compaction failed on {model}: {error}");
@@ -1557,6 +1582,7 @@ mod tests {
             server.state(OLD, 190_000, 200_000).await;
             server.switch(PRIMARY, "high", 100_000).await;
             server.compact(None).await;
+            server.state(PRIMARY, 30_000, 100_000).await;
             let pid = server.prompt().await;
             server.finish_ok(&pid, PRIMARY).await;
             server.quiet().await;
@@ -1580,6 +1606,7 @@ mod tests {
                 .await;
             server.switch(FALLBACK, "low", 272_000).await;
             server.compact(None).await;
+            server.state(FALLBACK, 30_000, 272_000).await;
             let pid = server.prompt().await;
             server.finish_ok(&pid, FALLBACK).await;
             server.quiet().await;
@@ -1608,6 +1635,7 @@ mod tests {
             // No compaction attempt on the primary: switch first, then compact there.
             server.switch(FALLBACK, "low", 272_000).await;
             server.compact(None).await;
+            server.state(FALLBACK, 30_000, 272_000).await;
             let pid = server.prompt().await;
             server.finish_ok(&pid, FALLBACK).await;
             server.quiet().await;
@@ -1631,12 +1659,18 @@ mod tests {
             // 120K tokens is only 12% of a 1M window, but over the 100K token threshold.
             server.state(PRIMARY, 120_000, 1_000_000).await;
             server.compact(None).await;
+            // The size after compaction is read back and logged.
+            server.state(PRIMARY, 41_000, 1_000_000).await;
             // Below both thresholds: no compaction.
             server.state(PRIMARY, 60_000, 1_000_000).await;
             server.quiet().await;
         });
         agent.maybe_compact().await;
+        // omp reports tokensBefore 1 in the fake reply; the after size comes from get_state.
+        assert_eq!(agent.last_compaction, Some((Some(1), Some(41_000))));
+        agent.last_compaction = None;
         agent.maybe_compact().await;
+        assert_eq!(agent.last_compaction, None);
         script.await.unwrap();
     }
 

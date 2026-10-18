@@ -353,8 +353,10 @@ the paper-only pool.
 - **Persistent session.** One long-lived omp session per trader, stored in
   `BOT_SPOT_SESSION_DIR` and resumed after restarts and crashes. omp
   auto-compaction stays on and the bot also compacts at
-  `BOT_SPOT_COMPACT_AT_PERCENT`. The bot's theses survive compaction in the
-  journal at `BOT_SPOT_JOURNAL_PATH`.
+  `BOT_SPOT_COMPACT_AT_PERCENT` or `BOT_SPOT_COMPACT_AT_TOKENS` (deployed
+  150000), logging `compacted trader context tokens_before=… tokens_after=…`.
+  The bot's theses survive compaction in the journal at
+  `BOT_SPOT_JOURNAL_PATH`.
 - **Host tools plus web search.** omp runs with all built-in tools disabled
   except `web_search` (`BOT_SPOT_WEB_SEARCH`, default true; set false for
   `--no-tools`). The bot acts through the bot's host tools `get_portfolio`,
