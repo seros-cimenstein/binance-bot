@@ -434,6 +434,39 @@ pub fn parse_time(text: &str) -> Option<DateTime<Utc>> {
         .map(|t| t.with_timezone(&Utc))
 }
 
+/// The bot's record over closed coin trades (wins and losses; cash parking excluded).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct RecordWindow {
+    pub trips: usize,
+    pub wins: usize,
+    /// Realized P&L after the buy and sell fees.
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    pub net_usdt: Decimal,
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    pub fees_usdt: Decimal,
+    pub mean_hold_minutes: Option<f64>,
+}
+
+/// [`RecordWindow`] of the trades closed at or after `since` (all of them when `None`).
+pub fn record_window(trades: &[Trade], since: Option<DateTime<Utc>>) -> RecordWindow {
+    let closed: Vec<&Trade> = trades
+        .iter()
+        .filter(|t| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
+        .filter(|t| {
+            since.is_none_or(|since| t.closed_at.as_deref().and_then(parse_time).is_some_and(|at| at >= since))
+        })
+        .collect();
+    let holds: Vec<i64> = closed.iter().filter_map(|t| t.hold_seconds).collect();
+    RecordWindow {
+        trips: closed.len(),
+        wins: closed.iter().filter(|t| t.status == TradeStatus::Win).count(),
+        net_usdt: closed.iter().filter_map(|t| t.pnl_usdt).sum(),
+        fees_usdt: closed.iter().filter_map(|t| t.fees_usdt).sum(),
+        mean_hold_minutes: (!holds.is_empty())
+            .then(|| holds.iter().sum::<i64>() as f64 / holds.len() as f64 / 60.0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rust_decimal_macros::dec;

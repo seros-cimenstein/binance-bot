@@ -25,7 +25,7 @@ use crate::error::{Result, TraderError};
 use crate::evidence::{EvidenceService, route_evidence};
 use crate::executor::{Executor, LegResult};
 use crate::journal::{AgentState, ExecutionSummary, Journal, LastCycle};
-use crate::memory::TradeMemory;
+use crate::memory::{TradeMemory, TradeRecord};
 use crate::tools::TraderTools;
 use crate::universe::{
     Balances, MarketView, RouteCandidate, build_route_candidates, quote_candidate,
@@ -167,12 +167,32 @@ impl Runtime {
         )
     }
 
+    /// The bot's record from the whole audit log; fees in other coins valued at the view's
+    /// prices. `None` when the log cannot be read.
+    pub(crate) fn trade_record(&self, balances: &Balances, view: &MarketView) -> Option<TradeRecord> {
+        let rows = match crate::exit_replay::read_audit(&self.config.audit_path) {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "audit unreadable; the cycle prompt has no record section");
+                return None;
+            }
+        };
+        let mark = |asset: &str| {
+            Some(crate::trades::Mark {
+                free: balances.free(asset),
+                price_usdt: view.usdt_value(asset, Decimal::ONE)?,
+            })
+        };
+        Some(TradeRecord::from_rows(&rows, mark, bb_core::time::now()))
+    }
+
     /// Catalog, balances, candidate routes, evidence, social evidence and trade memory.
     pub async fn build_snapshot(&self) -> Result<Snapshot> {
         let balances = self.balances().await?;
         let view = self.load_view().await?;
         let mut candidates = build_route_candidates(&view, &self.config, &balances.free).await?;
         let trade_memory = self.trade_memory(&balances, &view, self.config.trade_memory_limit);
+        let trade_record = self.trade_record(&balances, &view);
         self.evidence.clear().await;
         if self.config.market_evidence_enabled {
             for candidate in &mut candidates {
@@ -216,6 +236,7 @@ impl Runtime {
             execution_invariants: execution_invariants(&self.config),
             route_scope: route_scope(&self.config),
             trade_memory,
+            trade_record,
         };
         Ok(Snapshot {
             context,
@@ -1108,6 +1129,7 @@ mod tests {
             execution_invariants: execution_invariants(&config),
             route_scope: route_scope(&config),
             trade_memory: runtime.trade_memory(&balances, &view, 8),
+            trade_record: None,
         };
         runtime
             .begin_cycle(

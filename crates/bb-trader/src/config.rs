@@ -17,7 +17,8 @@ use crate::scope::ScopeConfig;
 /// Prompt/audit version tag of the agentic trader. v11: the v7 prompt restored on the
 /// old-gold-way branch, plus the stretch fee floor and closed-position feedback. v12
 /// (2026-10-18, LOOP_MONEY section B): same system prompt; information-only changes to the
-/// cycle message (trailing momentum no longer labelled "edge", expected cost per route).
+/// cycle message (trailing momentum no longer labelled "edge", expected cost per route,
+/// fill-based trade memory, the "Your record" section).
 pub const PROMPT_VERSION: &str = "bot-spot-v12-agentic";
 /// The only accepted value of `BOT_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";

@@ -128,6 +128,23 @@ fn fmt_decimal(value: Decimal, places: u32) -> String {
     value.round_dp(places).normalize().to_string()
 }
 
+/// One window of the record, e.g. `40 trips, 13 wins (33%), net -1.074 USDT, fees 0.602 USDT,
+/// mean hold 44 min`.
+fn record_line(window: &crate::trades::RecordWindow) -> String {
+    if window.trips == 0 {
+        return "no closed trades".into();
+    }
+    format!(
+        "{} trips, {} wins ({:.0}%), net {} USDT, fees {} USDT, mean hold {}",
+        window.trips,
+        window.wins,
+        window.wins as f64 * 100.0 / window.trips as f64,
+        window.net_usdt.round_dp(3).normalize(),
+        window.fees_usdt.round_dp(3).normalize(),
+        window.mean_hold_minutes.map_or("?".into(), |m| format!("{m:.0} min")),
+    )
+}
+
 /// One compact user turn for a cycle.
 pub fn cycle_prompt(
     config: &TraderConfig,
@@ -230,6 +247,13 @@ pub fn cycle_prompt(
                 .as_ref()
                 .map_or(String::new(), |reason| format!(" — sold by {reason}"))
         );
+    }
+
+    if let Some(record) = &context.trade_record {
+        out.push_str("\n## Your record (closed coin trades, after buy and sell fees; information, not a rule)\n");
+        for (label, window) in [("all time", &record.all_time), ("last 7 days", &record.last_7_days)] {
+            let _ = writeln!(out, "- {label}: {}", record_line(window));
+        }
     }
 
     out.push_str("\n## Last cycle\n");
@@ -1711,6 +1735,7 @@ mod tests {
                 |_, _| None,
                 8,
             ),
+            trade_record: None,
         };
         let last = LastCycle {
             cycle_id: "c0".into(),
@@ -1780,6 +1805,7 @@ mod tests {
             execution_invariants: Vec::new(),
             route_scope: Value::Null,
             trade_memory: memory,
+            trade_record: None,
         };
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
         for i in 0..8 {

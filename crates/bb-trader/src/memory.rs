@@ -4,13 +4,16 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::Value;
 
 use bb_core::money::{BPS_PER_UNIT, to_f64};
 
-use crate::trades::{Mark, RouteRecord, Trade, TradeStatus, build_trades, route_record};
+use crate::trades::{
+    Mark, RecordWindow, RouteRecord, Trade, TradeStatus, build_trades, record_window, route_record,
+};
 
 /// Python reads the last 500 audit lines.
 pub const AUDIT_TAIL_LINES: usize = 500;
@@ -175,6 +178,30 @@ pub struct CurrentHolding {
     pub entered_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub route_id: Option<String>,
+}
+
+/// The bot's record from the whole audit log: closed coin trades after fees, all time and
+/// over the last 7 days (information for its judgement, never a gate).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TradeRecord {
+    pub all_time: RecordWindow,
+    pub last_7_days: RecordWindow,
+}
+
+impl TradeRecord {
+    /// `rows`: every audit row, oldest first. `mark(asset)` values fees paid in other coins.
+    pub fn from_rows(rows: &[Value], mark: impl Fn(&str) -> Option<Mark>, now: DateTime<Utc>) -> Self {
+        let records: Vec<RouteRecord> = rows
+            .iter()
+            .filter(|row| row_status(row) == "submitted" && row_attempted_submission(row))
+            .map(route_record)
+            .collect();
+        let trades = build_trades(&records, mark, now);
+        Self {
+            all_time: record_window(&trades, None),
+            last_7_days: record_window(&trades, Some(now - chrono::Duration::days(7))),
+        }
+    }
 }
 
 /// Trade memory packet (Python `_trade_memory_context`).
@@ -464,6 +491,37 @@ pub(crate) mod tests {
         assert_eq!(pnl, dec!(0.03778));
         assert!((aave.pnl_bps.unwrap() - to_f64(pnl / cost * BPS_PER_UNIT)).abs() < 1e-9);
         assert_eq!(memory.recent_outcomes[1].status, "cash");
+    }
+
+    #[test]
+    fn record_counts_closed_coin_trades_after_fees_all_time_and_last_7_days() {
+        let rows = vec![
+            // 2026-10-01: a loss, outside the 7-day window.
+            filled_row("2026-10-01T10:00:00Z", "USDT", "SOL", "1", "10", 0.00001),
+            filled_row("2026-10-01T11:00:00Z", "SOL", "USDT", "1", "9.9", 0.00001),
+            // 2026-10-17: a win held 30 minutes, then a buy still open.
+            filled_row("2026-10-17T10:00:00Z", "USDT", "AAVE", "0.052", "7.93728", 0.0000083),
+            filled_row("2026-10-17T10:30:00Z", "AAVE", "USDT", "0.052", "7.98668", 0.0000083),
+            filled_row("2026-10-17T11:00:00Z", "USDT", "BCH", "0.028", "7.7616", 0.0000083),
+            json!({"status": "held", "row_type": "cycle_summary"}),
+        ];
+        let mark = |asset: &str| match asset {
+            "BNB" => Some(Mark { free: dec!(0.01), price_usdt: dec!(700) }),
+            "BCH" => Some(Mark { free: dec!(0.028), price_usdt: dec!(276) }),
+            _ => None,
+        };
+        let now = crate::trades::parse_time("2026-10-18T08:00:00Z").unwrap();
+        let record = TradeRecord::from_rows(&rows, mark, now);
+
+        let all = &record.all_time;
+        assert_eq!((all.trips, all.wins), (2, 1));
+        // SOL: 9.9 - 10 - 0.014 = -0.114; AAVE: +0.03778 (fees 0.01162). BCH is open, not counted.
+        assert_eq!(all.net_usdt, dec!(-0.07622));
+        assert_eq!(all.fees_usdt, dec!(0.02562));
+        assert_eq!(all.mean_hold_minutes, Some(45.0));
+        let week = &record.last_7_days;
+        assert_eq!((week.trips, week.wins, week.net_usdt), (1, 1, dec!(0.03778)));
+        assert_eq!(week.mean_hold_minutes, Some(30.0));
     }
 
     #[test]

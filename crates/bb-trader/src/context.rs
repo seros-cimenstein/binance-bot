@@ -174,6 +174,8 @@ pub struct DecisionContext {
     pub execution_invariants: Vec<String>,
     pub route_scope: Value,
     pub trade_memory: TradeMemory,
+    /// The bot's record over the whole audit log (`None` when the log cannot be read).
+    pub trade_record: Option<crate::memory::TradeRecord>,
 }
 
 impl DecisionContext {
@@ -190,6 +192,7 @@ impl DecisionContext {
             "execution_invariants": self.execution_invariants,
             "route_scope": self.route_scope,
             "trade_memory": self.trade_memory,
+            "trade_record": self.trade_record,
         })
     }
 

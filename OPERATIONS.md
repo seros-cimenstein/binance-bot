@@ -370,6 +370,12 @@ from `account/commission` (BNB-discounted while the wallet holds BNB) plus
 half the spread, per side. Over 40 round trips to 2026-10-18 the real fees
 were about 7.5 bps per side, and fills beat the quote by about 25 bps.
 
+Trade memory and the "Your record" section use the same fill-based ledger as
+the dashboard (`bb_trader::trades`): each outcome's P&L is net of the buy and
+sell fees. "Your record" summarizes the whole audit log every cycle: closed
+coin trades, wins, net P&L after fees, fees paid and mean hold, all time and
+for the last 7 days. It is information, never a gate.
+
 ### Trading guardrails removed
 
 By operator decision Bot Spot has no trading guardrails. Fees, spread,
