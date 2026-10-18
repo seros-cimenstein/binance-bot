@@ -1,6 +1,6 @@
 # Loop ledger: make Bot Spot stop losing and find out whether it can earn (2026-10-18)
 
-STATUS: OPEN
+STATUS: DONE
 
 Source: the 2026-10-18 session. That includes the loss analysis (`PROGRESS.md`, entry "2026-10-18 (07:55 UTC)"), the health check (entry "05:30 UTC"), and three read-only scout reports (prompt/inputs, research tools and past results, costs/ops). The setup agent re-checked each claim against the code and the Pi data before it went into an item. This file is the loop's memory and its stop switch: the gate `~/projects/seref_omp_tools/seref_loop/bin/seref-loop-gate LOOP_MONEY.md`
 (run by `/seref_manager run LOOP_MONEY.md` or `/loop --until`) stops the loop only when the line
@@ -112,4 +112,19 @@ Rules:
 
 ## E. Decide with the evidence
 
-- [ ] E1 Decide whether and how to resume trading. Do A-D first. If C3/C4 found a rule with a positive out-of-sample net mean (n≥200, t>2), write a concrete proposal. It can be information for the bot (a measured-pattern line in `## Your record`) or a prompt or entry-style change; prompt or entry-style changes need operator approval under CODEX.md. Also give its expected net per trip and the wallet math (17.8 USDT, ~15 bps per round trip). If nothing qualifies, write "no edge found" with the numbers. Either way, call `ask` with the options (keep paused / resume as is with the B information / resume with the proposal), the conservative default being to keep paused. Record the verdict in the C3 report and `PROGRESS.md`. Acceptance: a verdict paragraph with numbers in the report and PROGRESS; the operator's answer applied (stop file present or removed accordingly), or `BLOCKED: awaiting operator answer` with the question asked.
+- [x] E1 Decide whether and how to resume trading. Do A-D first. If C3/C4 found a rule with a positive out-of-sample net mean (n≥200, t>2), write a concrete proposal. It can be information for the bot (a measured-pattern line in `## Your record`) or a prompt or entry-style change; prompt or entry-style changes need operator approval under CODEX.md. Also give its expected net per trip and the wallet math (17.8 USDT, ~15 bps per round trip). If nothing qualifies, write "no edge found" with the numbers. Either way, call `ask` with the options (keep paused / resume as is with the B information / resume with the proposal), the conservative default being to keep paused. Record the verdict in the C3 report and `PROGRESS.md`. Acceptance: a verdict paragraph with numbers in the report and PROGRESS; the operator's answer applied (stop file present or removed accordingly), or `BLOCKED: awaiting operator answer` with the question asked. — DONE: verdict paragraph "E1. Verdict: no edge found" in `docs/research/entry-study-2026-10-18.md` (commit f098320), with the numbers and the wallet math (17.8 USDT; real -0.027 USDT per trip, about -0.21/day while trading; an average entry costs about -0.015 USDT per 8-USDT trip; even the best, non-significant bucket would earn cents a day). PROGRESS.md entry 2026-10-18 12:00. `ask` offered keep paused / resume as is / changed entry style; the operator chose **resume as is**. Applied: with no open plan (`active` []), `rm docker-data/bot-spot.stop` at 11:52:56 UTC. The daemon logged `emergency stop removed: cycles resume` (12:06:41) and `omp trader session ready … resumed=true`. The first live v12 cycle at 12:08:55 was `held` on gpt-6.1-sol, citing the new record: "similar rise-following entries have negative observed post-entry returns". `bot-spot-entry-timing.json` was written; RestartCount 0.
+
+## Summary (2026-10-18 12:15 UTC)
+
+Done: 16 of 16 (A1-A2, B1-B6, C1-C4, D1-D3, E1). Invalid: 0. Blocked: 0.
+
+- Final check: `cargo test --workspace` 1003 passed, `cargo clippy --workspace --all-targets
+  -- -D warnings` clean, `scripts/smoke.sh` and `scripts/pool_replay.sh` passed,
+  `git diff --check` clean. On the Pi: `bot-spot` Up with restarts 0, latest audit row
+  2026-10-18T12:08:55 (newer than the last deploy at about 11:25), no stop file (E1: the
+  operator chose to resume as is), `scheduler` Up on the current image.
+- Outcome: the trader now sees its true costs and record and no momentum labelled "edge".
+  Research found no entry that pays after costs (`docs/research/entry-study-2026-10-18.md`), so
+  resuming is expected to keep losing about 0.2% per trip unless the bot trades rarely. Its
+  first v12 cycle held, citing that record.
+

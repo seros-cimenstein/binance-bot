@@ -5,6 +5,34 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-18 (12:00 UTC): LOOP_MONEY (`LOOP_MONEY.md`; operator: "this thing has
+  to make money"). 16 items, all done.
+  - A. The trader was paused at 08:11 with the stop file. The daemon now idles under the
+    stop file instead of crash-looping on restart (`cli.rs`).
+  - B. Prompt `bot-spot-v12-agentic` (system prompt unchanged; information only):
+    - trailing momentum is no longer labelled "edge";
+    - each route shows its expected cost (account fee with the BNB discount plus half
+      the spread, ~8-10 bps) next to the quoted friction (~60 bps, which keeps the
+      sizing buffer);
+    - trade memory shows all 8 outcomes, with P&L from the fills net of both fees. The
+      dashboard ledger moved into `bb_trader::trades` and is shared;
+    - a new "Your record" section: 40 trips, 13 wins, -1.074 USDT, fees 0.60, and entry
+      timing of +1.20% in the 30 min before buys, -0.13%/-0.21% at +20/+90 min.
+  - C. New `bb entry-study` research tool. 90 days × 20 coins, 124,770 samples, train
+    60 / test 30 days: no entry bucket pays after the ~0.21% round trip out of sample.
+    Buying after a ≥+1% run-up loses (+90 min net -0.16% train / -0.07% test, median
+    -0.37%). The dip-buying sweep (`mean-reversion-backtest`, 12 runs) fails out of
+    sample. Report: `docs/research/entry-study-2026-10-18.md`.
+  - D.
+    - Compaction sizes are logged before and after, and the threshold is 150K (it was
+      compacting before nearly every cycle at 100K).
+    - New nightly `scripts/backup_bot_data.sh` (23:45 UTC, keeps 14), which covers the
+      audit, journal, state, exit plans and session. The first archive is on the Pi.
+    - `scheduler` recreated on the current image (no `CLAUDE_*` env).
+  - E. Verdict: no edge found. The operator chose "resume as is" and the stop file was
+    removed at 11:52:56 UTC.
+  - Workspace 1003 tests, clippy clean, smoke ok. Rollback tags
+    `binance-bot:pre-{a2,b1,b2,b4,b5,b6,d1}-20261018`.
 - 2026-10-18 (07:55 UTC): "Losing money for a while" (operator; analysis
   only, no change). 40 closed coin round trips 10-13 -> 10-18: 13 wins,
   net -1.074 USDT (gross -0.472, fees 0.602, ~15 bps per trip on 406 USDT
