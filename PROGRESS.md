@@ -5,6 +5,41 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-18 (06:20 UTC): Renamed Claude to bot everywhere (operator: the
+  name was misleading, since the trader runs on gpt-6.1-sol/argon; operator
+  chose the full rename over renaming only the visible text). Old -> new:
+  `CLAUDE_SPOT_*` / `CLAUDE_ALLOCATOR_*` -> `BOT_SPOT_*` / `BOT_ALLOCATOR_*`;
+  `bb claude-spot[-exit-watch|-exit-replay|-backtest]` -> `bb bot-spot...`;
+  data `claude-spot-*` -> `bot-spot-*` (audit, journal, state, exit plans,
+  watch state/log, lock, stop file, `bot-spot-session/`); compose service
+  and container `bot-spot`; units `binance-bot-spot*.service`; prompt tag
+  `bot-spot-v11-agentic`; Telegram "BOT SPOT BRAIN/WHY"; watch keys
+  `plan_vs_bot_usdt`, `bot_alone_net_pct`, `bot_exit_*`; crates
+  `bb_capital::bot` (`BotAllocator`), `bb_strategies::bot_spot_backtest`.
+  Kept on purpose: Anthropic model ids, "Claude Haiku" (X insighter really
+  uses it), references to legacy Python files (`src/claude_spot.py`), the
+  `claude-spot-v4..v10-agentic` tags of old audit rows, `docker-data/archive/`
+  names, and the history entries below (they record what ran then). The
+  dashboard reads both `claude-spot-` and `bot-spot-` prompt tags as the
+  same prompt and ignores the tag inside `run_config`, so the current v11
+  session continues across the rename (test added). Clippy clean, `cargo
+  test --workspace` 993 passed, smoke passed; dashboard checked in Chromium
+  on a migrated copy (no page errors, exits total -0.039677 read). Commit
+  `46dfc14`. Deployed 05:57 UTC between cycles with no open position
+  (BCH had been sold at 05:34): rollback tag
+  `binance-bot:pre-bot-rename-20261018`, env backup
+  `.env.docker.bak-20261018T055757Z-prebotrename`, `claude-spot` container
+  stopped and removed, files/dir/env keys renamed, watch keys rewritten in
+  the watch state and log (decisions audit not rewritten), `bot-spot`
+  started. Verified: 57 `BOT_SPOT_*` and no `CLAUDE_*` vars in the
+  container, "keeping the cycle cadence wait_seconds=1188", "omp trader
+  session ready session_id=01a13523 resumed=true dir=data/bot-spot-session",
+  compaction OK, 06:20 cycle `held` with `bot-spot-v11-agentic`. Laptop
+  dashboard restarted on the new script (mirror holds only `bot-spot-*`).
+  Not changed: the `scheduler` container (old image, still has the old
+  `CLAUDE_*` names in its environment; nothing it runs reads them), and
+  the laptop's legacy Python units and `.env` in
+  `~/.local/share/binance-bot`.
 - 2026-10-18 (05:30 UTC): Health check (operator: "check the bot"; no
   code or config change). Pi `claude-spot` up 15 h on the 14:38 deploy,
   no stop file, no failed-route halt, no WARN/ERROR in the log except one
