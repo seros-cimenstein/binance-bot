@@ -65,7 +65,7 @@ impl CapitalGate {
     /// From `CAPITAL_POOL_ENABLED` / `AUTO_CONVERT_TO_QUOTE` (and their
     /// companion variables). `None` when both are disabled. With
     /// `CAPITAL_AI_ADVISOR_ENABLED=true` every buy plan is first offered to the
-    /// guarded advisor (proposal file, then the Claude allocator over omp); it can
+    /// guarded advisor (proposal file, then the bot allocator over omp); it can
     /// only clamp the deterministic plan. Conversions are submitted only when the
     /// runtime is live (not `DRY_RUN`, not testnet).
     pub fn from_env(
@@ -80,11 +80,11 @@ impl CapitalGate {
             if let Err(err) = pool.load(&path) {
                 tracing::warn!(path = %path.display(), error = %err, "Capital pool state unreadable; starting fresh");
             }
-            let fleet = Arc::new(bb_capital::claude::LiveFleet {
+            let fleet = Arc::new(bb_capital::bot::LiveFleet {
                 client: Some(client.clone()),
                 data_dir: bb_capital::status::default_data_dir(),
             });
-            if let Some(advisor) = bb_capital::claude::guarded_advisor_from_env(fleet)? {
+            if let Some(advisor) = bb_capital::bot::guarded_advisor_from_env(fleet)? {
                 pool = pool.with_advisor(advisor);
             }
             gate = gate.with_pool(pool, Some(path));

@@ -1,6 +1,6 @@
 [package]
 name = "bb-trader"
-description = "Claude agentic Binance Spot trader (omp session, host tools, hard-safety executor)."
+description = "Agentic Binance Spot trader (omp session, host tools, hard-safety executor)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

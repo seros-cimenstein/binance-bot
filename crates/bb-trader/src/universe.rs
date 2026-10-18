@@ -140,7 +140,7 @@ impl Balances {
     }
 }
 
-/// One executable route quote offered to Claude.
+/// One executable route quote offered to the bot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouteCandidate {
     pub route_id: String,
@@ -158,7 +158,7 @@ pub struct RouteCandidate {
 }
 
 impl RouteCandidate {
-    /// Python `ClaudeRouteCandidate.as_context` (audit `candidate_routes[]` / `selected_route`).
+    /// Python `BotRouteCandidate.as_context` (audit `candidate_routes[]` / `selected_route`).
     pub fn as_context(&self) -> Value {
         let legs: Vec<Value> = self
             .route
@@ -638,7 +638,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn build_context_offers_dynamic_multi_hop_route_and_blocks_fiat() {
-        let config = config(&[("CLAUDE_SPOT_CANDIDATE_LIMIT", "0")]);
+        let config = config(&[("BOT_SPOT_CANDIDATE_LIMIT", "0")]);
         let view = view(&config);
         assert!(
             !view.markets.contains_key("EUR/USDT"),
@@ -668,8 +668,8 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn high_friction_routes_are_kept_as_information() {
-        // The Python friction ceiling dropped these; now Claude sees them with their cost.
-        let config = config(&[("CLAUDE_SPOT_CANDIDATE_LIMIT", "0")]);
+        // The Python friction ceiling dropped these; now the bot sees them with their cost.
+        let config = config(&[("BOT_SPOT_CANDIDATE_LIMIT", "0")]);
         let mut markets = vec![market("BTC/USDT", dec!(60000), dec!(66000), dec!(5000000))];
         markets[0].spread_bps = Some(dec!(10));
         let view = MarketView::from_snapshots(markets, fees(&["BTC/USDT"]), &config);
@@ -682,8 +682,8 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn aggressive_mode_prefers_small_markets_and_limits() {
         let config = config(&[
-            ("CLAUDE_SPOT_MARKET_PICK_MODE", "small_market_aggressive"),
-            ("CLAUDE_SPOT_SMALL_CANDIDATE_LIMIT", "2"),
+            ("BOT_SPOT_MARKET_PICK_MODE", "small_market_aggressive"),
+            ("BOT_SPOT_SMALL_CANDIDATE_LIMIT", "2"),
         ]);
         let view = view(&config);
         let free = BTreeMap::from([("USDT".to_owned(), dec!(100))]);

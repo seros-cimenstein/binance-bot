@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # Binance bot fleet image: one static-ish `bb` binary, the read-only `cryptobot-gui`
-# dashboard, plus the `omp` agent CLI (Claude decisions for claude-spot and the capital
+# dashboard, plus the `omp` agent CLI (bot decisions for bot-spot and the capital
 # allocator run through omp RPC).
 
 # ---------- build ----------

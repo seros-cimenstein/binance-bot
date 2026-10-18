@@ -1,9 +1,9 @@
 # Exit-plan function candidates (Phase 45)
 
 Research from 2026-10-15 on the math traders use to decide when to sell (and
-some to decide when to buy). The menu Claude can pick from today is in
+some to decide when to buy). The menu the bot can pick from today is in
 `crates/bb-trader/src/exit_plan.rs`; everything else here is a candidate to
-add and backtest with `bb claude-spot-exit-replay` before it reaches the menu.
+add and backtest with `bb bot-spot-exit-replay` before it reaches the menu.
 
 Status: **menu** = in the menu, **candidate** = not built yet.
 
@@ -67,7 +67,7 @@ Status: **menu** = in the menu, **candidate** = not built yet.
 
 - Moves shorter than an hour reverse in 90% of 183 Binance pairs, but the
   edge is too small to trade after costs (Kitron & Wengrowicz 2026, preprint,
-  https://arxiv.org/abs/2608.21888). This fits Claude buying right after 5-15
+  https://arxiv.org/abs/2608.21888). This fits the bot buying right after 5-15
   minute jumps and the price slipping afterwards (our inference).
 - Short-term edges shrink after fees; daily rules hold up better than intraday
   (https://www.sciencedirect.com/science/article/abs/pii/S1059056024003010;

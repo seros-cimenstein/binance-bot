@@ -112,13 +112,13 @@ pub const KNOWN_BOTS: &[BotSpec] = &[
         )
     },
     BotSpec {
-        activity: &["claude-spot-journal.jsonl"],
+        activity: &["bot-spot-journal.jsonl"],
         ..bot(
-            "claude_spot",
-            "claude-spot-agent-state.json",
-            "claude-spot-decisions.jsonl",
+            "bot_spot",
+            "bot-spot-agent-state.json",
+            "bot-spot-decisions.jsonl",
             "",
-            "binance-claude-spot.timer",
+            "binance-bot-spot.timer",
         )
     },
     BotSpec {
@@ -869,7 +869,7 @@ mod tests {
     #[test]
     fn registry_covers_the_rust_fleet() {
         for name in [
-            "claude_spot",
+            "bot_spot",
             "funding_arb",
             "trend_filter",
             "mean_reversion_paper",
@@ -923,7 +923,7 @@ mod tests {
             state_summary(detector, &dir.path().join("missing.json"), &w),
             ""
         );
-        assert_eq!(summarize_state("claude_spot", &json!({}), &w), "");
+        assert_eq!(summarize_state("bot_spot", &json!({}), &w), "");
     }
 
     #[test]

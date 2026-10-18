@@ -25,13 +25,13 @@ Commands below are written as `bb <command>`; substitute the binary or the
 
 ## Live Posture
 
-Claude Spot (`claude-spot`) is the only live trader, Spot only. Since
+Bot Spot (`bot-spot`) is the only live trader, Spot only. Since
 2026-10-12 every other live runtime is off so nothing else trades the shared
 wallet: funding arb (spot + USD-M futures), the listing detector and momentum
 listing sniper, and the trend filter. Their `docker/crontab` lines are
 commented out, `.env.docker` sets their `*_ENABLED` / `CONFIRM_LIVE_*` /
 `*_PROVEN_EDGE` gates off, and the live sniper moved to the opt-in compose
-profile `listing-sniper-live`. Claude Spot cannot write margin or futures.
+profile `listing-sniper-live`. Bot Spot cannot write margin or futures.
 
 ## Safety Posture
 
@@ -74,7 +74,7 @@ systemctl --user enable --now binance-pool-paper-backup.timer
 atomically to `~/.local/share/binance-bot/bin/bb`, syncs `scripts/`, installs
 every unit from `deploy/user/` and reloads the user manager. It preserves
 `.env`, databases, logs, and backups, and it starts no trading service. It
-warns when `omp` is not on `PATH` (needed by `claude-spot` and
+warns when `omp` is not on `PATH` (needed by `bot-spot` and
 `capital-pool --advise`). Restart running services after a deploy to load the
 new binary.
 
@@ -85,7 +85,7 @@ docker compose build
 docker compose --profile all up -d
 ```
 
-Profiles: `live` (Claude trader, scheduler), `paper` (paper and signal
+Profiles: `live` (bot trader, scheduler), `paper` (paper and signal
 workloads, scheduler), `all` (both), `v2` (launch detector), `main-bot`
 (legacy SMA runtime), `listing-sniper-live` (live momentum sniper, off).
 Periodic jobs (airdrop digest, SQLite backups) run in the `scheduler`
@@ -106,7 +106,7 @@ Docker: `docker compose ps`, `docker compose logs -f <service>`, and
 `docker compose run --rm scheduler bb bot-status`.
 
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
-profiles `gui`/`paper`/`live`/`all`) serves the same fleet view plus Claude
+profiles `gui`/`paper`/`live`/`all`) serves the same fleet view plus the Bot
 Spot trades, cycles (brain, tools, cost per cycle), journal, exit plans
 (Exits tab), results per session (Sessions tab: each setup ranked by realized
 P&L, the winner, and the session's configuration from the `run_config` the
@@ -121,7 +121,7 @@ only and mounts the data dir read-only. From another machine:
 
 Laptop on the Pi's live data: `scripts/cryptobot_gui_pi.sh --open` (the
 `cryptobot-gui` fish command). It rsyncs the Pi's `docker-data` into
-`~/.cache/binance-bot/pi-data` every 30 s (omp logins, the Claude session and
+`~/.cache/binance-bot/pi-data` every 30 s (omp logins, the bot session and
 the Telegram session are not copied; nothing is written on the Pi), maps the
 trader's file paths and the exit-plan settings from the Pi's `.env.docker`,
 and runs the local release build against the mirror with the laptop's
@@ -188,7 +188,7 @@ directory (`~/.local/share/binance-bot/data/...` on systemd hosts,
 
 | Runtime | Stop file (default) | Override |
 |---|---|---|
-| `claude-spot` | `data/claude-spot.stop` | `CLAUDE_SPOT_STOP_PATH` |
+| `bot-spot` | `data/bot-spot.stop` | `BOT_SPOT_STOP_PATH` |
 | `listing-sniper` (flat / trailing / momentum services) | `data/listing-sniper-flat.stop`, `data/listing-sniper-trailing.stop`, `data/listing-sniper-momentum.stop` (bare default `data/listing-sniper.stop`) | `LISTING_SNIPER_EMERGENCY_STOP_PATH` |
 | `listing-detector` | `data/listing-detector.stop` | `LISTING_DETECTOR_EMERGENCY_STOP_PATH` |
 | `funding-arb` | `data/funding-arb.stop` | `FUNDING_ARB_EMERGENCY_STOP_PATH` |
@@ -201,8 +201,8 @@ directory (`~/.local/share/binance-bot/data/...` on systemd hosts,
 | `sniper-detector` | `data/sniper.stop` | `SNIPER_EMERGENCY_STOP_PATH` |
 
 ```bash
-touch ~/.local/share/binance-bot/data/claude-spot.stop   # systemd host
-touch docker-data/claude-spot.stop                       # Docker host
+touch ~/.local/share/binance-bot/data/bot-spot.stop   # systemd host
+touch docker-data/bot-spot.stop                       # Docker host
 ```
 
 The legacy `bb main` runtime has no stop file: `scripts/panic.sh` sends
@@ -216,7 +216,7 @@ Run permission diagnostics before any live-order probe or future live canary:
 ```bash
 bb api-permissions --feature manual_live_probe
 bb api-permissions --feature spot_live_canary
-bb api-permissions --feature claude_spot_autonomous
+bb api-permissions --feature bot_spot_autonomous
 bb api-permissions --feature margin_dry_run
 bb api-permissions --feature margin_canary_plan
 bb api-permissions --feature futures_dry_run
@@ -344,53 +344,53 @@ notional `12 USDT`, max daily orders `2`, direct route only, and BNB reserve
 protection. Create `data/live-spot.stop` to block allocator planning and
 submission. Audit rows default to `data/live-spot-allocations.jsonl`.
 
-## Claude Agentic Spot Trader
+## Bot Agentic Spot Trader
 
-`bb claude-spot` lets Claude trade the Spot wallet through omp (the oh-my-pi
+`bb bot-spot` lets the bot trade the Spot wallet through omp (the oh-my-pi
 coding agent, npm `@oh-my-pi/pi-coding-agent`) in RPC mode. It does not modify
 the paper-only pool.
 
 - **Persistent session.** One long-lived omp session per trader, stored in
-  `CLAUDE_SPOT_SESSION_DIR` and resumed after restarts and crashes. omp
+  `BOT_SPOT_SESSION_DIR` and resumed after restarts and crashes. omp
   auto-compaction stays on and the bot also compacts at
-  `CLAUDE_SPOT_COMPACT_AT_PERCENT`. Claude's theses survive compaction in the
-  journal at `CLAUDE_SPOT_JOURNAL_PATH`.
+  `BOT_SPOT_COMPACT_AT_PERCENT`. The bot's theses survive compaction in the
+  journal at `BOT_SPOT_JOURNAL_PATH`.
 - **Host tools plus web search.** omp runs with all built-in tools disabled
-  except `web_search` (`CLAUDE_SPOT_WEB_SEARCH`, default true; set false for
-  `--no-tools`). Claude acts through the bot's host tools `get_portfolio`,
+  except `web_search` (`BOT_SPOT_WEB_SEARCH`, default true; set false for
+  `--no-tools`). The bot acts through the bot's host tools `get_portfolio`,
   `list_routes`, `get_market_evidence`, `get_klines`, `get_social_evidence`,
   `get_trade_history`, `execute_route`, `journal_read` / `journal_write`, and
   `end_cycle`. `execute_route` is the only order path.
 
 ### Trading guardrails removed
 
-By operator decision Claude Spot has no trading guardrails. Fees, spread,
+By operator decision Bot Spot has no trading guardrails. Fees, spread,
 slippage, momentum, market evidence, social data and trade memory are
-information Claude weighs; none of them blocks a trade. Removed: the
+information the bot weighs; none of them blocks a trade. Removed: the
 edge/market-evidence minimum, the friction cap, speculative mode, the
 loss-streak limit, the trade cooldown, the daily trade cap, the proven-edge
 gate, the rules-engine decision mode, and the LLM `go_off` decision flag.
-Their variables (`CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS`,
-`CLAUDE_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS`, `CLAUDE_SPOT_SPECULATIVE_*`,
-`CLAUDE_SPOT_MAX_RECENT_LOSS_STREAK`, `CLAUDE_SPOT_MIN_TRADE_INTERVAL_SECONDS`,
-`CLAUDE_SPOT_MAX_SUBMITTED_TRADES_PER_DAY`, `CLAUDE_SPOT_PROVEN_EDGE`,
-`CLAUDE_SPOT_REQUIRE_PROVEN_EDGE`, `CLAUDE_SPOT_DECISION_MODE`, ...) are
+Their variables (`BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS`,
+`BOT_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS`, `BOT_SPOT_SPECULATIVE_*`,
+`BOT_SPOT_MAX_RECENT_LOSS_STREAK`, `BOT_SPOT_MIN_TRADE_INTERVAL_SECONDS`,
+`BOT_SPOT_MAX_SUBMITTED_TRADES_PER_DAY`, `BOT_SPOT_PROVEN_EDGE`,
+`BOT_SPOT_REQUIRE_PROVEN_EDGE`, `BOT_SPOT_DECISION_MODE`, ...) are
 ignored; the trader logs one warning listing any that are still set.
 
-Cost control (not a trading gate): `CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD`
-(0 = unlimited). Model and thinking level: `CLAUDE_SPOT_MODEL` (default
+Cost control (not a trading gate): `BOT_SPOT_MAX_DAILY_LLM_COST_USD`
+(0 = unlimited). Model and thinking level: `BOT_SPOT_MODEL` (default
 `anthropic/claude-haiku-5-5`; use provider-qualified ids, a bare `haiku-5.5`
-can resolve to another provider), `CLAUDE_SPOT_THINKING` (default `high`).
+can resolve to another provider), `BOT_SPOT_THINKING` (default `high`).
 
-Model failover: `CLAUDE_SPOT_FALLBACK_MODELS` (comma list of
+Model failover: `BOT_SPOT_FALLBACK_MODELS` (comma list of
 `provider/model-id[:thinking]`, default empty = off; the approved chain is
 `openai-codex/gpt-6.1-sol` at `high` then
 `google-antigravity/gemini-4-argon-high:high`; use the exact id from
 `omp models <provider>` inside the container, the trader's switch does no fuzzy
-matching), `CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS` (150,
+matching), `BOT_SPOT_PRIMARY_TIMEOUT_SECONDS` (150,
 primary per-attempt timeout while fallbacks exist),
-`CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS` (1800) and
-`CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3, 0 = never). A failed turn is retried
+`BOT_SPOT_FALLBACK_COOLDOWN_SECONDS` (1800) and
+`BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3, 0 = never). A failed turn is retried
 on the next model only when the failed attempt made no `execute_route` call
 and recorded no `end_cycle`; a failed compaction moves to the next model and
 compacts there. Model switches and brain outages are Telegram notices sent
@@ -400,13 +400,13 @@ below. A turn that failed on every model holds with
 
 ### Hard safety (always on, fail closed)
 
-- Live arming: `CLAUDE_SPOT_ENABLED=true`,
-  `CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
+- Live arming: `BOT_SPOT_ENABLED=true`,
+  `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
   `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`.
-- The emergency stop file `data/claude-spot.stop` (`CLAUDE_SPOT_STOP_PATH`),
+- The emergency stop file `data/bot-spot.stop` (`BOT_SPOT_STOP_PATH`),
   checked at cycle start, before every route, before every leg and before
   every order.
-- An exclusive run lock (`CLAUDE_SPOT_LOCK_PATH`).
+- An exclusive run lock (`BOT_SPOT_LOCK_PATH`).
 - Account READING plus canTrade.
 - Binance `order/test` before every leg.
 - Exchange filters, with orders sized from live balances net of a fee,
@@ -414,35 +414,35 @@ below. A turn that failed on every model holds with
 - Per-leg fill reconciliation, halting on anything ambiguous.
 - The failed-route halt (below).
 - Operator scope: allow/block lists, blocked quotes, fiat blocking.
-- Spot MARKET orders only, at most `CLAUDE_SPOT_MAX_ROUTE_LEGS` legs.
+- Spot MARKET orders only, at most `BOT_SPOT_MAX_ROUTE_LEGS` legs.
 - Margin, futures, transfer, withdrawal, and prediction writes are unavailable.
 
-Each route or cycle is one fsync'd row in `CLAUDE_SPOT_AUDIT_PATH` (default
-`data/claude-spot-decisions.jsonl`), written before any Telegram alert, with
+Each route or cycle is one fsync'd row in `BOT_SPOT_AUDIT_PATH` (default
+`data/bot-spot-decisions.jsonl`), written before any Telegram alert, with
 tool calls, tokens and cost.
 
 ### Commands
 
 ```bash
-bb claude-spot --evidence-only                 # decision context, no Claude, no orders
-bb claude-spot --plan-only                     # Claude decides; execute_route only records plans
-bb claude-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
-bb claude-spot --mark-failed-route-reviewed --review-reason "reconciled by hand"
+bb bot-spot --evidence-only                 # decision context, no LLM call, no orders
+bb bot-spot --plan-only                     # The bot decides; execute_route only records plans
+bb bot-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
+bb bot-spot --mark-failed-route-reviewed --review-reason "reconciled by hand"
 ```
 
 ### Deployment
 
-Claude Spot is a long-running daemon, not a timer:
+Bot Spot is a long-running daemon, not a timer:
 
-- Docker: compose service `claude-spot` (profiles `live` and `all`), running
-  `bb claude-spot --submit-live --daemon --interval-seconds 1200` (every 20
+- Docker: compose service `bot-spot` (profiles `live` and `all`), running
+  `bb bot-spot --submit-live --daemon --interval-seconds 1200` (every 20
   minutes since 2026-10-15: Sonnet 5.5 on the subscription cannot sustain
   4-minute cycles).
-- systemd: `binance-claude-spot.service` (same command, `Restart=always`):
+- systemd: `binance-bot-spot.service` (same command, `Restart=always`):
 
 ```bash
-systemctl --user enable --now binance-claude-spot.service
-journalctl --user -u binance-claude-spot.service -f
+systemctl --user enable --now binance-bot-spot.service
+journalctl --user -u binance-bot-spot.service -f
 ```
 
 The service always passes `--submit-live`; whether it trades is decided by the
@@ -450,54 +450,54 @@ live arming variables in `.env` and the stop file.
 
 ### Exit plans (Phase 45)
 
-Claude may give an open position a sell plan with the `set_exit_plan` tool
+The bot may give an open position a sell plan with the `set_exit_plan` tool
 (fixed menu: follow the peak by percent or ATR, take part, stretch, slowdown,
 momentum fade, deadline; setting again replaces it, `clear` removes it).
-Positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` run
-`CLAUDE_SPOT_DEFAULT_EXIT_PLAN` (`.env.docker`: `deadline=120`, sell all 2
+Positions opened from `BOT_SPOT_DEFAULT_EXIT_PLAN_FROM` run
+`BOT_SPOT_DEFAULT_EXIT_PLAN` (`.env.docker`: `deadline=120`, sell all 2
 hours after entry; v7 used `stretch=2:1,atr=3:1h`)
-unless Claude sets its own plan; in the v7 runs it set deadline plans
+unless the bot sets its own plan; in the v7 runs it set deadline plans
 (`deadline=60..180`). This is the v7 system restored on 2026-10-17 (branch
 `old-gold-way`) after the fixed plan and the locked rules cut winners short.
 `stretch` fires only when its line is above break-even (entry plus the buy
 and sell fees at the trip's fee rate), so it cannot sell a fee-negative
 "win" (UNI 2026-10-16, ZEC 2026-10-17).
 
-- **Live** (`CLAUDE_SPOT_EXIT_PLANS_LIVE=true`, deployed since 2026-10-15):
-  between cycles `claude-spot` checks each planned position's bid every
-  `CLAUDE_SPOT_EXIT_POLL_SECONDS` (5) and sells it into USDT when its plan
-  fires, through the same hard safety as Claude's routes. Each sell is a
+- **Live** (`BOT_SPOT_EXIT_PLANS_LIVE=true`, deployed since 2026-10-15):
+  between cycles `bot-spot` checks each planned position's bid every
+  `BOT_SPOT_EXIT_POLL_SECONDS` (5) and sells it into USDT when its plan
+  fires, through the same hard safety as the bot's routes. Each sell is a
   route row with `cycle_id` `exit-plan` in the audit and a Telegram alert;
   the watch log records `would_sell`, `sold`, `sell_failed` and
   `sell_abandoned`. The emergency stop file stops these sells too. To turn
-  live plans off, set `CLAUDE_SPOT_EXIT_PLANS_LIVE=false` and recreate
-  `claude-spot`.
-- **Paper** (`CLAUDE_SPOT_EXIT_PLANS_LIVE=false`): compose service
-  `claude-spot-exit-watch` (profile `exit-paper`) or
-  `binance-claude-spot-exit-watch.service` records would-be sells and places
+  live plans off, set `BOT_SPOT_EXIT_PLANS_LIVE=false` and recreate
+  `bot-spot`.
+- **Paper** (`BOT_SPOT_EXIT_PLANS_LIVE=false`): compose service
+  `bot-spot-exit-watch` (profile `exit-paper`) or
+  `binance-bot-spot-exit-watch.service` records would-be sells and places
   no orders. It refuses to start while plans run live.
-- Files: `CLAUDE_SPOT_EXIT_PLANS_PATH` (written by the trader's tool),
-  `CLAUDE_SPOT_EXIT_WATCH_STATE_PATH` and `CLAUDE_SPOT_EXIT_WATCH_LOG_PATH`
+- Files: `BOT_SPOT_EXIT_PLANS_PATH` (written by the trader's tool),
+  `BOT_SPOT_EXIT_WATCH_STATE_PATH` and `BOT_SPOT_EXIT_WATCH_LOG_PATH`
   (written by whichever of the two runs). The cycle prompt shows each plan
   and the 5 newest closed positions with the rule that sold, prices and the
   net result after fees (watch state `recent_closed`); trade history marks
   plan sells with the plan, rule, share and trigger price (`exit_plan`).
-- Results: `bb claude-spot-exit-watch --summary` compares, for each closed
-  position with a plan, "with the plan" and "Claude alone".
+- Results: `bb bot-spot-exit-watch --summary` compares, for each closed
+  position with a plan, "with the plan" and "The bot alone".
 
 ### omp authentication
 
-omp needs Claude credentials once per data directory: either set
+omp needs model credentials once per data directory: either set
 `ANTHROPIC_API_KEY` in `.env`, or log in once interactively with `omp`
 (`/login`, then exit). omp stores credentials, settings and sessions under
 `PI_CODING_AGENT_DIR`; the Docker image sets it to `/app/data/omp-agent`, on
 the persistent data volume, so the login survives container recreation.
 
 ```bash
-docker compose run --rm -it claude-spot omp
+docker compose run --rm -it bot-spot omp
 ```
 
-The brain chain (`CLAUDE_SPOT_MODEL` then `CLAUDE_SPOT_FALLBACK_MODELS`) needs
+The brain chain (`BOT_SPOT_MODEL` then `BOT_SPOT_FALLBACK_MODELS`) needs
 one login per provider in that same directory: `openai-codex` (device flow)
 and `google-antigravity` (`anthropic` too while omp's own chains use it).
 `omp usage` inside the container shows each account's 5-hour and 7-day
@@ -524,8 +524,8 @@ halts. To resume: stop the trader (stop file or service), reconcile the Spot
 wallet against the audit row by hand, then append the review marker:
 
 ```bash
-bb claude-spot --mark-failed-route-reviewed --review-reason "<what you checked>"
-docker compose run --rm claude-spot bb claude-spot --mark-failed-route-reviewed
+bb bot-spot --mark-failed-route-reviewed --review-reason "<what you checked>"
+docker compose run --rm bot-spot bb bot-spot --mark-failed-route-reviewed
 ```
 
 The halt is recomputed from the audit log, so the next cycle sees the marker.
@@ -533,16 +533,16 @@ Remove the stop file to resume.
 
 ### Backtesting
 
-`bb claude-spot-backtest` replays Claude Spot's cost-aware momentum rule
+`bb bot-spot-backtest` replays Bot Spot's cost-aware momentum rule
 against historical klines. It is research only; its verdict no longer gates
 live trading.
 
 ```bash
-bb claude-spot-backtest \
+bb bot-spot-backtest \
   --symbols BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT \
   --interval 1h \
   --start 2026-01-01 --end 2026-05-01 \
-  --output data/claude-spot-backtest.json
+  --output data/bot-spot-backtest.json
 ```
 
 The JSON output includes a `verdict`: `edge_likely` (Sharpe > 1 and total
@@ -550,7 +550,7 @@ return > 0), `edge_marginal` (positive return, modest Sharpe), `no_edge` (did
 not clear its cost bar), or `no_trades` / `no_data` (insufficient window or
 signals; rerun with more data).
 
-## Capital Pool, Claude Allocator, Auto-Convert
+## Capital Pool, Bot Allocator, Auto-Convert
 
 `bb capital-pool` shows the capital plan and persisted state
 (`CAPITAL_POOL_STATE_FILE`, default `data/capital-pool-state.json`): a reserve
@@ -562,15 +562,15 @@ wallet total; override with `--equity-usdt`.
 
 ```bash
 bb capital-pool
-bb capital-pool --advise          # ask the Claude allocator once
+bb capital-pool --advise          # ask the bot allocator once
 bb capital-pool --advise --json
 ```
 
-`--advise` runs the Claude allocator, an omp session
-(`CLAUDE_ALLOCATOR_MODEL`, `CLAUDE_ALLOCATOR_SESSION_DIR`) with
+`--advise` runs the bot allocator, an omp session
+(`BOT_ALLOCATOR_MODEL`, `BOT_ALLOCATOR_SESSION_DIR`) with
 fleet/scorecard/balance tools. Its proposal can only clamp within the
 deterministic bounds; any failure falls back to the deterministic plan. It
-needs the same omp authentication as Claude Spot.
+needs the same omp authentication as Bot Spot.
 
 With `CAPITAL_POOL_ENABLED=true` the `bb main` runtime requests a lease before
 every buy. With `AUTO_CONVERT_TO_QUOTE=true` it market-sells
@@ -662,7 +662,7 @@ rebalances every `TREND_FILTER_REBALANCE_EVERY_DAYS` into the top
 - Any failed or skipped order keeps the previous rebalance timestamp, so the
   next daily run retries instead of waiting a full rebalance period.
 
-The trend filter sizes from the shared wallet's free USDT, which Claude Spot
+The trend filter sizes from the shared wallet's free USDT, which Bot Spot
 also trades.
 
 ## Delta-Neutral Funding-Rate Harvest
@@ -1008,7 +1008,7 @@ may be run as a background automatic asset-conversion runtime.
 
 ## Live Readiness Gate
 
-This gate governs real paper-pool reallocation. It does not apply to Claude
+This gate governs real paper-pool reallocation. It does not apply to Bot
 Spot, which is a separately approved live runtime (see above).
 
 Do not implement or activate real pool reallocations until all of these gates

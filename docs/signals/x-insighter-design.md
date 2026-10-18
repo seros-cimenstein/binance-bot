@@ -550,7 +550,7 @@ pre-registration.
 ## Non-goals
 
 Private chats or DMs, posting or engaging from the account, coordinating or
-promoting pumps, any change to Claude Spot, any execution path.
+promoting pumps, any change to Bot Spot, any execution path.
 
 ## Risks and pre-mortem
 

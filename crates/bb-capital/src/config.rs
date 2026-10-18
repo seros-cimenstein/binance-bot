@@ -14,12 +14,12 @@ pub const DEFAULT_RESERVE_PCT: Decimal = Decimal::from_parts(40, 0, 0, false, 0)
 pub const DEFAULT_MAX_MODULE_ALLOCATION_USD: Decimal = Decimal::from_parts(25, 0, 0, false, 0);
 /// `CAPITAL_AI_ADVISOR_TIMEOUT_SECONDS` default.
 pub const DEFAULT_ADVISOR_TIMEOUT_SECONDS: f64 = 8.0;
-/// `CLAUDE_ALLOCATOR_TIMEOUT_SECONDS` default.
-pub const DEFAULT_CLAUDE_TIMEOUT_SECONDS: f64 = 45.0;
+/// `BOT_ALLOCATOR_TIMEOUT_SECONDS` default.
+pub const DEFAULT_BOT_TIMEOUT_SECONDS: f64 = 45.0;
 /// `CAPITAL_POOL_STATE_FILE` default.
 pub const DEFAULT_STATE_FILE: &str = "data/capital-pool-state.json";
-/// `CLAUDE_ALLOCATOR_SESSION_DIR` default.
-pub const DEFAULT_SESSION_DIR: &str = "data/claude-allocator-session";
+/// `BOT_ALLOCATOR_SESSION_DIR` default.
+pub const DEFAULT_SESSION_DIR: &str = "data/bot-allocator-session";
 /// `AUTO_CONVERT_AUDIT_PATH` default.
 pub const DEFAULT_CONVERT_AUDIT_PATH: &str = "data/auto-convert-audit.jsonl";
 
@@ -109,7 +109,7 @@ impl CapitalPoolConfig {
 pub struct AdvisorConfig {
     /// `CAPITAL_AI_ADVISOR_ENABLED` (false).
     pub enabled: bool,
-    /// `CAPITAL_AI_ADVISOR_FILE`: proposal JSON read before asking Claude.
+    /// `CAPITAL_AI_ADVISOR_FILE`: proposal JSON read before asking the bot.
     pub proposal_file: Option<PathBuf>,
     /// `CAPITAL_AI_ADVISOR_TIMEOUT_SECONDS` (8): budget for one advisory call from the pool.
     pub timeout: Duration,
@@ -120,7 +120,7 @@ impl AdvisorConfig {
         if let Some(cmd) = env::optional_string(&["CAPITAL_AI_ADVISOR_CMD"]) {
             tracing::warn!(
                 %cmd,
-                "CAPITAL_AI_ADVISOR_CMD is ignored: the Claude allocator now runs through omp (CLAUDE_ALLOCATOR_*)"
+                "CAPITAL_AI_ADVISOR_CMD is ignored: the bot allocator now runs through omp (BOT_ALLOCATOR_*)"
             );
         }
         Ok(Self {
@@ -137,40 +137,40 @@ impl AdvisorConfig {
     }
 }
 
-/// The omp-backed Claude allocator (`CLAUDE_ALLOCATOR_*`).
+/// The omp-backed bot allocator (`BOT_ALLOCATOR_*`).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ClaudeAllocatorConfig {
-    /// `CLAUDE_ALLOCATOR_OMP_COMMAND` (`omp`).
+pub struct BotAllocatorConfig {
+    /// `BOT_ALLOCATOR_OMP_COMMAND` (`omp`).
     pub command: String,
-    /// `CLAUDE_ALLOCATOR_MODEL` (`sonnet`).
+    /// `BOT_ALLOCATOR_MODEL` (`sonnet`).
     pub model: String,
-    /// `CLAUDE_ALLOCATOR_TIMEOUT_SECONDS` (45): one Claude turn.
+    /// `BOT_ALLOCATOR_TIMEOUT_SECONDS` (45): one bot turn.
     pub timeout: Duration,
-    /// `CLAUDE_ALLOCATOR_SESSION_DIR` (`data/claude-allocator-session`): persistent context.
+    /// `BOT_ALLOCATOR_SESSION_DIR` (`data/bot-allocator-session`): persistent context.
     pub session_dir: PathBuf,
     /// Compact the persistent context once it passes this share of the window.
     pub compact_at_percent: f64,
 }
 
-impl ClaudeAllocatorConfig {
+impl BotAllocatorConfig {
     pub fn from_env() -> Result<Self> {
-        if env::optional_string(&["CLAUDE_ALLOCATOR_MAX_BUDGET_USD"]).is_some() {
+        if env::optional_string(&["BOT_ALLOCATOR_MAX_BUDGET_USD"]).is_some() {
             tracing::warn!(
-                "CLAUDE_ALLOCATOR_MAX_BUDGET_USD is ignored by the omp allocator session"
+                "BOT_ALLOCATOR_MAX_BUDGET_USD is ignored by the omp allocator session"
             );
         }
         Ok(Self {
-            command: env::string(&["CLAUDE_ALLOCATOR_OMP_COMMAND"], "omp"),
-            model: env::string(&["CLAUDE_ALLOCATOR_MODEL"], "sonnet"),
+            command: env::string(&["BOT_ALLOCATOR_OMP_COMMAND"], "omp"),
+            model: env::string(&["BOT_ALLOCATOR_MODEL"], "sonnet"),
             timeout: positive_duration(
                 env::float(
-                    &["CLAUDE_ALLOCATOR_TIMEOUT_SECONDS"],
-                    DEFAULT_CLAUDE_TIMEOUT_SECONDS,
+                    &["BOT_ALLOCATOR_TIMEOUT_SECONDS"],
+                    DEFAULT_BOT_TIMEOUT_SECONDS,
                 )?,
-                "CLAUDE_ALLOCATOR_TIMEOUT_SECONDS",
+                "BOT_ALLOCATOR_TIMEOUT_SECONDS",
             )?,
             session_dir: PathBuf::from(env::string(
-                &["CLAUDE_ALLOCATOR_SESSION_DIR"],
+                &["BOT_ALLOCATOR_SESSION_DIR"],
                 DEFAULT_SESSION_DIR,
             )),
             compact_at_percent: 70.0,

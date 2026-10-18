@@ -131,7 +131,7 @@ pub enum Feature {
     ManualLiveProbe,
     SpotLiveCanary,
     SpotLivePool,
-    ClaudeSpotAutonomous,
+    BotSpotAutonomous,
     MarginDryRun,
     MarginCanaryPlan,
     MarginTrading,
@@ -169,7 +169,7 @@ impl Feature {
         Self::ManualLiveProbe,
         Self::SpotLiveCanary,
         Self::SpotLivePool,
-        Self::ClaudeSpotAutonomous,
+        Self::BotSpotAutonomous,
         Self::MarginDryRun,
         Self::MarginCanaryPlan,
         Self::MarginTrading,
@@ -195,7 +195,7 @@ impl Feature {
             Self::ManualLiveProbe => "manual_live_probe",
             Self::SpotLiveCanary => "spot_live_canary",
             Self::SpotLivePool => "spot_live_pool",
-            Self::ClaudeSpotAutonomous => "claude_spot_autonomous",
+            Self::BotSpotAutonomous => "bot_spot_autonomous",
             Self::MarginDryRun => "margin_dry_run",
             Self::MarginCanaryPlan => "margin_canary_plan",
             Self::MarginTrading => "margin_trading",
@@ -222,10 +222,10 @@ impl Feature {
             Self::ManualLiveProbe => (READ_SPOT, true, "foreground one-shot live probe"),
             Self::SpotLiveCanary => (READ_SPOT, true, "foreground tiny spot live canary"),
             Self::SpotLivePool => (READ_SPOT, true, "foreground guarded live spot allocator"),
-            Self::ClaudeSpotAutonomous => (
+            Self::BotSpotAutonomous => (
                 READ_SPOT,
                 true,
-                "Claude-controlled autonomous Spot allocator",
+                "bot-controlled autonomous Spot allocator",
             ),
             Self::MarginDryRun => (
                 READ,
@@ -1003,8 +1003,8 @@ mod tests {
             assert_eq!(feature.as_str().parse::<Feature>().unwrap(), feature);
         }
         assert_eq!(
-            " Claude-Spot-Autonomous ".parse::<Feature>().unwrap(),
-            Feature::ClaudeSpotAutonomous
+            " Bot-Spot-Autonomous ".parse::<Feature>().unwrap(),
+            Feature::BotSpotAutonomous
         );
         assert!(matches!(
             "nope".parse::<Feature>(),
@@ -1039,8 +1039,8 @@ mod tests {
             check(Capability::SpotTrading, CapabilityStatus::Skipped),
             check(Capability::Withdrawals, CapabilityStatus::PolicyBlocked),
         ];
-        let claude = evaluate_feature(&caps, Feature::ClaudeSpotAutonomous);
-        assert_eq!(claude.unknown_capabilities, vec![Capability::SpotTrading]);
+        let bot = evaluate_feature(&caps, Feature::BotSpotAutonomous);
+        assert_eq!(bot.unknown_capabilities, vec![Capability::SpotTrading]);
         let withdrawals = evaluate_feature(&caps, Feature::Withdrawals);
         assert!(!withdrawals.implemented);
         assert_eq!(
@@ -1232,7 +1232,7 @@ mod tests {
         let client = mock_client(&server);
         let options = InspectOptions {
             include_spot_order_test: false,
-            features: vec![Feature::ClaudeSpotAutonomous],
+            features: vec![Feature::BotSpotAutonomous],
             ..InspectOptions::default()
         };
         let report = inspect_api_permissions(&settings(), &client, &options)
@@ -1245,7 +1245,7 @@ mod tests {
         assert_eq!(report.spot_test_symbol, None);
         assert!(
             !report
-                .feature(Feature::ClaudeSpotAutonomous)
+                .feature(Feature::BotSpotAutonomous)
                 .unwrap()
                 .allowed
         );

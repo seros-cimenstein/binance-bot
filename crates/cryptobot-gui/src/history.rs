@@ -1,4 +1,4 @@
-//! Claude Spot trade history from the whole audit log.
+//! Bot Spot trade history from the whole audit log.
 //!
 //! Every submitted route opens one trade in its destination asset. The trade closes at the
 //! first later submitted route that sells that asset. Amounts come from the orders the
@@ -68,7 +68,7 @@ pub struct RouteRecord {
     pub destination_asset: String,
     pub reason: String,
     pub legs: usize,
-    /// Sold by an exit plan between cycles (`cycle_id` [`EXIT_CYCLE_ID`]), not by Claude.
+    /// Sold by an exit plan between cycles (`cycle_id` [`EXIT_CYCLE_ID`]), not by the bot.
     pub exit_plan: bool,
     pub valuation: Valuation,
     /// Source quantity given up and the USDT it fetched (fills: before fees).
@@ -369,7 +369,7 @@ pub enum TradeStatus {
     Cash,
     /// Still held; P&L is unrealized.
     Open,
-    /// Never sold by Claude and no longer in the wallet (or not valued).
+    /// Never sold by the bot and no longer in the wallet (or not valued).
     Unknown,
 }
 
@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn filled_round_trip_uses_the_fills_not_the_planned_spend_and_subtracts_both_fees() {
-        // Claude planned 10 USDT; the order filled 53.07 ENA for 9.934704 (reserve kept back).
+        // The bot planned 10 USDT; the order filled 53.07 ENA for 9.934704 (reserve kept back).
         // The exit plan sold all 53.07 for 9.950625. Each order paid 0.00001 BNB at 700.
         let rows = [
             filled_row("2026-10-15T11:56:06Z", "USDT", "ENA", "53.07", "9.934704", 10.0, 0.00001),

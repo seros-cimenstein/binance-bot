@@ -1,4 +1,4 @@
-//! Fiat currency codes (Python `src.claude_spot.CLAUDE_SPOT_FIAT_ASSETS`). Binance lists fiat rails
+//! Fiat currency codes (Python `src.claude_spot.BOT_SPOT_FIAT_ASSETS`). Binance lists fiat rails
 //! (TRY, EUR, ...) as spot assets that many accounts cannot trade via the API; universes exclude them.
 
 /// ISO-4217 fiat codes treated as non-tradeable "assets", sorted for binary search.

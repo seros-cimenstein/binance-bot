@@ -5,6 +5,20 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-18 (05:30 UTC): Health check (operator: "check the bot"; no
+  code or config change). Pi `claude-spot` up 15 h on the 14:38 deploy,
+  no stop file, no failed-route halt, no WARN/ERROR in the log except one
+  `compact timed out after 180s` (sol, 23:18 UTC): cycles 667-668 ran on
+  the argon fallback, then sol again from 00:06. 41 cycles since deploy,
+  ~21-min cadence, every turn completed. 9 round trips closed (4 wins),
+  net after fees about -0.155 USDT; wallet 18.03 -> 17.87 USDT; 7 of 9
+  closed by Claude before the `deadline=90` plan, 1 by the plan (AAVE
+  +0.06). Open: 0.028 BCH bought 05:12 at 277.2, plan deadline 06:42 UTC.
+  Finding: context sits at ~100-118k tokens against
+  `CLAUDE_SPOT_COMPACT_AT_TOKENS=100000`, so a compaction runs before
+  most cycles (14 of ~21 from 21:44 to 05:09, every cycle since 02:57); that is where the one
+  timeout came from. Left for the operator: raise the token threshold or
+  accept the per-cycle compaction.
 - 2026-10-17 (night, 3): Dashboard lists each trade as its sale (operator:
   "USDT -> coin with a loss is stupid; show coin -> USDT"). Dashboard only;
   the trader is unchanged. `Trade.closed_into` (the closing route's

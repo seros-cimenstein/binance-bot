@@ -47,7 +47,7 @@ impl ScopeConfig {
         }
         if self.blocked_assets.contains(&normalized) {
             return Some(format!(
-                "asset {normalized} is in Claude Spot local blocklist"
+                "asset {normalized} is in Bot Spot local blocklist"
             ));
         }
         if self.block_fiat_assets && is_fiat(&normalized) {
@@ -55,7 +55,7 @@ impl ScopeConfig {
         }
         if !self.allowed_assets.is_empty() && !self.allowed_assets.contains(&normalized) {
             return Some(format!(
-                "asset {normalized} is outside Claude Spot local allowlist"
+                "asset {normalized} is outside Bot Spot local allowlist"
             ));
         }
         None
@@ -63,10 +63,10 @@ impl ScopeConfig {
 
     fn symbol_block_reason(&self, symbol: &str) -> Option<String> {
         if symbol_matches(&self.blocked_symbols, symbol) {
-            return Some("symbol is in Claude Spot local blocklist".into());
+            return Some("symbol is in Bot Spot local blocklist".into());
         }
         if !self.allowed_symbols.is_empty() && !symbol_matches(&self.allowed_symbols, symbol) {
-            return Some("symbol is outside Claude Spot local allowlist".into());
+            return Some("symbol is outside Bot Spot local allowlist".into());
         }
         None
     }
@@ -80,7 +80,7 @@ impl ScopeConfig {
         let quote = market.quote.trim().to_uppercase();
         if self.blocked_quotes.contains(&quote) {
             return Some(format!(
-                "quote asset {quote} is in Claude Spot local blocklist"
+                "quote asset {quote} is in Bot Spot local blocklist"
             ));
         }
         [&market.base, &market.quote]
@@ -97,7 +97,7 @@ impl ScopeConfig {
         let (base, quote) = split_symbol(&symbol);
         if !quote.is_empty() && self.blocked_quotes.iter().any(|blocked| *blocked == quote) {
             return Some(format!(
-                "quote asset {quote} is in Claude Spot local blocklist"
+                "quote asset {quote} is in Bot Spot local blocklist"
             ));
         }
         [
@@ -275,7 +275,7 @@ pub(crate) mod tests {
         );
         let reason = scope(&["IDR"], false).route_block_reason(&route).unwrap();
         assert!(
-            reason.contains("quote asset IDR is in Claude Spot local blocklist"),
+            reason.contains("quote asset IDR is in Bot Spot local blocklist"),
             "{reason}"
         );
         assert!(scope(&["IDR"], false).assert_route_allowed(&route).is_err());
@@ -314,7 +314,7 @@ pub(crate) mod tests {
             scope
                 .route_block_reason(&bad)
                 .unwrap()
-                .contains("outside Claude Spot local allowlist")
+                .contains("outside Bot Spot local allowlist")
         );
         let assets =
             ScopeConfig::new(&[], &["btc".into(), "usdt".into()], &[], &[], &[], true).unwrap();

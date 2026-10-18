@@ -193,7 +193,7 @@ impl HaikuSettings {
     }
 }
 
-/// [`Insighter`] backed by Claude through omp RPC.
+/// [`Insighter`] backed by Claude Haiku through omp RPC.
 #[derive(Debug, Clone)]
 pub struct OmpInsighter {
     settings: HaikuSettings,

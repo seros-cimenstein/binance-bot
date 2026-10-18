@@ -1,15 +1,15 @@
 [Unit]
-Description=Binance Claude Spot exit-plan paper watcher (Phase 45, no orders)
+Description=Binance Bot Spot exit-plan paper watcher (Phase 45, no orders)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Follows the bid of every position Claude gave an exit plan (set_exit_plan) and
+# Follows the bid of every position the bot gave an exit plan (set_exit_plan) and
 # records what the plan would have sold. Public market data only; places no orders.
 Type=simple
 WorkingDirectory=%h/.local/share/binance-bot
 EnvironmentFile=%h/.local/share/binance-bot/.env
-ExecStart=%h/.local/share/binance-bot/bin/bb claude-spot-exit-watch --daemon --poll-seconds 5
+ExecStart=%h/.local/share/binance-bot/bin/bb bot-spot-exit-watch --daemon --poll-seconds 5
 Restart=always
 RestartSec=30
 StandardOutput=journal

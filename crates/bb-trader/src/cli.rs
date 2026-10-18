@@ -1,4 +1,4 @@
-//! `claude-spot` command (port of `python -m src.claude_spot`).
+//! `bot-spot` command (port of `python -m src.claude_spot`).
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -18,23 +18,23 @@ use crate::error::{Result, TraderError};
 /// Trader commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Run the Claude agentic Spot trader (one cycle, or a daemon with --daemon).
-    ClaudeSpot(ClaudeSpotArgs),
-    /// Replay the exit-plan menu on Claude Spot's real round trips (public klines, no orders).
-    ClaudeSpotExitReplay(crate::exit_replay::ExitReplayArgs),
+    /// Run the agentic Spot trader (one cycle, or a daemon with --daemon).
+    BotSpot(BotSpotArgs),
+    /// Replay the exit-plan menu on Bot Spot's real round trips (public klines, no orders).
+    BotSpotExitReplay(crate::exit_replay::ExitReplayArgs),
     /// Paper exit-plan watcher: follows bids between cycles, records would-be sells (no orders).
-    ClaudeSpotExitWatch(crate::exit_watch::ExitWatchArgs),
+    BotSpotExitWatch(crate::exit_watch::ExitWatchArgs),
 }
 
 #[derive(clap::Args, Debug, Clone)]
-pub struct ClaudeSpotArgs {
+pub struct BotSpotArgs {
     /// Place real Spot orders when every live arming flag is set.
     #[arg(long)]
     pub submit_live: bool,
-    /// Ask Claude; execute_route only records plans (overrides --submit-live).
+    /// Ask the bot; execute_route only records plans (overrides --submit-live).
     #[arg(long)]
     pub plan_only: bool,
-    /// Print the decision context without asking Claude or submitting orders.
+    /// Print the decision context without asking the bot or submitting orders.
     #[arg(long)]
     pub evidence_only: bool,
     /// Append an operator-review audit marker that clears the failed-route halt.
@@ -52,21 +52,21 @@ pub struct ClaudeSpotArgs {
 
 pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
     match cmd {
-        Command::ClaudeSpot(args) => Ok(match claude_spot(args).await {
+        Command::BotSpot(args) => Ok(match bot_spot(args).await {
             Ok(code) => code,
             Err(error) => {
-                eprintln!("Claude Spot failed: {error}");
+                eprintln!("Bot Spot failed: {error}");
                 ExitCode::FAILURE
             }
         }),
-        Command::ClaudeSpotExitReplay(args) => Ok(match crate::exit_replay::run_cli(args).await {
+        Command::BotSpotExitReplay(args) => Ok(match crate::exit_replay::run_cli(args).await {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("Exit-plan replay failed: {error}");
                 ExitCode::FAILURE
             }
         }),
-        Command::ClaudeSpotExitWatch(args) => Ok(match crate::exit_watch::run_cli(args).await {
+        Command::BotSpotExitWatch(args) => Ok(match crate::exit_watch::run_cli(args).await {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("Exit-plan watcher failed: {error}");
@@ -92,14 +92,14 @@ fn print_json(value: &serde_json::Value) -> Result<()> {
 fn stop_guard(config: &TraderConfig) -> Result<()> {
     if bb_core::fsutil::stop_requested(&config.stop_path) {
         return Err(TraderError::safety(format!(
-            "Claude Spot emergency stop is active: {}",
+            "Bot Spot emergency stop is active: {}",
             config.stop_path.display()
         )));
     }
     Ok(())
 }
 
-async fn claude_spot(args: ClaudeSpotArgs) -> Result<ExitCode> {
+async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
     let config = Arc::new(TraderConfig::from_env()?);
     if args.mark_failed_route_reviewed {
         let path = mark_failed_route_reviewed(&config, &args.review_reason)?;
@@ -182,7 +182,7 @@ async fn claude_spot(args: ClaudeSpotArgs) -> Result<ExitCode> {
                     trader.close().await;
                     return Err(error);
                 }
-                tracing::error!(%error, "Claude Spot cycle failed");
+                tracing::error!(%error, "Bot Spot cycle failed");
             }
         }
         if !args.daemon || shutdown.is_cancelled() {

@@ -1,5 +1,5 @@
 //! Guarded AI allocation advisor (refactor `src/capital/advisor.py`): the deterministic plan is
-//! always computed first; a proposal (file or Claude) may only move budgets inside the
+//! always computed first; a proposal (file or the bot) may only move budgets inside the
 //! deterministic bounds (global cap, allocatable pool, minimum), and any failure falls back.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -539,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_allocation_proposal_from_claude_json_wrapper() {
+    fn extract_allocation_proposal_from_bot_json_wrapper() {
         let raw = json!({"type": "result", "result": "```json\n{\n  \"allocations\": [\n    {\"module_id\": \"spot-breakout-trader:SOL/USDT\", \"status\": \"paused\", \"max_usdt\": 0, \"reason\": \"ai_no_evidence\"}\n  ]\n}\n```"})
             .to_string();
         let proposal = extract_allocation_proposal(&raw).unwrap();

@@ -1,12 +1,12 @@
-//! Capital: the shared allocator, per-order capital pool, Claude allocation advisor (omp), quote
+//! Capital: the shared allocator, per-order capital pool, bot allocation advisor (omp), quote
 //! auto-convert, fleet status and the advisory cash distributor.
 //!
-//! - [`config`]: `CAPITAL_*`, `CAPITAL_AI_ADVISOR_*`, `CLAUDE_ALLOCATOR_*`, `AUTO_CONVERT_*`.
+//! - [`config`]: `CAPITAL_*`, `CAPITAL_AI_ADVISOR_*`, `BOT_ALLOCATOR_*`, `AUTO_CONVERT_*`.
 //! - [`scorecard`]: module scorecards from fills or JSONL ledgers (one ledger reader).
 //! - [`allocator`]: the one deterministic allocator (reserve, floors, score weights, caps).
 //! - [`pool`]: [`pool::CapitalPool`] — per-buy leases, usage ledger, JSON state.
-//! - [`advisor`]: guarded proposals (file / Claude), schema validation, clamping.
-//! - [`claude`]: the persistent omp allocator session and its host tools.
+//! - [`advisor`]: guarded proposals (file / bot), schema validation, clamping.
+//! - [`bot`]: the persistent omp allocator session and its host tools.
 //! - [`convert`]: [`convert::ensure_quote_for_order`] for runtimes that place buys.
 //! - [`wallet`], [`status`]: wallet snapshot and fleet status (`bot-status`).
 //! - [`distributor`]: advisory share plan (`cash-distributor`). [`cli`]: commands.
@@ -15,7 +15,7 @@
 
 pub mod advisor;
 pub mod allocator;
-pub mod claude;
+pub mod bot;
 pub mod cli;
 pub mod config;
 pub mod convert;
@@ -30,8 +30,8 @@ pub use advisor::{AllocationContext, GuardedAdvisor, ProposalProvider, guard_pro
 pub use allocator::{
     AllocationPlan, AllocationStatus, AllocationUnit, ModuleAllocation, Scoring, build_plan,
 };
-pub use claude::{ClaudeAllocator, FleetSource, LiveFleet, guarded_advisor_from_env};
-pub use config::{AdvisorConfig, AutoConvertConfig, CapitalPoolConfig, ClaudeAllocatorConfig};
+pub use bot::{BotAllocator, FleetSource, LiveFleet, guarded_advisor_from_env};
+pub use config::{AdvisorConfig, AutoConvertConfig, CapitalPoolConfig, BotAllocatorConfig};
 pub use convert::{
     AutoConversionResult, ConvertExchange, ConvertMode, FundingRequest, ensure_quote_for_order,
 };

@@ -27,12 +27,25 @@ fn millis(text: &str) -> Option<i64> {
         .map(|t| t.with_timezone(&Utc).timestamp_millis())
 }
 
-/// `claude-spot-v11-agentic` -> `v11`.
+/// `bot-spot-v11-agentic` -> `v11`. Audit rows from before the 2026-10-18 rename carry
+/// `claude-spot-v*-agentic`; the audit log is never rewritten, so both prefixes name the
+/// same prompt.
 fn short_prompt(version: &str) -> &str {
     version
-        .strip_prefix("claude-spot-")
+        .strip_prefix("bot-spot-")
+        .or_else(|| version.strip_prefix("claude-spot-"))
         .and_then(|v| v.strip_suffix("-agentic"))
         .unwrap_or(version)
+}
+
+/// The recorded setup minus its prompt tag (the prompt is already part of the session key).
+fn setup_key(run_config: Option<&Value>) -> String {
+    let Some(Value::Object(config)) = run_config else {
+        return run_config.map(Value::to_string).unwrap_or_default();
+    };
+    let mut config = config.clone();
+    config.remove("prompt_version");
+    Value::Object(config).to_string()
 }
 
 struct Session<'a> {
@@ -53,7 +66,7 @@ struct Session<'a> {
 impl<'a> Session<'a> {
     fn new(cycle: &CycleRecord) -> Self {
         Self {
-            prompt_version: cycle.prompt_version.clone(),
+            prompt_version: short_prompt(&cycle.prompt_version).to_owned(),
             session_id: cycle.session_id.clone(),
             run_config: cycle.run_config.clone(),
             first_at: cycle.timestamp.clone(),
@@ -71,6 +84,8 @@ impl<'a> Session<'a> {
     fn add_cycle(&mut self, cycle: &CycleRecord) {
         self.cycles += 1;
         self.last_at.clone_from(&cycle.timestamp);
+        // Newest recorded setup: it differs from older cycles only in the prompt tag's name.
+        self.run_config.clone_from(&cycle.run_config);
         for (map, value) in [
             (&mut self.models, &cycle.model),
             (&mut self.thinking, &cycle.thinking),
@@ -185,9 +200,9 @@ pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade], watch_log: &Path) ->
     for cycle in &audit.cycles {
         let key = format!(
             "{}|{}|{}",
-            cycle.prompt_version,
+            short_prompt(&cycle.prompt_version),
             cycle.session_id,
-            cycle.run_config.as_ref().map(Value::to_string).unwrap_or_default()
+            setup_key(cycle.run_config.as_ref())
         );
         let index = *by_key.entry(key).or_insert_with(|| {
             sessions.push(Session::new(cycle));
@@ -243,7 +258,7 @@ pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade], watch_log: &Path) ->
             let id: String = s.session_id.chars().take(8).collect();
             let base = format!(
                 "{} · {}",
-                short_prompt(&s.prompt_version),
+                s.prompt_version,
                 if id.is_empty() { "no session id" } else { id.as_str() }
             );
             if *n > 1 { format!("{base} · setup {n}") } else { base }
@@ -359,15 +374,19 @@ mod tests {
 
     #[test]
     fn trades_join_the_session_that_bought_them_and_the_best_realized_pnl_wins() {
-        let deadline = json!({"model": "sol", "exit_plans": {"default_plan": "deadline=120"}});
+        let deadline = |tag: &str| {
+            json!({"model": "sol", "prompt_version": tag, "exit_plans": {"default_plan": "deadline=120"}})
+        };
         let audit = ParsedAudit {
             cycles: vec![
                 cycle("2026-10-15T10:00:00+00:00", "a1", "claude-spot-v7-agentic", "S1", None),
                 cycle("2026-10-15T10:20:00+00:00", "a2", "claude-spot-v7-agentic", "S1", None),
                 cycle("2026-10-16T20:00:00+00:00", "b1", "claude-spot-v8-agentic", "S2", None),
                 // Same prompt and session, a different recorded setup: its own session.
-                cycle("2026-10-17T13:00:00+00:00", "c1", "claude-spot-v11-agentic", "S1", Some(deadline.clone())),
-                cycle("2026-10-17T13:20:00+00:00", "c2", "claude-spot-v11-agentic", "S1", Some(json!({"model": "other"}))),
+                cycle("2026-10-17T13:00:00+00:00", "c1", "claude-spot-v11-agentic", "S1", Some(deadline("claude-spot-v11-agentic"))),
+                // The same prompt after the 2026-10-18 tag rename: still the same session.
+                cycle("2026-10-17T13:05:00+00:00", "c1b", "bot-spot-v11-agentic", "S1", Some(deadline("bot-spot-v11-agentic"))),
+                cycle("2026-10-17T13:20:00+00:00", "c2", "bot-spot-v11-agentic", "S1", Some(json!({"model": "other"}))),
             ],
             ..ParsedAudit::default()
         };
@@ -401,9 +420,10 @@ mod tests {
         assert_eq!(view["winner"], "v7 · S1");
         // The loser is ranked after it; sessions without closed trades come last.
         assert_eq!(sessions[1]["label"], "v8 · S2");
-        let v11: Vec<&Value> = sessions.iter().filter(|s| s["prompt_version"] == "claude-spot-v11-agentic").collect();
+        let v11: Vec<&Value> = sessions.iter().filter(|s| s["prompt_version"] == "v11").collect();
         assert_eq!(v11.len(), 2);
-        let with_sol = v11.iter().find(|s| s["run_config"] == deadline).unwrap();
+        let with_sol = v11.iter().find(|s| s["run_config"] == deadline("bot-spot-v11-agentic")).unwrap();
+        assert_eq!(with_sol["cycles"], 2);
         assert_eq!(with_sol["stats"]["open"], 1);
         assert_eq!(with_sol["stats"]["trades"], 1);
         assert!(v11.iter().any(|s| s["label"] == "v11 · S1 · setup 2"));

@@ -1,6 +1,6 @@
-//! Live exit plans (Phase 45 step 3, operator approval 2026-10-15). Between Claude's
+//! Live exit plans (Phase 45 step 3, operator approval 2026-10-15). Between the bot's
 //! cycles the trader daemon follows the bid of every position with an exit plan
-//! (Claude's from `set_exit_plan`, else the default plan) and, when the plan fires, sells
+//! (The bot's from `set_exit_plan`, else the default plan) and, when the plan fires, sells
 //! through [`Runtime::exit_sell`] with the same hard safety as `execute_route`. The guard
 //! writes the watch state and log itself; the paper watcher must not run alongside it.
 
@@ -17,7 +17,7 @@ use crate::cycle::Runtime;
 use crate::exit_book::{ExitPaths, PlanBook, WatchState};
 use crate::exit_watch::{AuditCache, BinancePrices, FileLog, PlanSignal, WatchLog, Watcher};
 
-/// Slippage assumed only for the plan-vs-Claude comparison of closed positions.
+/// Slippage assumed only for the plan-vs-bot comparison of closed positions.
 const COMPARISON_SLIPPAGE_BPS: Decimal = Decimal::from_parts(5, 0, 0, false, 0);
 /// Sell attempts that failed before any order, before the signal is dropped.
 const MAX_SELL_ATTEMPTS: u32 = 3;
@@ -117,7 +117,7 @@ impl ExitGuard {
                 signal,
                 attempts: 0,
             }));
-        // A position Claude (or an earlier sell) already closed needs nothing more.
+        // A position the bot (or an earlier sell) already closed needs nothing more.
         let open: BTreeSet<&str> = trips
             .iter()
             .filter(|t| t.exit.is_none())

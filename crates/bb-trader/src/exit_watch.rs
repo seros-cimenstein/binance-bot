@@ -1,13 +1,13 @@
-//! `claude-spot-exit-watch` (Phase 45 step 2, paper trial): follow the bid of every
-//! position Claude gave an exit plan, between cycles, and record what the plan would
+//! `bot-spot-exit-watch` (Phase 45 step 2, paper trial): follow the bid of every
+//! position the bot gave an exit plan, between cycles, and record what the plan would
 //! have sold. It places no orders and holds no credentials.
 //!
-//! Each loop: read the plan book and the Claude Spot audit; start trials for new plans
+//! Each loop: read the plan book and the Bot Spot audit; start trials for new plans
 //! (the peak is seeded with the highest 1-minute high since entry, then the minutes since
 //! the plan was set are caught up); feed each running trial the current bid; and close a
-//! trial when the audit shows Claude sold the position. A closed trial compares "Claude
-//! with the plan" (the plan's sells before Claude's, the rest at Claude's real fill) with
-//! "Claude alone", both net of the entry leg's fee rate (plan sells also pay slippage).
+//! trial when the audit shows the bot sold the position. A closed trial compares "The bot
+//! with the plan" (the plan's sells before the bot's, the rest at the bot's real fill) with
+//! "The bot alone", both net of the entry leg's fee rate (plan sells also pay slippage).
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -52,7 +52,7 @@ pub struct ExitWatchArgs {
     /// Print the closed trials from the watch log as a Markdown table and exit.
     #[arg(long)]
     pub summary: bool,
-    /// Claude Spot audit JSONL (default `CLAUDE_SPOT_AUDIT_PATH`).
+    /// Bot Spot audit JSONL (default `BOT_SPOT_AUDIT_PATH`).
     #[arg(long)]
     pub audit_path: Option<PathBuf>,
 }
@@ -245,8 +245,8 @@ impl Watcher {
         &self.state
     }
 
-    /// Plans to run, by asset: Claude's plan for an open position, else the default plan
-    /// for positions opened since it applies; Claude's plans for positions no longer open
+    /// Plans to run, by asset: The bot's plan for an open position, else the default plan
+    /// for positions opened since it applies; The bot's plans for positions no longer open
     /// stay (they close or orphan their trial) unless the asset has a newer position.
     fn effective_plans(&self, book: &PlanBook, trips: &[RoundTrip]) -> BTreeMap<String, PlanEntry> {
         let mut plans = BTreeMap::new();
@@ -340,13 +340,13 @@ impl Watcher {
         self.state.finalized.insert(key);
     }
 
-    /// Close a trial on Claude's real exit.
+    /// Close a trial on the bot's real exit.
     fn close(&mut self, asset: &str, trip: &RoundTrip, exit: &ActualExit, log: &mut dyn WatchLog) {
         let Some(trial) = self.trials.remove(asset) else {
             return;
         };
         let fee = trial.fee_rate;
-        let claude_price = exit
+        let bot_price = exit
             .price
             .or(trial.last_bid)
             .unwrap_or(trial.entry.entry_price);
@@ -362,7 +362,7 @@ impl Watcher {
             plan_proceeds += fill.fraction * fill.price * (Decimal::ONE - fee);
             plan_fills.push(fill.clone());
         }
-        let alone = claude_price * (Decimal::ONE - fee);
+        let alone = bot_price * (Decimal::ONE - fee);
         let rest = (Decimal::ONE - sold).max(Decimal::ZERO) * alone;
         with_plan += rest;
         plan_proceeds += rest;
@@ -380,23 +380,23 @@ impl Watcher {
             "entry_ms": trial.entry.entry_ms,
             "entry_price": trial.entry.entry_price,
             "entry_value_usdt": trip.entry_value_usdt.round_dp(6),
-            "claude_exit_ms": exit.ts_ms,
-            "claude_exit_price": claude_price,
-            "claude_exit_price_known": exit.price.is_some(),
+            "bot_exit_ms": exit.ts_ms,
+            "bot_exit_price": bot_price,
+            "bot_exit_price_known": exit.price.is_some(),
             "plan_fills": plan_fills,
-            "claude_alone_net_pct": pct(alone),
+            "bot_alone_net_pct": pct(alone),
             "with_plan_net_pct": pct(with_plan),
-            "plan_vs_claude_usdt": diff.round_dp(6),
+            "plan_vs_bot_usdt": diff.round_dp(6),
         }));
         self.state.closed_trials += 1;
-        self.state.plan_vs_claude_usdt += diff.round_dp(6);
+        self.state.plan_vs_bot_usdt += diff.round_dp(6);
         self.state.recent_closed.push(ClosedView {
             asset: asset.to_owned(),
             spec: trial.entry.spec.clone(),
             entry_ms: trial.entry.entry_ms,
             entry_price: trial.entry.entry_price,
             exit_ms: exit.ts_ms,
-            exit_price: claude_price,
+            exit_price: bot_price,
             plan_fills,
             fee_rate: fee,
             plan_net_pct: pct(plan_proceeds),
@@ -517,7 +517,7 @@ impl Watcher {
         let plans = self.effective_plans(book, trips);
         let mut signals = Vec::new();
 
-        // Running trials: closed (by Claude or a live plan sell), or the plan was cleared
+        // Running trials: closed (by the bot or a live plan sell), or the plan was cleared
         // or replaced.
         let running: Vec<(String, String, i64)> = self
             .trials
@@ -669,7 +669,7 @@ pub fn summary_table(log_path: &Path) -> Result<String> {
         .filter(|r| r.get("event").and_then(Value::as_str) == Some("closed"))
         .collect();
     let mut out = format!("Exit-plan paper trial: {} closed trials.\n\n", closed.len());
-    out.push_str("| asset | plan | Claude alone % | with plan % | plan vs Claude |\n|---|---|---:|---:|---:|\n");
+    out.push_str("| asset | plan | bot alone % | with plan % | plan vs bot |\n|---|---|---:|---:|---:|\n");
     let mut total = Decimal::ZERO;
     for row in &closed {
         let text = |k: &str| {
@@ -679,18 +679,18 @@ pub fn summary_table(log_path: &Path) -> Result<String> {
                 .to_owned()
         };
         let num = |k: &str| crate::memory::value_decimal(row.get(k)).unwrap_or_default();
-        total += num("plan_vs_claude_usdt");
+        total += num("plan_vs_bot_usdt");
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} |\n",
             text("asset"),
             text("spec"),
-            num("claude_alone_net_pct").round_dp(2),
+            num("bot_alone_net_pct").round_dp(2),
             num("with_plan_net_pct").round_dp(2),
-            num("plan_vs_claude_usdt").round_dp(4)
+            num("plan_vs_bot_usdt").round_dp(4)
         ));
     }
     out.push_str(&format!(
-        "\nTotal plan vs Claude: {} USDT.\n",
+        "\nTotal plan vs the bot: {} USDT.\n",
         total.round_dp(4)
     ));
     Ok(out)
@@ -700,7 +700,7 @@ fn error_is_not_found(error: &TraderError) -> bool {
     matches!(error, TraderError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
 }
 
-/// `bb claude-spot-exit-watch`.
+/// `bb bot-spot-exit-watch`.
 pub async fn run_cli(args: ExitWatchArgs) -> Result<ExitCode> {
     let paths = ExitPaths::from_env();
     if args.summary {
@@ -710,9 +710,9 @@ pub async fn run_cli(args: ExitWatchArgs) -> Result<ExitCode> {
     let settings =
         ExitSettings::from_lookup(|name| std::env::var(name).ok()).map_err(TraderError::config)?;
     if settings.live {
-        // One writer for the watch files: live exit plans run inside `claude-spot`.
+        // One writer for the watch files: live exit plans run inside `bot-spot`.
         return Err(TraderError::config(
-            "CLAUDE_SPOT_EXIT_PLANS_LIVE=true: exit plans run live inside claude-spot; the paper watcher is not used",
+            "BOT_SPOT_EXIT_PLANS_LIVE=true: exit plans run live inside bot-spot; the paper watcher is not used",
         ));
     }
     if args.slippage_bps < Decimal::ZERO {
@@ -721,7 +721,7 @@ pub async fn run_cli(args: ExitWatchArgs) -> Result<ExitCode> {
     let poll = Duration::from_secs(args.poll_seconds.max(1));
     let audit_path = args.audit_path.clone().unwrap_or_else(|| {
         PathBuf::from(bb_core::env::string(
-            &["CLAUDE_SPOT_AUDIT_PATH"],
+            &["BOT_SPOT_AUDIT_PATH"],
             DEFAULT_AUDIT_PATH,
         ))
     });
@@ -854,7 +854,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trial_seeds_the_peak_catches_up_follows_bids_and_closes_on_claudes_sell() {
+    async fn trial_seeds_the_peak_catches_up_follows_bids_and_closes_on_bots_sell() {
         // Lookback swing bars, then the position rises to 1.10 before the plan is set at
         // minute 103, and dips to 1.08 in minute 103 (above the 1.067 sell line).
         let mut bars: Vec<PriceBar> = (40..100).map(|m| bar(m, dec!(1.01), dec!(1))).collect();
@@ -888,7 +888,7 @@ mod tests {
         assert_eq!(log[1]["source"], "live");
         assert_eq!(watcher.state().active["ENA"].remaining, Decimal::ZERO);
 
-        // Claude sells later at 1.00: the plan would have kept 1.06.
+        // The bot sells later at 1.00: the plan would have kept 1.06.
         let exit = ActualExit {
             ts_ms: 110 * M,
             price: Some(dec!(1.00)),
@@ -903,7 +903,7 @@ mod tests {
         let with_plan = dec!(1.06) * (Decimal::ONE - dec!(0.001) - dec!(0.0005));
         let alone = dec!(1.00) * dec!(0.999);
         assert_eq!(
-            crate::memory::value_decimal(Some(&closed["plan_vs_claude_usdt"])).unwrap(),
+            crate::memory::value_decimal(Some(&closed["plan_vs_bot_usdt"])).unwrap(),
             ((with_plan - alone) / cost * dec!(10.01)).round_dp(6)
         );
         let state = watcher.state();
@@ -974,7 +974,7 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].share, Decimal::ONE);
 
-        // Claude's own plan replaces the default for the same position.
+        // The bot's own plan replaces the default for the same position.
         let mut watcher = Watcher::new(WatchState::default(), dec!(5), Some(default));
         watcher
             .step(

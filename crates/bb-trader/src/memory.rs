@@ -1,5 +1,5 @@
 //! Trade memory from the audit JSONL: closed/open outcomes, PnL, current holding and the
-//! loss streak. Information for Claude only; nothing here blocks a trade.
+//! loss streak. Information for the bot only; nothing here blocks a trade.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -210,7 +210,7 @@ impl TradeMemory {
         let Some(last) = submitted.last() else {
             return Self::empty(
                 "empty",
-                "no submitted Claude Spot routes in audit history".into(),
+                "no submitted Bot Spot routes in audit history".into(),
             );
         };
         let outcomes = outcomes(&submitted, free, &value_usdt);

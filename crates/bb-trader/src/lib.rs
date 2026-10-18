@@ -1,4 +1,4 @@
-//! Claude agentic Binance Spot trader (replaces `src/claude_spot.py`).
+//! Agentic Binance Spot trader (replaces `src/claude_spot.py`).
 //!
 //! One long-lived omp RPC session per trader (persistent session dir, resumed after
 //! restarts) decides; host tools are its only hands. Trading guardrails are gone — costs,
@@ -6,7 +6,7 @@
 //! [`executor`] (arming, stop file, run lock, permissions, order-test, filters, sizing,
 //! reconciliation, failed-route halt, scope, Spot MARKET only, ≤ 3 legs).
 //!
-//! - [`config`]: `TraderConfig::from_env` (`CLAUDE_SPOT_*`).
+//! - [`config`]: `TraderConfig::from_env` (`BOT_SPOT_*`).
 //! - [`scope`]: operator allow/block lists and fiat blocking.
 //! - [`universe`]: catalog view, balances, route candidates.
 //! - [`evidence`]: multi-horizon evidence and relative momentum.
@@ -18,8 +18,8 @@
 //! - [`exit_plan`]: the Phase 45 sell-plan menu. [`exit_replay`]: its historical replay.
 //!   [`exit_book`]: plans set by `set_exit_plan`. [`exit_watch`]: the paper watcher.
 //!   [`exit_guard`]: live exit plans inside the trader daemon.
-//! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `claude-spot`,
-//!   `claude-spot-exit-replay`, `claude-spot-exit-watch`.
+//! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
+//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 

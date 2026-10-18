@@ -13,7 +13,7 @@ pub const BRAIN_UNAVAILABLE: &str = "brain unavailable on all models";
 
 /// One plain HTML notice about the trader's brain (model switches, outages).
 pub fn brain_notice(text: &str) -> String {
-    format!("<b>CLAUDE SPOT BRAIN</b>\nModel: {}", code(text))
+    format!("<b>BOT SPOT BRAIN</b>\nModel: {}", code(text))
 }
 
 /// Python `TELEGRAM_MESSAGE_MAX_CHARS`.
@@ -96,12 +96,12 @@ pub fn eli5(row: &AuditRow) -> String {
     let reason = decision_reason(row).to_lowercase();
     match row.status {
         RowStatus::Submitted => format!(
-            "The bot executed {route}: Claude chose it and every leg passed balance, scope, exchange-filter, \
+            "The bot chose and executed {route}: every leg passed balance, scope, exchange-filter, \
              order-test and fill reconciliation checks."
         ),
         RowStatus::Planned => {
             format!(
-                "Claude chose {route}, but this cycle was plan-only, so no real order was allowed."
+                "The bot chose {route}, but this cycle was plan-only, so no real order was allowed."
             )
         }
         RowStatus::Failed if row.submission_attempted => format!(
@@ -116,19 +116,19 @@ pub fn eli5(row: &AuditRow) -> String {
         }
         RowStatus::Held => {
             if reason.contains(BRAIN_UNAVAILABLE) {
-                "Claude's brain was unavailable on every configured model, so the bot placed no orders and held."
+                "The bot's brain was unavailable on every configured model, so the bot placed no orders and held."
                     .into()
             } else if reason.contains("timed out") {
-                "Claude did not answer in time, so the safe move was to hold.".into()
+                "The bot did not answer in time, so the safe move was to hold.".into()
             } else if reason.contains("previous live route failed") {
                 "A previous live route failed, so the bot is waiting instead of compounding an uncertain state.".into()
             } else if reason.contains("llm cost") {
-                "The daily Claude cost cap was reached, so the bot paused instead of asking Claude."
+                "The daily LLM cost cap was reached, so the bot paused instead of asking the model."
                     .into()
             } else if row.candidate_route_count == 0 {
                 "No valid trade route passed the filters, so trading would mean guessing and paying fees.".into()
             } else {
-                "Claude judged holding to be better than paying fees for the available trade setup."
+                "The bot judged holding to be better than paying fees for the available trade setup."
                     .into()
             }
         }
@@ -140,7 +140,7 @@ pub fn eli5(row: &AuditRow) -> String {
 
 fn lines(row: &AuditRow, explain: bool, reason_chars: usize, include_why: bool) -> Vec<String> {
     let mut lines = vec![
-        "<b>CLAUDE SPOT BRAIN</b>".to_owned(),
+        "<b>BOT SPOT BRAIN</b>".to_owned(),
         format!("Status: {}", code(row.status.as_str())),
         format!("Action: {}", code(&row.decision.action)),
         format!("Route: {}", code(&route_label(row))),
@@ -185,7 +185,7 @@ pub fn format_messages(row: &AuditRow, explain: bool, reason_chars: usize) -> Ve
     if why.is_empty() {
         return messages;
     }
-    let prefix = "<b>CLAUDE SPOT WHY</b>\n";
+    let prefix = "<b>BOT SPOT WHY</b>\n";
     let limit = MAX_CHARS - prefix.chars().count();
     messages.extend(
         split_code_chunks(&why, limit)
@@ -377,10 +377,10 @@ mod tests {
         assert!(eli5(&held).contains("holding to be better"));
         held.candidate_route_count = 0;
         assert!(eli5(&held).contains("No valid trade route"));
-        held.decision.reason = "Claude timed out after 300s".into();
+        held.decision.reason = "The bot timed out after 300s".into();
         assert!(eli5(&held).contains("did not answer in time"));
         held.decision.reason = format!(
-            "{BRAIN_UNAVAILABLE}: anthropic/x timeout (Claude timed out after 150s); no further orders this cycle"
+            "{BRAIN_UNAVAILABLE}: anthropic/x timeout (The bot timed out after 150s); no further orders this cycle"
         );
         assert!(eli5(&held).contains("unavailable on every configured model"));
         assert!(eli5(&held).contains("no orders"));
@@ -393,11 +393,11 @@ mod tests {
         let planned = row(RowStatus::Planned, rebalance("momentum"));
         assert!(
             eli5(&planned)
-                .contains("Claude chose USDT->ETH (USDT->ETH:abc), but this cycle was plan-only")
+                .contains("The bot chose USDT->ETH (USDT->ETH:abc), but this cycle was plan-only")
         );
         assert!(
             eli5(&row(RowStatus::Submitted, rebalance("go")))
-                .contains("The bot executed USDT->ETH")
+                .contains("The bot chose and executed USDT->ETH")
         );
         let mut failed = row(RowStatus::Failed, rebalance("go"));
         assert!(eli5(&failed).contains("before any order"));
@@ -419,13 +419,13 @@ mod tests {
             20,
         )
         .join("\n");
-        assert!(message.starts_with("<b>CLAUDE SPOT BRAIN</b>"));
+        assert!(message.starts_with("<b>BOT SPOT BRAIN</b>"));
         assert!(
             message.contains("Why: <code>&lt;b&gt;buy&lt;/b&gt; &amp; &quot;hol...</code>"),
             "{message}"
         );
         assert!(message.contains("Route: <code>USDT-&gt;ETH (USDT-&gt;ETH:abc)</code>"));
-        assert!(message.contains("Audit: <code>data/claude-spot-decisions.jsonl</code>"));
+        assert!(message.contains("Audit: <code>data/bot-spot-decisions.jsonl</code>"));
     }
 
     #[test]
@@ -440,11 +440,11 @@ mod tests {
         assert!(messages.len() > 2);
         assert!(messages.iter().all(|m| m.chars().count() <= MAX_CHARS));
         assert!(!messages[0].contains("Why:"));
-        assert!(messages[1].starts_with("<b>CLAUDE SPOT WHY</b>\n<code>"));
+        assert!(messages[1].starts_with("<b>BOT SPOT WHY</b>\n<code>"));
         let rebuilt: Vec<String> = messages[1..]
             .iter()
             .map(|m| {
-                m.trim_start_matches("<b>CLAUDE SPOT WHY</b>\n<code>")
+                m.trim_start_matches("<b>BOT SPOT WHY</b>\n<code>")
                     .trim_end_matches("</code>")
                     .to_owned()
             })

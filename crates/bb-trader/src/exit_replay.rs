@@ -1,11 +1,11 @@
-//! `claude-spot-exit-replay` (Phase 45 step 1): replay the [`crate::exit_plan`] menu on
-//! Claude Spot's real round trips.
+//! `bot-spot-exit-replay` (Phase 45 step 1): replay the [`crate::exit_plan`] menu on
+//! Bot Spot's real round trips.
 //!
 //! Each round trip from the audit log (a submitted route whose last leg bought a coin on
 //! the `--quote` market, closed by the next submitted route that sells that coin) is
 //! replayed on public klines from entry to entry + horizon. Every plan's sells are costed
 //! with the entry leg's real fee rate plus modelled exit slippage, and compared with
-//! Claude's actual exit (its real fill and fee rate) and with the best price seen (an
+//! The bot's actual exit (its real fill and fee rate) and with the best price seen (an
 //! upper bound, never expected return). Research only: public market data, no order path.
 
 use std::collections::BTreeMap;
@@ -62,10 +62,10 @@ pub const DEFAULT_PLANS: [&str; 24] = [
     "deadline=60",
 ];
 
-/// Replay the Claude Spot exit-plan menu on real round trips from the audit log.
+/// Replay the Bot Spot exit-plan menu on real round trips from the audit log.
 #[derive(clap::Args, Debug, Clone)]
 pub struct ExitReplayArgs {
-    /// Claude Spot audit JSONL (default `CLAUDE_SPOT_AUDIT_PATH`).
+    /// Bot Spot audit JSONL (default `BOT_SPOT_AUDIT_PATH`).
     #[arg(long)]
     pub audit_path: Option<PathBuf>,
     /// Only round trips entered at or after this ISO time.
@@ -97,7 +97,7 @@ pub struct ExitReplayArgs {
     pub table: bool,
 }
 
-/// Claude's real exit of a round trip.
+/// The bot's real exit of a round trip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActualExit {
     pub ts_ms: i64,
@@ -106,7 +106,7 @@ pub struct ActualExit {
     pub partial: bool,
 }
 
-/// One real position: bought on `symbol`, closed by Claude (or still open).
+/// One real position: bought on `symbol`, closed by the bot (or still open).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoundTrip {
     pub symbol: String,
@@ -206,7 +206,7 @@ pub fn round_trips(
         }
         let legs = legs(row);
         // A sell of most of a held coin closes its round trip; a smaller sell (an exit
-        // plan taking part, or Claude scaling out) only shrinks it.
+        // plan taking part, or the bot scaling out) only shrinks it.
         if let Some(first) = legs.first().filter(|l| l.side == "sell")
             && let Some(mut trip) = open.remove(&first.base)
         {
@@ -312,8 +312,8 @@ pub struct TripReport {
     /// Average true range before entry, per candle size the plans use.
     pub atr: BTreeMap<String, Decimal>,
     pub window_minutes: i64,
-    pub claude_partial_exit: bool,
-    pub claude: Outcome,
+    pub bot_partial_exit: bool,
+    pub bot: Outcome,
     pub peak_upper_bound: Outcome,
     pub plans: BTreeMap<String, Outcome>,
 }
@@ -327,9 +327,9 @@ pub struct PlanSummary {
     pub mean_net_return_pct: Decimal,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
     pub total_pnl_usdt: Decimal,
-    /// `total_pnl_usdt` minus Claude's on the same trips.
+    /// `total_pnl_usdt` minus the bot's on the same trips.
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    pub vs_claude_usdt: Decimal,
+    pub vs_bot_usdt: Decimal,
     pub mean_hold_minutes: i64,
     pub open_at_end: usize,
 }
@@ -345,16 +345,16 @@ pub struct ReplayReport {
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
     pub slippage_bps: Decimal,
     pub note: &'static str,
-    /// Plans first (in the requested order), then `claude_actual` and `peak_upper_bound`.
+    /// Plans first (in the requested order), then `bot_actual` and `peak_upper_bound`.
     pub summary: Vec<PlanSummary>,
     pub trips: Vec<TripReport>,
     pub skipped: Vec<String>,
 }
 
 const NOTE: &str = "Research only. Simulated sells use the entry leg's fee rate plus slippage; \
-claude_actual uses Claude's real fill (an exit on another market is marked at that market's \
+bot_actual uses the bot's real fill (an exit on another market is marked at that market's \
 close). Bars are read pessimistically (low before high). The summary only counts round trips \
-Claude has closed. peak_upper_bound sells at the best price seen and is never expected return.";
+The bot has closed. peak_upper_bound sells at the best price seen and is never expected return.";
 
 struct Costs {
     fee_rate: Decimal,
@@ -403,7 +403,7 @@ fn fill_note(fill: &ExitFill) -> String {
 pub struct TripPrices {
     /// 1-minute bars before entry (history for the stretch and slowdown rules).
     pub history: Vec<PriceBar>,
-    /// Bars from entry on, at least up to Claude's exit (to mark an exit on another
+    /// Bars from entry on, at least up to the bot's exit (to mark an exit on another
     /// market).
     pub bars: Vec<PriceBar>,
     /// Average true range before entry, per candle size the plans use.
@@ -472,7 +472,7 @@ pub fn replay_trip(
         );
     }
 
-    let claude = match &trip.exit {
+    let bot = match &trip.exit {
         Some(ActualExit {
             ts_ms,
             price: Some(price),
@@ -483,7 +483,7 @@ pub fn replay_trip(
             price * (Decimal::ONE - costs.fee_rate),
             *ts_ms,
             false,
-            vec![format!("claude 1@{}", price.normalize())],
+            vec![format!("bot 1@{}", price.normalize())],
         ),
         Some(ActualExit {
             ts_ms, price: None, ..
@@ -500,7 +500,7 @@ pub fn replay_trip(
                 *ts_ms,
                 false,
                 vec![format!(
-                    "claude via another market, marked {}",
+                    "bot via another market, marked {}",
                     mark.normalize()
                 )],
             )
@@ -511,7 +511,7 @@ pub fn replay_trip(
             costs.simulated(last.close),
             last.close_ms,
             true,
-            vec!["claude still holding".into()],
+            vec!["bot still holding".into()],
         ),
     };
 
@@ -538,8 +538,8 @@ pub fn replay_trip(
             .map(|(tf, atr)| (tf.as_str().to_owned(), atr.round_dp(8)))
             .collect(),
         window_minutes: (last.close_ms - trip.entry_ms) / MS_PER_MINUTE,
-        claude_partial_exit: trip.exit.as_ref().is_some_and(|e| e.partial),
-        claude,
+        bot_partial_exit: trip.exit.as_ref().is_some_and(|e| e.partial),
+        bot,
         peak_upper_bound: peak,
         plans: outcomes,
     })
@@ -552,12 +552,12 @@ fn summarize(
 ) -> PlanSummary {
     let rows: Vec<(&Outcome, &Outcome)> = trips
         .iter()
-        .filter(|t| !t.claude.open_at_end)
-        .filter_map(|t| pick(t).map(|o| (o, &t.claude)))
+        .filter(|t| !t.bot.open_at_end)
+        .filter_map(|t| pick(t).map(|o| (o, &t.bot)))
         .collect();
     let n = rows.len();
     let total: Decimal = rows.iter().map(|(o, _)| o.pnl_usdt).sum();
-    let claude: Decimal = rows.iter().map(|(_, c)| c.pnl_usdt).sum();
+    let bot: Decimal = rows.iter().map(|(_, c)| c.pnl_usdt).sum();
     let count = Decimal::from(n.max(1));
     PlanSummary {
         plan: name.to_owned(),
@@ -569,20 +569,20 @@ fn summarize(
         mean_net_return_pct: (rows.iter().map(|(o, _)| o.net_return_pct).sum::<Decimal>() / count)
             .round_dp(4),
         total_pnl_usdt: total.round_dp(6),
-        vs_claude_usdt: (total - claude).round_dp(6),
+        vs_bot_usdt: (total - bot).round_dp(6),
         mean_hold_minutes: rows.iter().map(|(o, _)| o.hold_minutes).sum::<i64>()
             / (n.max(1) as i64),
         open_at_end: rows.iter().filter(|(o, _)| o.open_at_end).count(),
     }
 }
 
-/// Summary rows: each plan in order, then `claude_actual` and `peak_upper_bound`.
+/// Summary rows: each plan in order, then `bot_actual` and `peak_upper_bound`.
 pub fn summary(plans: &[(String, ExitPlan)], trips: &[TripReport]) -> Vec<PlanSummary> {
     let mut rows: Vec<PlanSummary> = plans
         .iter()
         .map(|(name, _)| summarize(name, trips, |t| t.plans.get(name)))
         .collect();
-    rows.push(summarize("claude_actual", trips, |t| Some(&t.claude)));
+    rows.push(summarize("bot_actual", trips, |t| Some(&t.bot)));
     rows.push(summarize("peak_upper_bound", trips, |t| {
         Some(&t.peak_upper_bound)
     }));
@@ -602,7 +602,7 @@ pub fn summary_table(report: &ReplayReport) -> String {
         report.horizon_minutes,
         report.slippage_bps.normalize(),
     );
-    out.push_str("| plan | trips | wins | mean net % | total P&L | vs Claude | mean hold min | open at end |\n");
+    out.push_str("| plan | trips | wins | mean net % | total P&L | vs the bot | mean hold min | open at end |\n");
     out.push_str("|---|---:|---:|---:|---:|---:|---:|---:|\n");
     for row in &report.summary {
         out.push_str(&format!(
@@ -612,7 +612,7 @@ pub fn summary_table(report: &ReplayReport) -> String {
             row.wins,
             row.mean_net_return_pct.round_dp(2),
             row.total_pnl_usdt.round_dp(4),
-            row.vs_claude_usdt.round_dp(4),
+            row.vs_bot_usdt.round_dp(4),
             row.mean_hold_minutes,
             row.open_at_end
         ));
@@ -762,7 +762,7 @@ pub async fn build_report(
         .transpose()?;
     let audit_path = args.audit_path.clone().unwrap_or_else(|| {
         PathBuf::from(bb_core::env::string(
-            &["CLAUDE_SPOT_AUDIT_PATH"],
+            &["BOT_SPOT_AUDIT_PATH"],
             DEFAULT_AUDIT_PATH,
         ))
     });
@@ -783,9 +783,9 @@ pub async fn build_report(
     let mut trips = Vec::with_capacity(round_trips.len());
     for trip in &round_trips {
         let horizon_end = trip.entry_ms + i64::from(args.horizon_minutes) * MS_PER_MINUTE;
-        // Bars up to Claude's exit too, to mark an exit made on another market.
-        let claude_exit = trip.exit.as_ref().map_or(0, |e| e.ts_ms + MS_PER_MINUTE);
-        let end_ms = horizon_end.max(claude_exit).min(now_ms);
+        // Bars up to the bot's exit too, to mark an exit made on another market.
+        let bot_exit = trip.exit.as_ref().map_or(0, |e| e.ts_ms + MS_PER_MINUTE);
+        let end_ms = horizon_end.max(bot_exit).min(now_ms);
         let fetched = trip_prices(
             &fetcher,
             trip,
@@ -829,7 +829,7 @@ pub async fn build_report(
     })
 }
 
-/// `bb claude-spot-exit-replay`.
+/// `bb bot-spot-exit-replay`.
 pub async fn run_cli(args: ExitReplayArgs) -> Result<ExitCode> {
     let client = BinanceClient::new(BinanceConfig::new(false))?;
     let report = build_report(&args, client, bb_core::time::now_ms()).await?;
@@ -957,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_costs_plans_against_claudes_real_exit() {
+    fn replay_costs_plans_against_bots_real_exit() {
         let trip = RoundTrip {
             symbol: "X/USDT".into(),
             asset: "X".into(),
@@ -999,22 +999,22 @@ mod tests {
         assert!(hold.open_at_end);
         assert_eq!(hold.hold_minutes, 2);
 
-        // Claude: real fill 99 less the 10 bps fee, no slippage; P&L on the USDT value spent.
-        let claude = dec!(99) * dec!(0.999) / dec!(100.1) - Decimal::ONE;
-        assert_eq!(report.claude.pnl_usdt, (claude * dec!(50)).round_dp(6));
+        // The bot: real fill 99 less the 10 bps fee, no slippage; P&L on the USDT value spent.
+        let bot = dec!(99) * dec!(0.999) / dec!(100.1) - Decimal::ONE;
+        assert_eq!(report.bot.pnl_usdt, (bot * dec!(50)).round_dp(6));
         assert_eq!(report.peak_upper_bound.exits, vec!["peak 110"]);
 
         let rows = summary(&plans, std::slice::from_ref(&report));
         let names: Vec<&str> = rows.iter().map(|r| r.plan.as_str()).collect();
         assert_eq!(
             names,
-            ["hold", "trail=3", "claude_actual", "peak_upper_bound"]
+            ["hold", "trail=3", "bot_actual", "peak_upper_bound"]
         );
         assert_eq!(
-            rows[1].vs_claude_usdt,
-            (trail.pnl_usdt - report.claude.pnl_usdt).round_dp(6)
+            rows[1].vs_bot_usdt,
+            (trail.pnl_usdt - report.bot.pnl_usdt).round_dp(6)
         );
-        assert_eq!(rows[2].vs_claude_usdt, Decimal::ZERO);
+        assert_eq!(rows[2].vs_bot_usdt, Decimal::ZERO);
     }
 
     #[test]
@@ -1042,7 +1042,7 @@ mod tests {
         };
         let report = replay_trip(&trip, &prices, i64::MAX, &plans, dec!(5)).unwrap();
         assert!(report.plans.is_empty());
-        assert!(report.claude.open_at_end);
+        assert!(report.bot.open_at_end);
 
         prices.atr.insert(AtrTimeframe::H1, dec!(2.5));
         let report = replay_trip(&trip, &prices, i64::MAX, &plans, dec!(5)).unwrap();
@@ -1052,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn plans_stop_at_the_horizon_but_claudes_late_exit_is_marked_at_its_time() {
+    fn plans_stop_at_the_horizon_but_bots_late_exit_is_marked_at_its_time() {
         let mut trip = RoundTrip {
             symbol: "X/BNB".into(),
             asset: "X".into(),
@@ -1083,15 +1083,15 @@ mod tests {
         assert_eq!(report.plans["hold"].hold_minutes, 1); // marked at minute 1's close (101)
         assert_eq!(report.peak_upper_bound.exits, vec!["peak 101"]);
         assert_eq!(
-            report.claude.exits,
-            vec!["claude via another market, marked 105"]
+            report.bot.exits,
+            vec!["bot via another market, marked 105"]
         );
         assert_eq!(summary(&plans, std::slice::from_ref(&report))[0].trips, 1);
 
-        // A position Claude has not closed is reported but left out of the summary.
+        // A position the bot has not closed is reported but left out of the summary.
         trip.exit = None;
         let open = replay_trip(&trip, &prices, MS_PER_MINUTE, &plans, dec!(0)).unwrap();
-        assert!(open.claude.open_at_end);
+        assert!(open.bot.open_at_end);
         let rows = summary(&plans, &[report, open]);
         assert!(rows.iter().all(|r| r.trips == 1));
     }

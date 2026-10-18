@@ -2,19 +2,19 @@
 #
 # Every long-running runtime is a container running one `bb <command>`.
 # Periodic jobs (airdrop digest, backups) run in the `scheduler` container via
-# supercronic (docker/crontab). Claude Spot is the only live trader.
+# supercronic (docker/crontab). Bot Spot is the only live trader.
 #
 # Layout:
-#   - The `bb` binary and `omp` (Claude agent CLI) are baked into the image.
+#   - The `bb` binary and `omp` (agent CLI) are baked into the image.
 #   - /app/data     <- bind-mounted host state dir; relative paths in the env file
-#                      (e.g. CLAUDE_SPOT_AUDIT_PATH=data/...) resolve against /app.
-#                      Also holds omp credentials + Claude sessions (PI_CODING_AGENT_DIR).
+#                      (e.g. BOT_SPOT_AUDIT_PATH=data/...) resolve against /app.
+#                      Also holds omp credentials + bot sessions (PI_CODING_AGENT_DIR).
 #   - /app/backups  <- bind-mounted backups dir
 #   - env_file      <- BOT_ENV_FILE, defaults to ./.env.docker
 #
 # Profiles:
 #   paper   -> paper/research workloads + scheduler
-#   live    -> Claude Spot trader + scheduler
+#   live    -> Bot Spot trader + scheduler
 #   all     -> paper + live
 #   v2      -> signals-dexscreener-launches (V2 launch snapshotter)
 #   main-bot-> legacy SMA bot (disabled in production)
@@ -23,8 +23,8 @@
 #   x-collector -> x-camoufox read-only X collector (Phase 43, own image, no bot secrets)
 #   x-insighter -> bb x-insighter paper daemon (Phase 43, needs X_INSIGHTER_ENABLED=true)
 #
-# Claude (omp) auth, once per data dir: either set ANTHROPIC_API_KEY in the env file, or
-#   docker compose run --rm -it claude-spot omp      # then /login inside omp, then exit
+# Model (omp) auth, once per data dir: either set ANTHROPIC_API_KEY in the env file, or
+#   docker compose run --rm -it bot-spot omp      # then /login inside omp, then exit
 
 x-base: &base
   image: binance-bot:latest
@@ -59,27 +59,27 @@ services:
 
   # ---------- LIVE ----------
 
-  # Claude agentic Spot trader: one persistent omp session, a cycle every 20 minutes (Sonnet, operator decision 2026-10-15).
-  # Live submission still requires CLAUDE_SPOT_ENABLED=true, CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot,
-  # USE_TESTNET=false, DRY_RUN=false, CONFIRM_LIVE_TRADING=yes. Emergency stop: touch data/claude-spot.stop.
-  claude-spot:
+  # Bot agentic Spot trader: one persistent omp session, a cycle every 20 minutes (Sonnet, operator decision 2026-10-15).
+  # Live submission still requires BOT_SPOT_ENABLED=true, BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot,
+  # USE_TESTNET=false, DRY_RUN=false, CONFIRM_LIVE_TRADING=yes. Emergency stop: touch data/bot-spot.stop.
+  bot-spot:
     <<: *base
-    container_name: claude-spot
+    container_name: bot-spot
     profiles: ["live", "all"]
-    command: ["bb", "claude-spot", "--submit-live", "--daemon", "--interval-seconds", "1200"]
+    command: ["bb", "bot-spot", "--submit-live", "--daemon", "--interval-seconds", "1200"]
 
   # Phase 45 exit-plan PAPER trial: follows the bid of every position with a plan every 5 s
-  # and records would-be sells (no orders). Not used while CLAUDE_SPOT_EXIT_PLANS_LIVE=true:
-  # then claude-spot runs the plans live itself and this service refuses to start.
-  claude-spot-exit-watch:
+  # and records would-be sells (no orders). Not used while BOT_SPOT_EXIT_PLANS_LIVE=true:
+  # then bot-spot runs the plans live itself and this service refuses to start.
+  bot-spot-exit-watch:
     <<: *base
-    container_name: claude-spot-exit-watch
+    container_name: bot-spot-exit-watch
     profiles: ["exit-paper"]
     restart: "no"
-    command: ["bb", "claude-spot-exit-watch", "--daemon", "--poll-seconds", "5"]
+    command: ["bb", "bot-spot-exit-watch", "--daemon", "--poll-seconds", "5"]
 
   # ---------- DISABLED / OPT-IN (live) ----------
-  # Off since 2026-10-12: Claude Spot is the only live trader on the shared wallet.
+  # Off since 2026-10-12: Bot Spot is the only live trader on the shared wallet.
   listing-sniper-momentum:
     <<: *base
     container_name: listing-sniper-momentum
@@ -232,7 +232,7 @@ services:
     logging: *logging
 
   # Phase 43 engine: reads the collector files, scores traction, asks Claude Haiku via omp
-  # (same image, data volume and omp credentials under /app/data/omp-agent as claude-spot)
+  # (same image, data volume and omp credentials under /app/data/omp-agent as bot-spot)
   # and writes paper signals. Set X_INSIGHTER_ENABLED=true in the env file; while it is
   # unset the daemon exits with a message.
   x-insighter:

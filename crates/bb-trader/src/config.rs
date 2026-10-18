@@ -1,4 +1,4 @@
-//! Environment-backed trader configuration (`CLAUDE_SPOT_*`, same names and defaults as
+//! Environment-backed trader configuration (`BOT_SPOT_*`, same names and defaults as
 //! `src/claude_spot.py` for every setting that survived the guardrail removal).
 
 use std::path::PathBuf;
@@ -16,37 +16,37 @@ use crate::scope::ScopeConfig;
 
 /// Prompt/audit version tag of the agentic trader (v11: the v7 prompt restored on the
 /// old-gold-way branch, plus the stretch fee floor and closed-position feedback).
-pub const PROMPT_VERSION: &str = "claude-spot-v11-agentic";
-/// The only accepted value of `CLAUDE_SPOT_DYNAMIC_SCOPE` for live trading.
+pub const PROMPT_VERSION: &str = "bot-spot-v11-agentic";
+/// The only accepted value of `BOT_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 
-/// Default `CLAUDE_SPOT_AUDIT_PATH`.
-pub const DEFAULT_AUDIT_PATH: &str = "data/claude-spot-decisions.jsonl";
-/// Default `CLAUDE_SPOT_JOURNAL_PATH`.
-pub const DEFAULT_JOURNAL_PATH: &str = "data/claude-spot-journal.jsonl";
-/// Default `CLAUDE_SPOT_STATE_PATH`.
-pub const DEFAULT_STATE_PATH: &str = "data/claude-spot-agent-state.json";
-/// Default `CLAUDE_SPOT_STOP_PATH`.
-pub const DEFAULT_STOP_PATH: &str = "data/claude-spot.stop";
+/// Default `BOT_SPOT_AUDIT_PATH`.
+pub const DEFAULT_AUDIT_PATH: &str = "data/bot-spot-decisions.jsonl";
+/// Default `BOT_SPOT_JOURNAL_PATH`.
+pub const DEFAULT_JOURNAL_PATH: &str = "data/bot-spot-journal.jsonl";
+/// Default `BOT_SPOT_STATE_PATH`.
+pub const DEFAULT_STATE_PATH: &str = "data/bot-spot-agent-state.json";
+/// Default `BOT_SPOT_STOP_PATH`.
+pub const DEFAULT_STOP_PATH: &str = "data/bot-spot.stop";
 
 /// Guardrail variables of the Python trader that no longer exist. Setting them has no
 /// effect; [`TraderConfig::from_lookup`] reports them once.
 pub const REMOVED_VARS: [&str; 14] = [
-    "CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS",
-    "CLAUDE_SPOT_REQUIRE_MARKET_EVIDENCE_FOR_LIVE",
-    "CLAUDE_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS",
-    "CLAUDE_SPOT_SPECULATIVE_MODE_ENABLED",
-    "CLAUDE_SPOT_SPECULATIVE_MIN_EDGE_BPS",
-    "CLAUDE_SPOT_SPECULATIVE_REQUIRE_THESIS",
-    "CLAUDE_SPOT_MAX_RECENT_LOSS_STREAK",
-    "CLAUDE_SPOT_MIN_TRADE_INTERVAL_SECONDS",
-    "CLAUDE_SPOT_MAX_SUBMITTED_TRADES_PER_DAY",
-    "CLAUDE_SPOT_REQUIRE_PROVEN_EDGE",
-    "CLAUDE_SPOT_PROVEN_EDGE",
-    "CLAUDE_SPOT_DECISION_MODE",
-    "CLAUDE_SPOT_MAX_BUDGET_USD",
+    "BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS",
+    "BOT_SPOT_REQUIRE_MARKET_EVIDENCE_FOR_LIVE",
+    "BOT_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS",
+    "BOT_SPOT_SPECULATIVE_MODE_ENABLED",
+    "BOT_SPOT_SPECULATIVE_MIN_EDGE_BPS",
+    "BOT_SPOT_SPECULATIVE_REQUIRE_THESIS",
+    "BOT_SPOT_MAX_RECENT_LOSS_STREAK",
+    "BOT_SPOT_MIN_TRADE_INTERVAL_SECONDS",
+    "BOT_SPOT_MAX_SUBMITTED_TRADES_PER_DAY",
+    "BOT_SPOT_REQUIRE_PROVEN_EDGE",
+    "BOT_SPOT_PROVEN_EDGE",
+    "BOT_SPOT_DECISION_MODE",
+    "BOT_SPOT_MAX_BUDGET_USD",
     // The failed-route halt is hard safety now: always on, cleared only by operator review.
-    "CLAUDE_SPOT_HALT_AFTER_FAILED_SUBMISSION",
+    "BOT_SPOT_HALT_AFTER_FAILED_SUBMISSION",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -75,7 +75,7 @@ impl FromStr for MarketPickMode {
             "liquid_top_value" => Ok(Self::LiquidTopValue),
             "small_market_aggressive" => Ok(Self::SmallMarketAggressive),
             _ => Err(TraderError::config(
-                "CLAUDE_SPOT_MARKET_PICK_MODE must be liquid_top_value or small_market_aggressive",
+                "BOT_SPOT_MARKET_PICK_MODE must be liquid_top_value or small_market_aggressive",
             )),
         }
     }
@@ -160,7 +160,7 @@ pub struct TraderConfig {
     /// Enable omp's built-in `web_search` tool alongside the host tools.
     pub web_search: bool,
     pub timeout: Duration,
-    /// `CLAUDE_SPOT_FALLBACK_MODELS`: tried in order when the active model fails a turn
+    /// `BOT_SPOT_FALLBACK_MODELS`: tried in order when the active model fails a turn
     /// (without an `execute_route` call) or a compaction. Empty = no fallback.
     pub fallback_models: Vec<ModelSpec>,
     /// Per-attempt timeout of the primary while fallbacks exist (fallbacks use `timeout`).
@@ -174,7 +174,7 @@ pub struct TraderConfig {
     pub journal_path: PathBuf,
     pub journal_prompt_entries: usize,
     pub compact_at_percent: f64,
-    /// `CLAUDE_SPOT_COMPACT_AT_TOKENS`: also compact at this many context tokens (0 = off).
+    /// `BOT_SPOT_COMPACT_AT_TOKENS`: also compact at this many context tokens (0 = off).
     pub compact_at_tokens: u64,
     /// 0 = unlimited.
     pub max_daily_llm_cost_usd: Decimal,
@@ -233,7 +233,7 @@ impl TraderConfig {
         if !removed.is_empty() {
             tracing::warn!(
                 vars = %removed.join(","),
-                "ignoring removed Claude Spot guardrail settings (Claude sees costs and evidence as information)"
+                "ignoring removed Bot Spot guardrail settings (the bot sees costs and evidence as information)"
             );
         }
         let api_key = env
@@ -246,40 +246,40 @@ impl TraderConfig {
                 ConfigError::Missing("BINANCE_API_SECRET or BINANCE_SECRET_KEY".into())
             })?;
         let thinking_raw = env
-            .string("CLAUDE_SPOT_THINKING", "high")
+            .string("BOT_SPOT_THINKING", "high")
             .to_ascii_lowercase();
         let thinking: ThinkingLevel = serde_json::from_value(serde_json::Value::String(
             thinking_raw.clone(),
         ))
         .map_err(|_| ConfigError::Invalid {
-            name: "CLAUDE_SPOT_THINKING".into(),
+            name: "BOT_SPOT_THINKING".into(),
             expected: "off, minimal, low, medium, high, xhigh or max",
             value: thinking_raw,
         })?;
         let allowed_symbols_default = env.raw("API_SYMBOL_WHITELIST").unwrap_or_default();
         let allowed_assets_default = env.raw("API_ASSET_WHITELIST").unwrap_or_default();
         let scope = ScopeConfig::new(
-            &env.csv("CLAUDE_SPOT_ALLOWED_SYMBOLS", &allowed_symbols_default),
-            &env.csv("CLAUDE_SPOT_ALLOWED_ASSETS", &allowed_assets_default),
-            &env.csv("CLAUDE_SPOT_BLOCKED_SYMBOLS", ""),
-            &env.csv("CLAUDE_SPOT_BLOCKED_ASSETS", ""),
-            &env.csv("CLAUDE_SPOT_BLOCKED_QUOTES", "IDR"),
-            env.boolean("CLAUDE_SPOT_BLOCK_FIAT_ASSETS", true)?,
+            &env.csv("BOT_SPOT_ALLOWED_SYMBOLS", &allowed_symbols_default),
+            &env.csv("BOT_SPOT_ALLOWED_ASSETS", &allowed_assets_default),
+            &env.csv("BOT_SPOT_BLOCKED_SYMBOLS", ""),
+            &env.csv("BOT_SPOT_BLOCKED_ASSETS", ""),
+            &env.csv("BOT_SPOT_BLOCKED_QUOTES", "IDR"),
+            env.boolean("BOT_SPOT_BLOCK_FIAT_ASSETS", true)?,
         )?;
-        let timeout_seconds = env.float("CLAUDE_SPOT_TIMEOUT_SECONDS", 300.0)?;
+        let timeout_seconds = env.float("BOT_SPOT_TIMEOUT_SECONDS", 300.0)?;
         let fallback_models = env
-            .csv("CLAUDE_SPOT_FALLBACK_MODELS", "")
+            .csv("BOT_SPOT_FALLBACK_MODELS", "")
             .iter()
             .map(|entry| ModelSpec::parse(entry, thinking))
             .collect::<Result<Vec<_>>>()?;
-        let primary_timeout_seconds = env.float("CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS", 150.0)?;
-        let cooldown_seconds = env.float("CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS", 1800.0)?;
+        let primary_timeout_seconds = env.float("BOT_SPOT_PRIMARY_TIMEOUT_SECONDS", 150.0)?;
+        let cooldown_seconds = env.float("BOT_SPOT_FALLBACK_COOLDOWN_SECONDS", 1800.0)?;
         if cooldown_seconds < 0.0 {
             return Err(TraderError::config(
-                "CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS must be non-negative",
+                "BOT_SPOT_FALLBACK_COOLDOWN_SECONDS must be non-negative",
             ));
         }
-        let evidence_timeframe = env.string("CLAUDE_SPOT_MARKET_EVIDENCE_TIMEFRAME", "1h");
+        let evidence_timeframe = env.string("BOT_SPOT_MARKET_EVIDENCE_TIMEFRAME", "1h");
         if evidence_timeframe != "1h" {
             return Err(TraderError::config("market_evidence_timeframe must be 1h"));
         }
@@ -293,70 +293,70 @@ impl TraderConfig {
             confirm_live_trading: env
                 .string("CONFIRM_LIVE_TRADING", "no")
                 .to_ascii_lowercase(),
-            enabled: env.boolean("CLAUDE_SPOT_ENABLED", false)?,
+            enabled: env.boolean("BOT_SPOT_ENABLED", false)?,
             dynamic_scope: env
-                .string("CLAUDE_SPOT_DYNAMIC_SCOPE", "")
+                .string("BOT_SPOT_DYNAMIC_SCOPE", "")
                 .to_ascii_lowercase(),
-            command: env.string("CLAUDE_SPOT_COMMAND", "omp"),
-            model: env.string("CLAUDE_SPOT_MODEL", "anthropic/claude-haiku-5-5"),
+            command: env.string("BOT_SPOT_COMMAND", "omp"),
+            model: env.string("BOT_SPOT_MODEL", "anthropic/claude-haiku-5-5"),
             thinking,
-            web_search: env.boolean("CLAUDE_SPOT_WEB_SEARCH", true)?,
-            timeout: positive_duration(timeout_seconds, "claude_timeout_seconds")?,
+            web_search: env.boolean("BOT_SPOT_WEB_SEARCH", true)?,
+            timeout: positive_duration(timeout_seconds, "bot_timeout_seconds")?,
             fallback_models,
             primary_timeout: positive_duration(
                 primary_timeout_seconds,
-                "CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS",
+                "BOT_SPOT_PRIMARY_TIMEOUT_SECONDS",
             )?,
             fallback_cooldown: Duration::from_secs_f64(cooldown_seconds),
-            brain_down_alert_cycles: env.integer("CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES", 3)?,
-            prompt_version: env.string("CLAUDE_SPOT_PROMPT_VERSION", PROMPT_VERSION),
-            session_dir: env.path("CLAUDE_SPOT_SESSION_DIR", "data/claude-spot-session"),
-            journal_path: env.path("CLAUDE_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
-            journal_prompt_entries: env.integer("CLAUDE_SPOT_JOURNAL_PROMPT_ENTRIES", 8)?,
-            compact_at_percent: env.float("CLAUDE_SPOT_COMPACT_AT_PERCENT", 70.0)?,
-            compact_at_tokens: env.integer("CLAUDE_SPOT_COMPACT_AT_TOKENS", 0)?,
+            brain_down_alert_cycles: env.integer("BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES", 3)?,
+            prompt_version: env.string("BOT_SPOT_PROMPT_VERSION", PROMPT_VERSION),
+            session_dir: env.path("BOT_SPOT_SESSION_DIR", "data/bot-spot-session"),
+            journal_path: env.path("BOT_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
+            journal_prompt_entries: env.integer("BOT_SPOT_JOURNAL_PROMPT_ENTRIES", 8)?,
+            compact_at_percent: env.float("BOT_SPOT_COMPACT_AT_PERCENT", 70.0)?,
+            compact_at_tokens: env.integer("BOT_SPOT_COMPACT_AT_TOKENS", 0)?,
             max_daily_llm_cost_usd: env
-                .decimal("CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD", Decimal::ZERO)?,
-            state_path: env.path("CLAUDE_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
-            route_stale_seconds: env.float("CLAUDE_SPOT_ROUTE_STALE_SECONDS", 60.0)?,
-            audit_path: env.path("CLAUDE_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
-            lock_path: env.path("CLAUDE_SPOT_LOCK_PATH", "data/claude-spot.lock"),
-            stop_path: env.path("CLAUDE_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
+                .decimal("BOT_SPOT_MAX_DAILY_LLM_COST_USD", Decimal::ZERO)?,
+            state_path: env.path("BOT_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
+            route_stale_seconds: env.float("BOT_SPOT_ROUTE_STALE_SECONDS", 60.0)?,
+            audit_path: env.path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
+            lock_path: env.path("BOT_SPOT_LOCK_PATH", "data/bot-spot.lock"),
+            stop_path: env.path("BOT_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
             exit_paths: crate::exit_book::ExitPaths::from_lookup(|name| env.raw(name)),
             exit,
-            telegram_explain: env.boolean("CLAUDE_SPOT_TELEGRAM_EXPLAIN", true)?,
-            telegram_reason_chars: env.integer("CLAUDE_SPOT_TELEGRAM_REASON_CHARS", 0)?,
-            max_route_legs: env.integer("CLAUDE_SPOT_MAX_ROUTE_LEGS", 3)?,
-            max_route_expansions: env.integer("CLAUDE_SPOT_MAX_ROUTE_EXPANSIONS", 10_000)?,
-            max_candidate_routes: env.integer("CLAUDE_SPOT_MAX_CANDIDATE_ROUTES", 1)?,
-            candidate_limit: env.integer("CLAUDE_SPOT_CANDIDATE_LIMIT", 5)?,
+            telegram_explain: env.boolean("BOT_SPOT_TELEGRAM_EXPLAIN", true)?,
+            telegram_reason_chars: env.integer("BOT_SPOT_TELEGRAM_REASON_CHARS", 0)?,
+            max_route_legs: env.integer("BOT_SPOT_MAX_ROUTE_LEGS", 3)?,
+            max_route_expansions: env.integer("BOT_SPOT_MAX_ROUTE_EXPANSIONS", 10_000)?,
+            max_candidate_routes: env.integer("BOT_SPOT_MAX_CANDIDATE_ROUTES", 1)?,
+            candidate_limit: env.integer("BOT_SPOT_CANDIDATE_LIMIT", 5)?,
             market_pick_mode: env
-                .string("CLAUDE_SPOT_MARKET_PICK_MODE", "liquid_top_value")
+                .string("BOT_SPOT_MARKET_PICK_MODE", "liquid_top_value")
                 .parse()?,
             min_quote_volume_usdt: env
-                .decimal("CLAUDE_SPOT_MIN_QUOTE_VOLUME_USDT", Decimal::from(100_000))?,
-            max_spread_bps: env.decimal("CLAUDE_SPOT_MAX_SPREAD_BPS", Decimal::from(50))?,
+                .decimal("BOT_SPOT_MIN_QUOTE_VOLUME_USDT", Decimal::from(100_000))?,
+            max_spread_bps: env.decimal("BOT_SPOT_MAX_SPREAD_BPS", Decimal::from(50))?,
             small_min_quote_volume_usdt: env.decimal(
-                "CLAUDE_SPOT_SMALL_MIN_QUOTE_VOLUME_USDT",
+                "BOT_SPOT_SMALL_MIN_QUOTE_VOLUME_USDT",
                 Decimal::from(5_000),
             )?,
             small_max_spread_bps: env
-                .decimal("CLAUDE_SPOT_SMALL_MAX_SPREAD_BPS", Decimal::from(250))?,
-            small_candidate_limit: env.integer("CLAUDE_SPOT_SMALL_CANDIDATE_LIMIT", 10)?,
+                .decimal("BOT_SPOT_SMALL_MAX_SPREAD_BPS", Decimal::from(250))?,
+            small_candidate_limit: env.integer("BOT_SPOT_SMALL_CANDIDATE_LIMIT", 10)?,
             slippage_buffer_bps: env
-                .decimal("CLAUDE_SPOT_SLIPPAGE_BUFFER_BPS", Decimal::from(25))?,
+                .decimal("BOT_SPOT_SLIPPAGE_BUFFER_BPS", Decimal::from(25))?,
             leg_rounding_reserve_bps: env
-                .decimal("CLAUDE_SPOT_LEG_ROUNDING_RESERVE_BPS", Decimal::from(5))?,
+                .decimal("BOT_SPOT_LEG_ROUNDING_RESERVE_BPS", Decimal::from(5))?,
             min_leg_quote_reserve_bps: env
-                .decimal("CLAUDE_SPOT_MIN_LEG_QUOTE_RESERVE_BPS", Decimal::from(25))?,
-            ticker_stale_seconds: env.float("CLAUDE_SPOT_TICKER_STALE_SECONDS", 300.0)?,
-            fee_cache_seconds: env.float("CLAUDE_SPOT_FEE_CACHE_SECONDS", 60.0)?,
-            market_evidence_enabled: env.boolean("CLAUDE_SPOT_MARKET_EVIDENCE_ENABLED", true)?,
+                .decimal("BOT_SPOT_MIN_LEG_QUOTE_RESERVE_BPS", Decimal::from(25))?,
+            ticker_stale_seconds: env.float("BOT_SPOT_TICKER_STALE_SECONDS", 300.0)?,
+            fee_cache_seconds: env.float("BOT_SPOT_FEE_CACHE_SECONDS", 60.0)?,
+            market_evidence_enabled: env.boolean("BOT_SPOT_MARKET_EVIDENCE_ENABLED", true)?,
             market_evidence_lookback_hours: env
-                .integer("CLAUDE_SPOT_MARKET_EVIDENCE_LOOKBACK_HOURS", 168)?,
+                .integer("BOT_SPOT_MARKET_EVIDENCE_LOOKBACK_HOURS", 168)?,
             market_evidence_max_symbols: env
-                .integer("CLAUDE_SPOT_MARKET_EVIDENCE_MAX_SYMBOLS", 12)?,
-            trade_memory_limit: env.integer("CLAUDE_SPOT_TRADE_MEMORY_LIMIT", 8)?,
+                .integer("BOT_SPOT_MARKET_EVIDENCE_MAX_SYMBOLS", 12)?,
+            trade_memory_limit: env.integer("BOT_SPOT_TRADE_MEMORY_LIMIT", 8)?,
             scope,
         };
         config.validate()?;
@@ -367,7 +367,7 @@ impl TraderConfig {
     pub fn validate(&self) -> Result<()> {
         if self.api_key.trim().is_empty() || self.api_secret.trim().is_empty() {
             return Err(TraderError::config(
-                "Claude Spot requires Binance API credentials",
+                "Bot Spot requires Binance API credentials",
             ));
         }
         for (name, path) in [
@@ -383,10 +383,10 @@ impl TraderConfig {
             }
         }
         if self.command.trim().is_empty() {
-            return Err(TraderError::config("claude_command must not be blank"));
+            return Err(TraderError::config("bot_command must not be blank"));
         }
         if self.model.trim().is_empty() {
-            return Err(TraderError::config("claude_model must not be blank"));
+            return Err(TraderError::config("bot_model must not be blank"));
         }
         if self.prompt_version.trim().is_empty() {
             return Err(TraderError::config("prompt_version must not be blank"));
@@ -433,7 +433,7 @@ impl TraderConfig {
         }
         if matches!(self.thinking, ThinkingLevel::Inherit) {
             return Err(TraderError::config(
-                "CLAUDE_SPOT_THINKING must name a level",
+                "BOT_SPOT_THINKING must name a level",
             ));
         }
         self.model_chain()?;
@@ -454,14 +454,14 @@ impl TraderConfig {
         }
         let primary = ModelSpec::parse(&self.model, self.thinking).map_err(|error| {
             TraderError::config(format!(
-                "CLAUDE_SPOT_MODEL must be provider/model-id when CLAUDE_SPOT_FALLBACK_MODELS is set: {error}"
+                "BOT_SPOT_MODEL must be provider/model-id when BOT_SPOT_FALLBACK_MODELS is set: {error}"
             ))
         })?;
         let mut chain = vec![primary];
         for fallback in &self.fallback_models {
             if chain.iter().any(|model| model.name() == fallback.name()) {
                 return Err(TraderError::config(format!(
-                    "CLAUDE_SPOT_FALLBACK_MODELS entry {} repeats the primary or another fallback",
+                    "BOT_SPOT_FALLBACK_MODELS entry {} repeats the primary or another fallback",
                     fallback.name()
                 )));
             }
@@ -538,27 +538,27 @@ impl TraderConfig {
     pub fn check_live_arming(&self) -> Result<()> {
         if !self.enabled {
             return Err(TraderError::safety(
-                "CLAUDE_SPOT_ENABLED=true is required for live submission",
+                "BOT_SPOT_ENABLED=true is required for live submission",
             ));
         }
         if self.dynamic_scope != DYNAMIC_SCOPE_ALL {
             return Err(TraderError::safety(
-                "CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot is required for dynamic live scope",
+                "BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot is required for dynamic live scope",
             ));
         }
         if self.use_testnet {
             return Err(TraderError::safety(
-                "Claude Spot live submission requires USE_TESTNET=false",
+                "Bot Spot live submission requires USE_TESTNET=false",
             ));
         }
         if self.dry_run {
             return Err(TraderError::safety(
-                "Claude Spot live submission requires DRY_RUN=false",
+                "Bot Spot live submission requires DRY_RUN=false",
             ));
         }
         if self.confirm_live_trading != "yes" {
             return Err(TraderError::safety(
-                "Claude Spot live submission requires CONFIRM_LIVE_TRADING=yes",
+                "Bot Spot live submission requires CONFIRM_LIVE_TRADING=yes",
             ));
         }
         Ok(())
@@ -719,8 +719,8 @@ pub(crate) mod tests {
 
     fn armed() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("CLAUDE_SPOT_ENABLED", "true"),
-            ("CLAUDE_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
+            ("BOT_SPOT_ENABLED", "true"),
+            ("BOT_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
             ("USE_TESTNET", "false"),
             ("DRY_RUN", "false"),
             ("CONFIRM_LIVE_TRADING", "yes"),
@@ -733,9 +733,9 @@ pub(crate) mod tests {
             ("BINANCE_API_KEY", "KEY-must-not-leak"),
             ("BINANCE_API_SECRET", "SECRET-must-not-leak"),
             ("CONFIRM_LIVE_TRADING", "yes"),
-            ("CLAUDE_SPOT_MODEL", "openai-codex/gpt-6.1-sol"),
-            ("CLAUDE_SPOT_DEFAULT_EXIT_PLAN", "deadline=120"),
-            ("CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM", "2026-10-15T09:17:34Z"),
+            ("BOT_SPOT_MODEL", "openai-codex/gpt-6.1-sol"),
+            ("BOT_SPOT_DEFAULT_EXIT_PLAN", "deadline=120"),
+            ("BOT_SPOT_DEFAULT_EXIT_PLAN_FROM", "2026-10-15T09:17:34Z"),
         ]))
         .unwrap();
         let snapshot = config.run_config(Some(1200));
@@ -755,11 +755,11 @@ pub(crate) mod tests {
         assert_eq!(config.prompt_version, PROMPT_VERSION);
         assert_eq!(
             config.session_dir,
-            PathBuf::from("data/claude-spot-session")
+            PathBuf::from("data/bot-spot-session")
         );
         assert_eq!(
             config.audit_path,
-            PathBuf::from("data/claude-spot-decisions.jsonl")
+            PathBuf::from("data/bot-spot-decisions.jsonl")
         );
         assert_eq!(config.timeout, Duration::from_secs(300));
         assert_eq!(config.max_route_legs, 3);
@@ -775,9 +775,9 @@ pub(crate) mod tests {
     #[test]
     fn removed_guardrail_vars_are_ignored() {
         let config = TraderConfig::from_lookup(lookup(&[
-            ("CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS", "not-a-number"),
-            ("CLAUDE_SPOT_DECISION_MODE", "freestyle"),
-            ("CLAUDE_SPOT_MAX_SUBMITTED_TRADES_PER_DAY", "-3"),
+            ("BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS", "not-a-number"),
+            ("BOT_SPOT_DECISION_MODE", "freestyle"),
+            ("BOT_SPOT_MAX_SUBMITTED_TRADES_PER_DAY", "-3"),
         ]));
         assert!(config.is_ok());
     }
@@ -790,8 +790,8 @@ pub(crate) mod tests {
             .check_live_arming()
             .unwrap();
         let cases = [
-            ("CLAUDE_SPOT_ENABLED", "false", "CLAUDE_SPOT_ENABLED=true"),
-            ("CLAUDE_SPOT_DYNAMIC_SCOPE", "", "all_eligible_spot"),
+            ("BOT_SPOT_ENABLED", "false", "BOT_SPOT_ENABLED=true"),
+            ("BOT_SPOT_DYNAMIC_SCOPE", "", "all_eligible_spot"),
             ("USE_TESTNET", "true", "USE_TESTNET=false"),
             ("DRY_RUN", "true", "DRY_RUN=false"),
             ("CONFIRM_LIVE_TRADING", "no", "CONFIRM_LIVE_TRADING=yes"),
@@ -821,14 +821,14 @@ pub(crate) mod tests {
     #[test]
     fn validation_rejects_bad_values() {
         for pairs in [
-            [("CLAUDE_SPOT_MAX_ROUTE_LEGS", "4")],
-            [("CLAUDE_SPOT_MAX_ROUTE_LEGS", "0")],
-            [("CLAUDE_SPOT_MARKET_PICK_MODE", "yolo")],
-            [("CLAUDE_SPOT_MARKET_EVIDENCE_TIMEFRAME", "4h")],
-            [("CLAUDE_SPOT_TIMEOUT_SECONDS", "0")],
-            [("CLAUDE_SPOT_THINKING", "loud")],
-            [("CLAUDE_SPOT_CANDIDATE_LIMIT", "-1")],
-            [("CLAUDE_SPOT_BLOCKED_ASSETS", "B@D")],
+            [("BOT_SPOT_MAX_ROUTE_LEGS", "4")],
+            [("BOT_SPOT_MAX_ROUTE_LEGS", "0")],
+            [("BOT_SPOT_MARKET_PICK_MODE", "yolo")],
+            [("BOT_SPOT_MARKET_EVIDENCE_TIMEFRAME", "4h")],
+            [("BOT_SPOT_TIMEOUT_SECONDS", "0")],
+            [("BOT_SPOT_THINKING", "loud")],
+            [("BOT_SPOT_CANDIDATE_LIMIT", "-1")],
+            [("BOT_SPOT_BLOCKED_ASSETS", "B@D")],
             [("USE_TESTNET", "maybe")],
         ] {
             assert!(
@@ -842,7 +842,7 @@ pub(crate) mod tests {
     #[test]
     fn explicitly_empty_list_clears_default_and_whitelist_falls_back() {
         let config = TraderConfig::from_lookup(lookup(&[
-            ("CLAUDE_SPOT_BLOCKED_QUOTES", ""),
+            ("BOT_SPOT_BLOCKED_QUOTES", ""),
             ("API_SYMBOL_WHITELIST", "btc/usdt, ETHUSDT"),
         ]))
         .unwrap();
@@ -866,12 +866,12 @@ pub(crate) mod tests {
 
         let config = TraderConfig::from_lookup(lookup(&[
             (
-                "CLAUDE_SPOT_FALLBACK_MODELS",
+                "BOT_SPOT_FALLBACK_MODELS",
                 " openai-codex/gpt-6.1-sol:LOW , google/gemini-x ",
             ),
-            ("CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS", "90"),
-            ("CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS", "0"),
-            ("CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES", "5"),
+            ("BOT_SPOT_PRIMARY_TIMEOUT_SECONDS", "90"),
+            ("BOT_SPOT_FALLBACK_COOLDOWN_SECONDS", "0"),
+            ("BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES", "5"),
         ]))
         .unwrap();
         assert_eq!(
@@ -917,10 +917,10 @@ pub(crate) mod tests {
             // A bare primary pattern cannot be switched back to.
             (
                 "openai-codex/gpt-6.1-sol",
-                Some(("CLAUDE_SPOT_MODEL", "haiku")),
+                Some(("BOT_SPOT_MODEL", "haiku")),
             ),
         ] {
-            let mut pairs = vec![("CLAUDE_SPOT_FALLBACK_MODELS", fallbacks)];
+            let mut pairs = vec![("BOT_SPOT_FALLBACK_MODELS", fallbacks)];
             pairs.extend(extra);
             assert!(
                 TraderConfig::from_lookup(lookup(&pairs)).is_err(),
@@ -928,9 +928,9 @@ pub(crate) mod tests {
             );
         }
         for pairs in [
-            [("CLAUDE_SPOT_PRIMARY_TIMEOUT_SECONDS", "0")],
-            [("CLAUDE_SPOT_FALLBACK_COOLDOWN_SECONDS", "-1")],
-            [("CLAUDE_SPOT_BRAIN_DOWN_ALERT_CYCLES", "-1")],
+            [("BOT_SPOT_PRIMARY_TIMEOUT_SECONDS", "0")],
+            [("BOT_SPOT_FALLBACK_COOLDOWN_SECONDS", "-1")],
+            [("BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES", "-1")],
         ] {
             assert!(
                 TraderConfig::from_lookup(lookup(&pairs)).is_err(),
@@ -938,6 +938,6 @@ pub(crate) mod tests {
             );
         }
         // Without fallbacks a bare --model pattern stays valid (today's behavior).
-        assert!(TraderConfig::from_lookup(lookup(&[("CLAUDE_SPOT_MODEL", "haiku")])).is_ok());
+        assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_MODEL", "haiku")])).is_ok());
     }
 }

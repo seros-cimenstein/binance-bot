@@ -324,7 +324,7 @@ pub fn weighted_short_relative_momentum_bps(
     (weights > 0.0).then(|| weighted / weights)
 }
 
-/// Relative-momentum packet for one route (information for Claude, never a gate).
+/// Relative-momentum packet for one route (information for the bot, never a gate).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RouteEvidence {
     pub source: AssetEvidence,

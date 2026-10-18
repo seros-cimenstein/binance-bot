@@ -98,21 +98,21 @@ focused tests before the next phase starts.
 - 2026-05-26: Added phase 31 for small-balance Spot decision visibility and
   faster historical strategy evaluation while the phase 13 live-paper gate
   continues unchanged.
-- 2026-05-26: Added phase 32 for Claude-controlled autonomous Spot trading.
+- 2026-05-26: Added phase 32 for bot-controlled autonomous Spot trading.
   This is a separate live runtime that replaces the unfinished phase 13 warm-up
-  gate for Claude mode, uses the whole available Spot wallet, and allows
+  gate for bot mode, uses the whole available Spot wallet, and allows
   dynamic routed Spot execution up to three serial legs per 15-minute action.
-- 2026-05-27: Completed phase 33 by adding Claude Spot market evidence, trade
+- 2026-05-27: Completed phase 33 by adding Bot Spot market evidence, trade
   memory, break-even math, a strict live evidence gate, and evidence-only
   inspection before any re-enable.
 - 2026-05-27: Completed phase 35 read-only social-signal intelligence with
   authorized Telegram/X ingestion adapters, AI-capable classification,
-  privacy-reduced audit rows, Claude Spot context enrichment, and
+  privacy-reduced audit rows, Bot Spot context enrichment, and
   manipulation-risk candidate blocking when explicitly enabled.
 - 2026-05-27: Completed phase 36 by adding deterministic Telegram ELI5
-  explanations for every Claude Spot decision status while preserving the full
+  explanations for every Bot Spot decision status while preserving the full
   audit JSONL as the detailed source of truth.
-- 2026-05-27: Completed phase 37 by widening Claude Spot's small-market
+- 2026-05-27: Completed phase 37 by widening Bot Spot's small-market
   immediate-friction cap from `50` bps to `200` bps so candidate generation is
   less shallow while the evidence and safety gates remain active.
 - 2026-05-28: Completed phase 38 by increasing both live bps controls by
@@ -120,7 +120,7 @@ focused tests before the next phase starts.
   `100 -> 200` bps.
 - 2026-05-28: Completed phase 39 by lowering the strict evidence minimum from
   `200` bps to `50` bps while keeping the candidate friction cap at `300` bps.
-- 2026-05-28: Completed phase 40 by hardening Claude Spot live route execution
+- 2026-05-28: Completed phase 40 by hardening Bot Spot live route execution
   with dynamic buy-leg fee/slippage/rounding reserves, single-row partial-route
   failure audits, sanitized Binance failure logging, and full Telegram Why
   delivery through message splitting.
@@ -539,65 +539,65 @@ focused tests before the next phase starts.
   force a trade above the approved share of this small account; do not loosen
   allocation caps merely to produce a trade.
 
-## 32. Claude Autonomous Spot Brain
+## 32. Bot Autonomous Spot Brain
 
 - [x] Add a headless Claude Code adapter that uses schema-validated JSON output
   and includes the configured money-maker mission prompt in every decision.
 - [x] Add a separate `src.claude_spot` live Spot runtime so `src.pool` remains
-  paper-only while Claude can choose `hold` or one routed `rebalance` action.
-- [x] Let Claude mode consider dynamically eligible Spot routes, control the
+  paper-only while the bot can choose `hold` or one routed `rebalance` action.
+- [x] Let bot mode consider dynamically eligible Spot routes, control the
   whole available Spot wallet, and execute one selected route of up to three
   serial Spot order legs per 15-minute cycle; default to aggressive
   small-market discovery with up to 10 scored candidates and one route quote per
   candidate, while keeping `liquid_top_value` available as a rollback mode.
-- [x] Add Claude Spot small-market candidate scoring and audit metadata covering
+- [x] Add Bot Spot small-market candidate scoring and audit metadata covering
   quote volume, spread, liquidity tier, route legs, immediate friction, and the
   reason each candidate was offered.
 - [x] Remove Phase 13 warm-up, canary caps, daily notional/order limits,
   turnover limits, allocation percentage caps, and drawdown gates from
-  Claude-mode authorization while keeping exchange-validity invariants.
+  bot-mode authorization while keeping exchange-validity invariants.
 - [x] Enforce non-overridable Binance market rules, free balance, fee handling,
   Binance lot-size step sizing, Spot permission/order-test preflight,
   configured dynamic scope, emergency-stop, audit, reconciliation, and
   halt-on-failed/ambiguous leg behavior.
-- [x] Add Claude Spot local route-scope filters so public markets that the
+- [x] Add Bot Spot local route-scope filters so public markets that the
   account cannot submit against, such as IDR-quoted Spot symbols, are removed
-  before Claude sees candidates and rechecked before live submission.
-- [x] Block traditional fiat assets in Claude Spot routes by default so dynamic
+  before the bot sees candidates and rechecked before live submission.
+- [x] Block traditional fiat assets in Bot Spot routes by default so dynamic
   routing stays on crypto/stablecoin Spot paths unless an operator deliberately
   disables the fiat guard.
-- [x] Treat Claude decision timeouts as no-order holds and make the user timer
+- [x] Treat bot decision timeouts as no-order holds and make the user timer
   self-schedule after activation so a restart does not require forcing an
   immediate live service run.
-- [x] Add anti-churn trade discipline for Claude Spot: hard immediate-friction
+- [x] Add anti-churn trade discipline for Bot Spot: hard immediate-friction
   filtering, submitted-trade cooldown, daily submitted-trade cap, and
   hold-after-failed-submission behavior.
-- [x] Add a user-owned oneshot service and 15-minute timer for Claude Spot; keep
-  it disabled unless the deployed environment explicitly enables Claude live
+- [x] Add a user-owned oneshot service and 15-minute timer for Bot Spot; keep
+  it disabled unless the deployed environment explicitly enables bot live
   mode.
-- [x] Add tests for Claude schema parsing, prompt construction, dynamic multi-hop
+- [x] Add tests for bot schema parsing, prompt construction, dynamic multi-hop
   route selection, plan-only audit, live gate rejection, serial route
   execution, and halted-route behavior.
-- [x] Run a real local Claude structured-response probe and Binance Spot
+- [x] Run a real local bot structured-response probe and Binance Spot
   permission/order-test preflight in the deployed environment before enabling
-  the `binance-claude-spot.timer`.
-- [x] Enable the Claude Spot timer only after `CLAUDE_SPOT_ENABLED=true`,
-  `CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
+  the `binance-bot-spot.timer`.
+- [x] Enable the Bot Spot timer only after `BOT_SPOT_ENABLED=true`,
+  `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
   `DRY_RUN=false`, and `CONFIRM_LIVE_TRADING=yes` are intentionally set.
 
-## 33. Claude Spot Market Evidence And Memory Gate
+## 33. Bot Spot Market Evidence And Memory Gate
 
-- [x] Add compact market evidence to every Claude Spot candidate covering
+- [x] Add compact market evidence to every Bot Spot candidate covering
   `1h`, `4h`, `24h`, and `7d` returns, volatility, volume change,
   required break-even move, and expected edge after route friction.
-- [x] Add Claude Spot trade memory from the audit JSONL, including recent
+- [x] Add Bot Spot trade memory from the audit JSONL, including recent
   submitted routes, open/current holding context, and estimated closed or open
   PnL where it can be reconstructed.
 - [x] Add a strict live-only evidence gate so selected routes cannot submit
   unless evidence is present, the expected edge clears the configured minimum,
-  and recent Claude outcomes do not trigger a loss-streak hold.
+  and recent bot outcomes do not trigger a loss-streak hold.
 - [x] Add a plan-only evidence inspection command/path that prints the context
-  without submitting orders or requiring Claude to decide.
+  without submitting orders or requiring the bot to decide.
 - [x] Keep the existing anti-churn, fiat-block, permission/order-test,
   emergency-stop, audit, reconciliation, and no-advanced-product-write
   invariants active.
@@ -605,26 +605,26 @@ focused tests before the next phase starts.
   holds, plan-only evidence reporting, and live submission only when the strict
   evidence gate passes.
 
-## 34. Five-Minute Claude Spot Fee-Aware Live Profile
+## 34. Five-Minute Bot Spot Fee-Aware Live Profile
 
 - [x] Keep the Phase 33 compact evidence windows (`1h`, `4h`, `24h`, `7d`) and
   dynamic per-leg fee/friction packet in every candidate context.
-- [x] Make the live profile call Claude on a 5-minute timer and give Claude up
+- [x] Make the live profile call the bot on a 5-minute timer and give the bot up
   to 300 seconds to return one schema-validated Spot decision.
-- [x] Disable the fixed cooldown and fixed daily submitted-trade cap for Claude
+- [x] Disable the fixed cooldown and fixed daily submitted-trade cap for Bot
   Spot by setting both controls to `0`, while keeping the failed-route halt,
   emergency stop, scope, permission/order-test, friction, market-evidence,
   break-even, trade-memory, audit, and reconciliation gates active.
-- [x] Update the Claude prompt to discourage fee churn and require an
+- [x] Update the bot prompt to discourage fee churn and require an
   after-fee, after-spread, after-slippage case before rotating the wallet.
 - [x] Add tests for disabled fixed limits, prompt wording, and 5-minute timer
   deployment metadata.
 
-## 35. Social Signal Intelligence For Claude Spot
+## 35. Social Signal Intelligence For Bot Spot
 
 - [x] Add a read-only social-signal module with disabled-by-default settings,
   JSONL audit persistence, Telegram Bot API parsing, official X API parsing,
-  symbol extraction, heuristic labeling, and optional headless-Claude
+  symbol extraction, heuristic labeling, and optional headless-bot
   classification without tools.
 - [x] Normalize permitted social posts into privacy-reduced records with hashed
   author/channel identifiers, short excerpts, mentioned assets, label,
@@ -632,24 +632,24 @@ focused tests before the next phase starts.
 - [x] Summarize stored social records into per-asset evidence covering mention
   count, source diversity, bullish/bearish balance, manipulation risk, and
   recent excerpts.
-- [x] Feed social evidence into Claude Spot candidate context when
+- [x] Feed social evidence into Bot Spot candidate context when
   `SOCIAL_SIGNAL_ENABLED=true`; if manipulation risk exceeds the configured
-  threshold and blocking is enabled, remove the affected route before Claude
+  threshold and blocking is enabled, remove the affected route before the bot
   can select it.
 - [x] Keep social signals additive only: they cannot bypass Binance market
   rules, fee/friction, market-evidence, trade-memory, emergency-stop,
   order-test, audit, or reconciliation gates.
 - [x] Add tests for Telegram/X parsing, privacy reduction, evidence summary,
-  AI classification wiring, Claude context enrichment, and manipulation-risk
+  AI classification wiring, bot context enrichment, and manipulation-risk
   candidate blocking.
 
-## 36. Telegram Decision Explanations For Claude Spot
+## 36. Telegram Decision Explanations For Bot Spot
 
-- [x] Add deterministic ELI5 Telegram explanations for every Claude Spot cycle
+- [x] Add deterministic ELI5 Telegram explanations for every Bot Spot cycle
   status: held, planned, submitted, failed, and blocked.
 - [x] Explain hold decisions with the concrete reason path, including no
   candidates, evidence rejection, timeout, failed-route halt, trade discipline,
-  or Claude's own hold reason.
+  or the bot's own hold reason.
 - [x] Include concise structured fields in the Telegram alert for status,
   action, route, candidates, submission state, explanation, reason, and audit
   path.
@@ -659,26 +659,26 @@ focused tests before the next phase starts.
 - [x] Add focused tests for decision explanations and HTML escaping without
   changing any live trading gate or prompt behavior.
 
-## 37. Claude Spot Small-Market Friction Cap Tuning
+## 37. Bot Spot Small-Market Friction Cap Tuning
 
 - [x] Raise the default/deployed
-  `CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS` profile from `50` bps to `200` bps
+  `BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS` profile from `50` bps to `200` bps
   so small-account candidate generation can offer routes with realistic
   small-market spread, slippage, and multi-leg costs.
 - [x] Keep the widened cap finite and hard: routes above `200` bps immediate
-  friction remain hidden from Claude before decision time.
+  friction remain hidden from the bot before decision time.
 - [x] Preserve the existing live gates: market evidence, break-even, trade
   memory, Binance market rules, order-test, local scope, fiat blocking,
   emergency stop, audit, reconciliation, and failed-route halt.
 - [x] Update docs/tests so future sessions know this is a deliberate
   small-market risk profile, not a removal of fee discipline.
 
-## 38. Claude Spot Bps Retuning
+## 38. Bot Spot Bps Retuning
 
-- [x] Increase `CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS` from `200` bps to
+- [x] Increase `BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS` from `200` bps to
   `300` bps so candidate generation can tolerate another `100` bps of
   immediate small-market fee/spread/slippage friction.
-- [x] Increase `CLAUDE_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS` from `100` bps to
+- [x] Increase `BOT_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS` from `100` bps to
   `200` bps as requested. This is stricter for live submission, so it must be
   treated as a deliberate higher-conviction gate rather than a loosening.
 - [x] Keep all non-negotiable live gates active: Binance market rules, balance
@@ -687,12 +687,12 @@ focused tests before the next phase starts.
 - [x] Update docs/tests and deploy the same bps values to the active
   user-owned runtime.
 
-## 39. Claude Spot Lower Evidence Minimum
+## 39. Bot Spot Lower Evidence Minimum
 
-- [x] Lower `CLAUDE_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS` from `200` bps to `50`
+- [x] Lower `BOT_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS` from `200` bps to `50`
   bps so routes with smaller after-friction expected edge can pass the strict
   live evidence gate.
-- [x] Keep `CLAUDE_SPOT_ALLOW_NEGATIVE_FRICTION_BPS=300` so route candidates
+- [x] Keep `BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS=300` so route candidates
   remain bounded by a finite immediate fee/spread/slippage ceiling.
 - [x] Preserve the remaining live gates: Binance market rules, balance checks,
   order-test preflight, local scope, fiat blocking, trade memory, emergency
@@ -700,12 +700,12 @@ focused tests before the next phase starts.
 - [x] Update docs/tests and deploy the same evidence minimum to the active
   user-owned runtime.
 
-## 40. Claude Spot Dynamic Route Execution Reserve
+## 40. Bot Spot Dynamic Route Execution Reserve
 
 - [x] Size live buy legs with an authenticated per-symbol taker-fee reserve plus
   configured slippage and rounding reserve before order-test and submission.
-- [x] Add `CLAUDE_SPOT_LEG_ROUNDING_RESERVE_BPS` and
-  `CLAUDE_SPOT_MIN_LEG_QUOTE_RESERVE_BPS` so the reserve is dynamic but still
+- [x] Add `BOT_SPOT_LEG_ROUNDING_RESERVE_BPS` and
+  `BOT_SPOT_MIN_LEG_QUOTE_RESERVE_BPS` so the reserve is dynamic but still
   has a small execution floor.
 - [x] Preserve partial-route audit truth in one failed row whenever any leg has
   already submitted and a later leg fails preflight, order-test, submission, or
@@ -713,23 +713,23 @@ focused tests before the next phase starts.
 - [x] Add an explicit operator-review audit marker so a reviewed partial-route
   failure can be cleared without disabling failed-submission halt globally.
 - [x] Remove Telegram Why truncation by making
-  `CLAUDE_SPOT_TELEGRAM_REASON_CHARS=0` mean full text and splitting long
+  `BOT_SPOT_TELEGRAM_REASON_CHARS=0` mean full text and splitting long
   Telegram messages instead of cutting the reason.
 - [x] Sanitize Binance exchange failure logs so signed request headers, bodies,
   signatures, timestamps, and secrets are not emitted in journal tracebacks.
-- [x] Keep the Claude Spot timer stopped after the partial-route incident until
+- [x] Keep the Bot Spot timer stopped after the partial-route incident until
   the operator explicitly reviews and re-enables live cycles.
 
-## 41. Claude Spot Speculative Entry Mode
+## 41. Bot Spot Speculative Entry Mode
 
 - [x] Add opt-in speculative live config:
-  `CLAUDE_SPOT_SPECULATIVE_MODE_ENABLED`,
-  `CLAUDE_SPOT_SPECULATIVE_MIN_EDGE_BPS`, and
-  `CLAUDE_SPOT_SPECULATIVE_REQUIRE_THESIS`.
+  `BOT_SPOT_SPECULATIVE_MODE_ENABLED`,
+  `BOT_SPOT_SPECULATIVE_MIN_EDGE_BPS`, and
+  `BOT_SPOT_SPECULATIVE_REQUIRE_THESIS`.
 - [x] Keep normal mode unchanged by default. When speculative mode is enabled,
   allow a selected route to miss the normal market-evidence edge minimum only
   if evidence is ready, expected edge after friction is above the configured
-  speculative floor, and Claude's reason includes a concrete speculative thesis
+  speculative floor, and the bot's reason includes a concrete speculative thesis
   when thesis enforcement is enabled.
 - [x] Preserve all non-negotiable live gates: Binance market rules, balances,
   authenticated dynamic fees/reserves, order-test preflight, local scope, fiat
@@ -741,10 +741,10 @@ focused tests before the next phase starts.
 - [x] Update docs/tests and deploy the approved speculative profile to the
   active user-owned runtime only after focused and full verification pass.
 
-## 42. Claude Spot Short-Window Market Evidence
+## 42. Bot Spot Short-Window Market Evidence
 
 - [x] Fetch minute-candle evidence for every source/destination asset already in
-  Claude Spot market evidence and compute `5m` and `15m` returns as
+  Bot Spot market evidence and compute `5m` and `15m` returns as
   `short_returns_bps`.
 - [x] Feed `short_returns_bps`, short evidence status, short timeframe, and short
   relative-momentum summary into the selected candidate context without removing
@@ -752,7 +752,7 @@ focused tests before the next phase starts.
 - [x] Include `5m` and `15m` relative momentum in
   `expected_edge_after_friction_bps` with modest weights so a current dump can
   affect live route approval instead of being hidden behind 24h/7d momentum.
-- [x] Update Claude's prompt to treat `5m`/`15m` as the current tape and to avoid
+- [x] Update the bot's prompt to treat `5m`/`15m` as the current tape and to avoid
   calling an asset strongest purely from 24h return or volume when short windows
   are adverse without an explicit after-fee thesis.
 - [x] Preserve all live gates: Binance market rules, balances, dynamic
@@ -761,7 +761,7 @@ focused tests before the next phase starts.
 
 ## 43. X Pre-Pump Signal Insighter (Camoufox + Haiku)
 
-Goal: catch coins in the minutes before a social-driven burst, with Claude
+Goal: catch coins in the minutes before a social-driven burst, with the bot
 Haiku as an analyst that scores X chatter, not as a trader. Execution is a
 separate, later gate. Reuse the `bb-signals` ledger / snapshotter / weekly
 report pattern and the `bb-social` record shape. Prior evidence to beat
@@ -920,16 +920,16 @@ Execution, separate approval after the gate:
   rug / time exit rules do.
 
 Non-goals: private chats or DMs, posting or engaging from the account,
-coordinating or promoting pumps, and any change to Claude Spot.
+coordinating or promoting pumps, and any change to Bot Spot.
 
 ## 44. No Fixed Exit Levels Or Loss Caps (operator decision 2026-10-14)
 
-The live Claude Spot trader was opening and closing positions within minutes
+The live Bot Spot trader was opening and closing positions within minutes
 on self-set "invalidation" prices, paying roughly 75-110 bps of fees and
 spread per round trip. The operator ordered fixed exit levels and loss caps
 out of the selected modules.
 
-- [x] Claude Spot prompt: theses carry why, expected move and horizon, no
+- [x] Bot Spot prompt: theses carry why, expected move and horizon, no
   invalidation price; the system prompt states there are no stop-loss or
   take-profit levels and that a small move is not by itself a reason to exit
   (guidance, not a gate). Prompt version `claude-spot-v5-agentic`.
@@ -938,15 +938,15 @@ out of the selected modules.
 - [x] Legacy runtime (`bb main`): daily loss limit and daily drawdown limit
   removed with their daily-loss persistence.
 - Not selected by the operator, so unchanged: listing sniper/detector stops
-  and the mean reversion stop/target (paper or disabled), and every Claude
+  and the mean reversion stop/target (paper or disabled), and every Bot
   Spot hard-safety item in `CODEX.md`.
 
-## 45. Claude-Chosen Exit Plans Between Cycles (operator approval 2026-10-14)
+## 45. Bot-Chosen Exit Plans Between Cycles (operator approval 2026-10-14)
 
-Claude Spot looks at the market once per cycle (240 s); a coin can rise and
-fall again in between. Claude picks a sell plan for each position from a fixed
-menu, and a watcher enforces it between cycles. Claude never writes code: the
-menu is fixed, deterministic Rust, and Claude only fills in its parameters.
+Bot Spot looks at the market once per cycle (240 s); a coin can rise and
+fall again in between. The bot picks a sell plan for each position from a fixed
+menu, and a watcher enforces it between cycles. The bot never writes code: the
+menu is fixed, deterministic Rust, and the bot only fills in its parameters.
 "Max win" cannot be guaranteed; each plan is a bet on when a move is over, so
 every step is proven on data before it touches money.
 
@@ -959,9 +959,9 @@ Step 1, replay (research only, no order path):
   up at least X%, sell when no new high for N minutes), deadline (sell after N
   minutes). Bars are evaluated pessimistically (low before high); a tick is a
   one-price bar, so the live watcher can reuse it unchanged.
-- [x] `bb claude-spot-exit-replay`: pair real round trips from the Claude Spot
+- [x] `bb bot-spot-exit-replay`: pair real round trips from the Bot Spot
   audit, fetch public klines from entry to entry + horizon, run a grid of
-  plans, and compare each with Claude's actual exit and with holding to the
+  plans, and compare each with the bot's actual exit and with holding to the
   horizon, net of the real fee rate plus modelled exit slippage.
 - [x] Run it on the live audit and record the result in `PROGRESS.md`
   (2026-10-14: 9 round trips; no plan made money, see `PROGRESS.md`).
@@ -969,11 +969,11 @@ Step 1, replay (research only, no order path):
 Step 2, paper watcher (after the operator reviews the replay):
 
 - [x] `set_exit_plan` host tool (menu parameters only, validated, paper
-  only) and `bb claude-spot-exit-watch`: follows the bid between cycles,
+  only) and `bb bot-spot-exit-watch`: follows the bid between cycles,
   logs would-be sells, no orders; the cycle prompt shows each plan's
-  results; `--summary` compares "Claude with the plan" and "Claude alone".
+  results; `--summary` compares "The bot with the plan" and "The bot alone".
 - [ ] Run it for about a week next to the live trader and review
-  `bb claude-spot-exit-watch --summary`.
+  `bb bot-spot-exit-watch --summary`.
 - [x] Research the math traders use for exits (2026-10-15) and keep every
   candidate in `docs/exit-plan-candidates.md`.
 - [x] Menu expansion from that research: ATR trail / Chandelier exit
@@ -988,44 +988,44 @@ Step 3, live (operator decision 2026-10-15: live now, without the paper week):
 - [x] Sells through `Runtime::exit_sell` (cycle lock, arming, stop file,
   failed-route halt, scope, order/test, filters, reconciliation, audit row
   before alert) from an exit guard that runs between cycles in the
-  `claude-spot` daemon (`CLAUDE_SPOT_EXIT_PLANS_LIVE`); default plan
+  `bot-spot` daemon (`BOT_SPOT_EXIT_PLANS_LIVE`); default plan
   `stretch=2:1,atr=3:1h` for positions opened from
-  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM`; partial sells keep the position open;
+  `BOT_SPOT_DEFAULT_EXIT_PLAN_FROM`; partial sells keep the position open;
   failed sells before any order retry up to 3 times.
-- [ ] Review after about a week: live plan sells vs Claude's own exits.
+- [ ] Review after about a week: live plan sells vs the bot's own exits.
 
 Step 4, one fixed plan (operator decision 2026-10-16, after the 67-plan
-backtest on all 3 audits: `atr=3:1h,stretch=2:1` lost least, and Claude's
+backtest on all 3 audits: `atr=3:1h,stretch=2:1` lost least, and the bot's
 deadline-only plans had been switching it off; the operator chose "only
-this plan, locked" over layering Claude's rules on top):
+this plan, locked" over layering the bot's rules on top):
 
 - [x] With a default plan set, the watcher and live exit guard run it
   unchanged on every position opened from
-  `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` and ignore Claude's plan book.
+  `BOT_SPOT_DEFAULT_EXIT_PLAN_FROM` and ignore the bot's plan book.
 - [x] `set_exit_plan` is left out of the tool catalogue and refuses calls
   while a default plan is set (still offered without one, paper trial).
 - [x] System prompt names the fixed plan and its rules in plain words, says
-  Claude cannot change it; dashboard wording; prompt version v8.
-- [x] Tests: a Claude plan is ignored and the default still sells; the tool
+  The bot cannot change it; dashboard wording; prompt version v8.
+- [x] Tests: a bot plan is ignored and the default still sells; the tool
   is withdrawn and refuses without writing the plan book.
-- [x] Deploy to the Pi (image rebuild, `CLAUDE_SPOT_PROMPT_VERSION=
-  claude-spot-v8-agentic` in the Pi's `.env.docker`, recreate `claude-spot`).
+- [x] Deploy to the Pi (image rebuild, `BOT_SPOT_PROMPT_VERSION=
+  claude-spot-v8-agentic` in the Pi's `.env.docker`, recreate `bot-spot`).
 
-Step 5, locked rules with Claude's numbers (operator decision 2026-10-17;
+Step 5, locked rules with the bot's numbers (operator decision 2026-10-17;
 replaces the fixed default plan of step 4):
 
-- [x] `CLAUDE_SPOT_EXIT_PLAN_RULES` (menu keys, `.env.docker` `atr,stretch`):
-  every plan sets exactly those rules; Claude picks the numbers (menu
+- [x] `BOT_SPOT_EXIT_PLAN_RULES` (menu keys, `.env.docker` `atr,stretch`):
+  every plan sets exactly those rules; The bot picks the numbers (menu
   limits only) once per position; `set_exit_plan` shows only those fields,
   all required, and refuses other rules, `clear` and a second plan for the
-  same position. No plan = no automatic sell. `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`
+  same position. No plan = no automatic sell. `BOT_SPOT_DEFAULT_EXIT_PLAN`
   and `_FROM` removed.
 - [x] Watcher and live guard ignore book plans with other rules.
 - [x] System prompt, tool text, dashboard Exits tab, docs; prompt v9.
 - [x] Deploy to the Pi (image rebuild, `.env.docker`
-  `CLAUDE_SPOT_EXIT_PLAN_RULES=atr,stretch`, default-plan vars removed,
-  `CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v9-agentic`, recreate
-  `claude-spot`).
+  `BOT_SPOT_EXIT_PLAN_RULES=atr,stretch`, default-plan vars removed,
+  `BOT_SPOT_PROMPT_VERSION=claude-spot-v9-agentic`, recreate
+  `bot-spot`).
 
 Step 6, fee floor and feedback (operator decision 2026-10-17, after the ZEC
 stretch sale at +6 bps gross, a net loss):
@@ -1037,7 +1037,7 @@ stretch sale at +6 bps gross, a net loss):
   result after fees (watch state `recent_closed`).
 - [x] Trade outcomes (prompt and `get_trade_history`) mark exit-plan sells
   with the plan, rule, share and trigger price (`exit_plan`); prompt v10.
-- [x] Deploy to the Pi (`CLAUDE_SPOT_PROMPT_VERSION=claude-spot-v10-agentic`).
+- [x] Deploy to the Pi (`BOT_SPOT_PROMPT_VERSION=claude-spot-v10-agentic`).
 
 Step 7, old-gold-way (operator decision 2026-10-17, branch `old-gold-way`):
 the fixed plan (step 4) and locked rules (step 5) cut winners short (v7: 10
@@ -1045,8 +1045,8 @@ trips, mean hold 68 min, +7.5% summed; v8-v10: 9 trips, 30 min, -4.1%), so
 the v7 system comes back.
 
 - [x] Trader and dashboard exit-plan code of the v7 system (default plan,
-  Claude's `set_exit_plan` override with the full menu incl. deadline); the
-  v7 system prompt (tag `claude-spot-v11-agentic`); step 6 fee floor and
+  The bot's `set_exit_plan` override with the full menu incl. deadline); the
+  v7 system prompt (tag `bot-spot-v11-agentic`); step 6 fee floor and
   feedback kept; `set_exit_plan` reply says LIVE or paper.
 - [x] Trader session restored to the v7 conversation up to the last
   gpt-6.1-sol cycle before Sonnet took over (cycle 542, 2026-10-16 05:02
@@ -1057,20 +1057,20 @@ the v7 system comes back.
 
 ## 46. Dashboard On The Pi's Live Data (operator request 2026-10-15)
 
-`cryptobot-gui` started on the laptop showed empty History and Claude tabs:
+`cryptobot-gui` started on the laptop showed empty History and Bot tabs:
 the trader writes its files on the Pi, and the page said "history was reset"
 instead of saying it had no data. The dashboard stays read-only and
 localhost-only.
 
 - [x] `scripts/cryptobot_gui_pi.sh`: rsync mirror of the Pi's data dir
-  (no omp logins, Claude session or Telegram session), refreshed every 30 s,
+  (no omp logins, the bot session or Telegram session), refreshed every 30 s,
   trader paths and the non-secret exit-plan settings mapped from the Pi's env
   file; the dashboard runs against the mirror. The `cryptobot-gui` fish
   command uses it.
 - [x] `/api/status` reports whether the audit file exists and when it last
   changed; the page names the missing path and the launcher instead of empty
   states, and the header shows how old the trader's data is.
-- [x] Claude tab: running/idle from the observed cycle cadence (not a fixed
+- [x] Bot tab: running/idle from the observed cycle cadence (not a fixed
   4 minutes), a brains card (cycles, failures and cost per model, fallback
   state, tool use) and expandable cycles with the brain, fallback attempts,
   tokens, cost, prompt version and every tool call with its arguments.
@@ -1157,8 +1157,8 @@ Current handoff state:
 - Phase 31 is read-only Spot decision observability and isolated public-candle
   historical evaluation; it must not shorten or bypass Phase 13 operational
   approval.
-- Phase 32 adds Claude-controlled autonomous Spot execution as a new exception:
-  Claude mode no longer waits for Phase 13 paper warm-up, may use the whole
+- Phase 32 adds bot-controlled autonomous Spot execution as a new exception:
+  The bot mode no longer waits for Phase 13 paper warm-up, may use the whole
   available Spot wallet, and may execute up to three serial Spot legs per cycle
   when explicitly enabled. Margin, futures, transfer, withdrawal, and
   prediction writes remain outside this phase.

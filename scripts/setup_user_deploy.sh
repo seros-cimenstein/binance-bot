@@ -44,7 +44,7 @@ else
 fi
 
 if ! command -v omp >/dev/null 2>&1; then
-    echo "Warning: omp is not on PATH; claude-spot and capital-pool --advise need it (CLAUDE_SPOT_COMMAND)." >&2
+    echo "Warning: omp is not on PATH; bot-spot and capital-pool --advise need it (BOT_SPOT_COMMAND)." >&2
 fi
 
 install -m 0644 "$SOURCE_DIR"/deploy/user/*.service "$SOURCE_DIR"/deploy/user/*.timer "$UNIT_DIR/"

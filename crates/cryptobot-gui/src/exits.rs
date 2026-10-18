@@ -1,4 +1,4 @@
-//! Phase 45 exit plans as the dashboard shows them: the run settings, Claude's plan book,
+//! Phase 45 exit plans as the dashboard shows them: the run settings, the bot's plan book,
 //! the watch state (running plans with their sell lines) and the newest watch-log events.
 //!
 //! Everything is read from the files the trader's exit guard (live) or the paper watcher
@@ -21,13 +21,13 @@ pub const STATE_STALE_MS: i64 = 120_000;
 /// Env vars that configure exit plans; when none is set this host does not know how the
 /// trader runs them.
 const SETTING_VARS: [&str; 4] = [
-    "CLAUDE_SPOT_EXIT_PLANS_LIVE",
-    "CLAUDE_SPOT_DEFAULT_EXIT_PLAN",
-    "CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM",
-    "CLAUDE_SPOT_EXIT_POLL_SECONDS",
+    "BOT_SPOT_EXIT_PLANS_LIVE",
+    "BOT_SPOT_DEFAULT_EXIT_PLAN",
+    "BOT_SPOT_DEFAULT_EXIT_PLAN_FROM",
+    "BOT_SPOT_EXIT_POLL_SECONDS",
 ];
 
-/// Exit-plan view. `lookup` reads the `CLAUDE_SPOT_*EXIT*` settings (the process env in
+/// Exit-plan view. `lookup` reads the `BOT_SPOT_*EXIT*` settings (the process env in
 /// production).
 pub fn exits_view(
     paths: &ExitPaths,
@@ -75,8 +75,8 @@ pub fn exits_view(
         .active
         .iter()
         .map(|(asset, view)| {
-            let by_claude = book.plans.get(asset).is_some_and(|p| p.key() == view.key);
-            active_view(asset, view, by_claude)
+            let by_bot = book.plans.get(asset).is_some_and(|p| p.key() == view.key);
+            active_view(asset, view, by_bot)
         })
         .collect();
     let waiting: Vec<Value> = book
@@ -107,7 +107,7 @@ pub fn exits_view(
         "waiting": waiting,
         "closed_trials": state.closed_trials,
         "finalized_count": state.finalized.len(),
-        "plan_vs_claude_usdt": state.plan_vs_claude_usdt,
+        "plan_vs_bot_usdt": state.plan_vs_bot_usdt,
         "events": events,
         "book_error": book_error,
         "state_error": state_error,
@@ -115,7 +115,7 @@ pub fn exits_view(
     })
 }
 
-fn active_view(asset: &str, view: &WatchView, by_claude: bool) -> Value {
+fn active_view(asset: &str, view: &WatchView, by_bot: bool) -> Value {
     let pct = |num: Decimal, den: Decimal| {
         (den > Decimal::ZERO)
             .then(|| bb_core::money::to_f64((num / den - Decimal::ONE) * Decimal::ONE_HUNDRED))
@@ -126,7 +126,7 @@ fn active_view(asset: &str, view: &WatchView, by_claude: bool) -> Value {
         "key": view.key,
         "spec": view.spec,
         "symbol": view.symbol,
-        "source": if by_claude { "claude" } else { "default" },
+        "source": if by_bot { "bot" } else { "default" },
         "entry_price": view.entry_price,
         "peak": view.peak,
         "sell_line": view.sell_line,
@@ -229,7 +229,7 @@ mod tests {
     fn running_plans_show_their_source_and_sell_line_and_unwatched_plans_wait() {
         let dir = tempfile::tempdir().unwrap();
         let paths = paths(dir.path());
-        // Claude set plans for SOL (running) and ENA (not picked up yet); ETH runs the default.
+        // The bot set plans for SOL (running) and ENA (not picked up yet); ETH runs the default.
         let sol = entry("SOL", "trail=5", 2_000);
         let ena = entry("ENA", "deadline=60", 3_000);
         let book = PlanBook {
@@ -243,7 +243,7 @@ mod tests {
                 ("ETH".to_owned(), watch("ETH@1000@0".into(), "stretch=2:1")),
             ]),
             closed_trials: 2,
-            plan_vs_claude_usdt: dec!(0.125),
+            plan_vs_bot_usdt: dec!(0.125),
             ..WatchState::default()
         };
         state.save(&paths.state).unwrap();
@@ -254,9 +254,9 @@ mod tests {
             .unwrap();
 
         let settings = |name: &str| match name {
-            "CLAUDE_SPOT_EXIT_PLANS_LIVE" => Some("true".to_owned()),
-            "CLAUDE_SPOT_DEFAULT_EXIT_PLAN" => Some("stretch=2:1".to_owned()),
-            "CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM" => Some("2026-10-15T09:17:34Z".to_owned()),
+            "BOT_SPOT_EXIT_PLANS_LIVE" => Some("true".to_owned()),
+            "BOT_SPOT_DEFAULT_EXIT_PLAN" => Some("stretch=2:1".to_owned()),
+            "BOT_SPOT_DEFAULT_EXIT_PLAN_FROM" => Some("2026-10-15T09:17:34Z".to_owned()),
             _ => None,
         };
         let view = exits_view(&paths, settings, 10_000 + STATE_STALE_MS);
@@ -270,7 +270,7 @@ mod tests {
             .iter()
             .map(|a| (a["asset"].as_str().unwrap(), a["source"].as_str().unwrap()))
             .collect();
-        assert_eq!(sources, [("ETH", "default"), ("SOL", "claude")]);
+        assert_eq!(sources, [("ETH", "default"), ("SOL", "bot")]);
         let sol_view = &view["active"][1];
         // Bid 2.4 on entry 2 is +20%; the 2.375 sell line is ~1.05% below the bid.
         assert!((sol_view["gain_pct"].as_f64().unwrap() - 20.0).abs() < 1e-9);

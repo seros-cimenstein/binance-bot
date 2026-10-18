@@ -7,13 +7,13 @@ use std::process::ExitCode;
 use anyhow::Context;
 use bb_capital::status::{default_data_dir, wallet_client};
 use clap::Parser;
-use cryptobot_gui::{AppState, ClaudeSpotFiles, router};
+use cryptobot_gui::{AppState, BotSpotFiles, router};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "cryptobot-gui",
     version,
-    about = "Read-only localhost web dashboard: wallet, Claude Spot activity, fleet status, X insighter signals"
+    about = "Read-only localhost web dashboard: wallet, Bot Spot activity, fleet status, X insighter signals"
 )]
 struct Cli {
     /// Listen address. Requests must still address localhost in their Host header.
@@ -62,7 +62,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     }
     let app = router(AppState::new(
         cli.data_dir,
-        ClaudeSpotFiles::from_env(),
+        BotSpotFiles::from_env(),
         client,
     ));
     let addr = listener.local_addr()?;

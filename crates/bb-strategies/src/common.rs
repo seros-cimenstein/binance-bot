@@ -312,7 +312,7 @@ pub fn kline_cache_path(
 }
 
 /// Fetch spot klines for many symbols concurrently, reading/writing the optional disk
-/// cache (port of `claude_spot_backtest._fetch_klines_for_symbols`). An unreadable cache
+/// cache (port of `bot_spot_backtest._fetch_klines_for_symbols`). An unreadable cache
 /// file is ignored and refetched; any fetch failure fails the whole call.
 pub async fn fetch_klines_for_symbols(
     client: &BinanceClient,

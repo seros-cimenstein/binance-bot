@@ -2,7 +2,7 @@
 #
 # Format: minute hour day month dow  command
 
-# Claude Spot (its own compose service) is the only live trader. Funding arb
+# Bot Spot (its own compose service) is the only live trader. Funding arb
 # (spot + USD-M futures), the listing detector/sniper and the trend filter were
 # switched off 2026-10-12 so nothing else trades the shared wallet.
 

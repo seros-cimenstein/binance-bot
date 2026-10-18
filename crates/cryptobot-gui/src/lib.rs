@@ -5,9 +5,9 @@
 //! withdrawal endpoint.
 //!
 //! - `GET /`: the dashboard page.
-//! - `GET /api/status`: Claude Spot stop file, failed-route halt, agent state, recent cycles
+//! - `GET /api/status`: Bot Spot stop file, failed-route halt, agent state, recent cycles
 //!   and journal notes.
-//! - `GET /api/history`: every Claude Spot trade with its P&L ([`history`]).
+//! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
 //! - `GET /api/fleet`: `bb bot-status --json` bots (activity, trades, P&L).
@@ -70,9 +70,9 @@ pub const MARKET_TTL: Duration = Duration::from_secs(60);
 
 const INDEX_HTML: &str = include_str!("index.html");
 
-/// The Claude Spot files the dashboard reads (same variables and defaults as the trader).
+/// The Bot Spot files the dashboard reads (same variables and defaults as the trader).
 #[derive(Debug, Clone)]
-pub struct ClaudeSpotFiles {
+pub struct BotSpotFiles {
     pub audit_path: PathBuf,
     pub journal_path: PathBuf,
     pub state_path: PathBuf,
@@ -81,16 +81,16 @@ pub struct ClaudeSpotFiles {
     pub exits: ExitPaths,
 }
 
-impl ClaudeSpotFiles {
-    /// From `CLAUDE_SPOT_{AUDIT,JOURNAL,STATE,STOP}_PATH`.
+impl BotSpotFiles {
+    /// From `BOT_SPOT_{AUDIT,JOURNAL,STATE,STOP}_PATH`.
     pub fn from_env() -> Self {
         let path =
             |name: &str, default: &str| PathBuf::from(bb_core::env::string(&[name], default));
         Self {
-            audit_path: path("CLAUDE_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
-            journal_path: path("CLAUDE_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
-            state_path: path("CLAUDE_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
-            stop_path: path("CLAUDE_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
+            audit_path: path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
+            journal_path: path("BOT_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
+            state_path: path("BOT_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
+            stop_path: path("BOT_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
             exits: ExitPaths::from_env(),
         }
     }
@@ -109,7 +109,7 @@ struct AuditCache {
 pub struct AppState {
     /// Fleet data dir (`BOT_STATUS_DATA_DIR` layout).
     data_dir: PathBuf,
-    claude_spot: ClaudeSpotFiles,
+    bot_spot: BotSpotFiles,
     /// Mainnet read client; `None` leaves the wallet empty.
     client: Option<BinanceClient>,
     /// Client for public market data: the wallet client, or an unauthenticated one.
@@ -126,13 +126,13 @@ pub struct AppState {
 impl AppState {
     pub fn new(
         data_dir: PathBuf,
-        claude_spot: ClaudeSpotFiles,
+        bot_spot: BotSpotFiles,
         client: Option<BinanceClient>,
     ) -> Self {
         Self {
             x_paths: XPaths::in_dir(&data_dir),
             data_dir,
-            claude_spot,
+            bot_spot,
             market_client: client.clone().or_else(public_client),
             client,
             wallet_cache: tokio::sync::Mutex::new(None),
@@ -167,7 +167,7 @@ impl AppState {
     }
 
     fn audit(&self) -> Arc<ParsedAudit> {
-        let path = &self.claude_spot.audit_path;
+        let path = &self.bot_spot.audit_path;
         let meta = std::fs::metadata(path).ok();
         let len = meta.as_ref().map_or(0, std::fs::Metadata::len);
         let modified = meta.as_ref().and_then(|m| m.modified().ok());
@@ -258,7 +258,7 @@ async fn index() -> Response {
 }
 
 async fn status(State(app): State<Arc<AppState>>) -> Response {
-    let files = app.claude_spot.clone();
+    let files = app.bot_spot.clone();
     blocking_json(move || status_view(&files)).await
 }
 
@@ -278,7 +278,7 @@ async fn sessions_handler(State(app): State<Arc<AppState>>) -> Response {
     blocking_json(move || {
         let audit = state.audit();
         let trades = build_trades(&audit.routes, |asset| wallet.mark(asset), bb_core::time::now());
-        sessions::sessions_view(&audit, &trades, &state.claude_spot.exits.log)
+        sessions::sessions_view(&audit, &trades, &state.bot_spot.exits.log)
     })
     .await
 }
@@ -305,7 +305,7 @@ async fn fleet(State(app): State<Arc<AppState>>) -> Response {
 }
 
 async fn exits_handler(State(app): State<Arc<AppState>>) -> Response {
-    let paths = app.claude_spot.exits.clone();
+    let paths = app.bot_spot.exits.clone();
     blocking_json(move || {
         exits::exits_view(&paths, |name| std::env::var(name).ok(), bb_core::time::now_ms())
     })
@@ -339,10 +339,10 @@ fn no_store(mut response: Response) -> Response {
     response
 }
 
-/// Claude Spot state: stop file, the trader's own failed-route halt verdict, agent state,
+/// Bot Spot state: stop file, the trader's own failed-route halt verdict, agent state,
 /// newest cycle summaries and journal notes (newest first), and where the data came from
-/// (`source`: a missing audit file means this host has no Claude Spot data at all).
-pub fn status_view(files: &ClaudeSpotFiles) -> Value {
+/// (`source`: a missing audit file means this host has no Bot Spot data at all).
+pub fn status_view(files: &BotSpotFiles) -> Value {
     let audit = load_audit_rows(&files.audit_path);
     let halt = failed_route_halt(&audit);
     let cycles: Vec<Value> = audit
@@ -441,12 +441,12 @@ mod tests {
         }
     }
 
-    fn files(dir: &Path) -> ClaudeSpotFiles {
-        ClaudeSpotFiles {
+    fn files(dir: &Path) -> BotSpotFiles {
+        BotSpotFiles {
             audit_path: dir.join("audit.jsonl"),
             journal_path: dir.join("journal.jsonl"),
             state_path: dir.join("state.json"),
-            stop_path: dir.join("claude-spot.stop"),
+            stop_path: dir.join("bot-spot.stop"),
             exits: ExitPaths {
                 plans: dir.join("exit-plans.json"),
                 state: dir.join("exit-watch-state.json"),
@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(empty["stop_active"], json!(false));
         assert_eq!(empty["halt"], Value::Null);
         assert_eq!(empty["cycles"], json!([]));
-        // No audit file: the page must say this host has no Claude Spot data.
+        // No audit file: the page must say this host has no Bot Spot data.
         assert_eq!(empty["source"]["audit_present"], json!(false));
         assert_eq!(empty["source"]["audit_modified"], Value::Null);
 

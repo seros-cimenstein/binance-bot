@@ -1,6 +1,6 @@
 [package]
 name = "bb-capital"
-description = "Capital pool allocator, Claude allocation advisor (omp), auto-convert, fleet status and cash distributor."
+description = "Capital pool allocator, bot allocation advisor (omp), auto-convert, fleet status and cash distributor."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

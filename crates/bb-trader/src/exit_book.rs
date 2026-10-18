@@ -1,10 +1,10 @@
-//! Exit-plan book (Phase 45): the plans Claude sets with the `set_exit_plan` host tool,
+//! Exit-plan book (Phase 45): the plans the bot sets with the `set_exit_plan` host tool,
 //! the default plan, the run settings, and the watcher's view of them.
 //!
-//! Files (each has one writer): the plan book (`CLAUDE_SPOT_EXIT_PLANS_PATH`) is written
-//! only by the trader's host tool; the watch state (`CLAUDE_SPOT_EXIT_WATCH_STATE_PATH`)
-//! and the watch log (`CLAUDE_SPOT_EXIT_WATCH_LOG_PATH`) by the paper watcher
-//! `claude-spot-exit-watch`, or by the trader's exit guard when exit plans run live
+//! Files (each has one writer): the plan book (`BOT_SPOT_EXIT_PLANS_PATH`) is written
+//! only by the trader's host tool; the watch state (`BOT_SPOT_EXIT_WATCH_STATE_PATH`)
+//! and the watch log (`BOT_SPOT_EXIT_WATCH_LOG_PATH`) by the paper watcher
+//! `bot-spot-exit-watch`, or by the trader's exit guard when exit plans run live
 //! (never both). Nothing here places orders.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,9 +19,9 @@ use serde_json::Value;
 use crate::exit_plan::{AtrTimeframe, ExitPlan, Fade, Slowdown, Stretch, TakePart, Trail};
 use crate::memory::value_decimal;
 
-pub const DEFAULT_EXIT_PLANS_PATH: &str = "data/claude-spot-exit-plans.json";
-pub const DEFAULT_EXIT_WATCH_STATE_PATH: &str = "data/claude-spot-exit-watch-state.json";
-pub const DEFAULT_EXIT_WATCH_LOG_PATH: &str = "data/claude-spot-exit-watch.jsonl";
+pub const DEFAULT_EXIT_PLANS_PATH: &str = "data/bot-spot-exit-plans.json";
+pub const DEFAULT_EXIT_WATCH_STATE_PATH: &str = "data/bot-spot-exit-watch-state.json";
+pub const DEFAULT_EXIT_WATCH_LOG_PATH: &str = "data/bot-spot-exit-watch.jsonl";
 
 /// The three exit-plan files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +32,7 @@ pub struct ExitPaths {
 }
 
 impl ExitPaths {
-    /// `CLAUDE_SPOT_EXIT_{PLANS,WATCH_STATE,WATCH_LOG}_PATH` from `lookup` (blank = default).
+    /// `BOT_SPOT_EXIT_{PLANS,WATCH_STATE,WATCH_LOG}_PATH` from `lookup` (blank = default).
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
         let path = |name: &str, default: &str| {
             PathBuf::from(
@@ -43,13 +43,13 @@ impl ExitPaths {
             )
         };
         Self {
-            plans: path("CLAUDE_SPOT_EXIT_PLANS_PATH", DEFAULT_EXIT_PLANS_PATH),
+            plans: path("BOT_SPOT_EXIT_PLANS_PATH", DEFAULT_EXIT_PLANS_PATH),
             state: path(
-                "CLAUDE_SPOT_EXIT_WATCH_STATE_PATH",
+                "BOT_SPOT_EXIT_WATCH_STATE_PATH",
                 DEFAULT_EXIT_WATCH_STATE_PATH,
             ),
             log: path(
-                "CLAUDE_SPOT_EXIT_WATCH_LOG_PATH",
+                "BOT_SPOT_EXIT_WATCH_LOG_PATH",
                 DEFAULT_EXIT_WATCH_LOG_PATH,
             ),
         }
@@ -60,7 +60,7 @@ impl ExitPaths {
     }
 }
 
-/// Plan applied to every position Claude opens at or after `from_ms` unless Claude set one.
+/// Plan applied to every position the bot opens at or after `from_ms` unless the bot set one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DefaultPlan {
     pub plan: ExitPlan,
@@ -70,12 +70,12 @@ pub struct DefaultPlan {
 /// How exit plans run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExitSettings {
-    /// `CLAUDE_SPOT_EXIT_PLANS_LIVE`: the trader sells when a plan fires (else paper).
+    /// `BOT_SPOT_EXIT_PLANS_LIVE`: the trader sells when a plan fires (else paper).
     pub live: bool,
-    /// `CLAUDE_SPOT_DEFAULT_EXIT_PLAN` (spec, blank = none) from
-    /// `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM` (RFC 3339, required with a plan).
+    /// `BOT_SPOT_DEFAULT_EXIT_PLAN` (spec, blank = none) from
+    /// `BOT_SPOT_DEFAULT_EXIT_PLAN_FROM` (RFC 3339, required with a plan).
     pub default_plan: Option<DefaultPlan>,
-    /// `CLAUDE_SPOT_EXIT_POLL_SECONDS`: bid checks between cycles (live mode).
+    /// `BOT_SPOT_EXIT_POLL_SECONDS`: bid checks between cycles (live mode).
     pub poll_seconds: u64,
 }
 
@@ -86,34 +86,34 @@ impl ExitSettings {
                 .map(|v| v.trim().to_owned())
                 .filter(|v| !v.is_empty())
         };
-        let live = match get("CLAUDE_SPOT_EXIT_PLANS_LIVE").map(|v| v.to_lowercase()) {
+        let live = match get("BOT_SPOT_EXIT_PLANS_LIVE").map(|v| v.to_lowercase()) {
             None => false,
             Some(v) if ["1", "true", "yes", "on"].contains(&v.as_str()) => true,
             Some(v) if ["0", "false", "no", "off"].contains(&v.as_str()) => false,
             Some(v) => {
                 return Err(format!(
-                    "CLAUDE_SPOT_EXIT_PLANS_LIVE must be true or false, got {v:?}"
+                    "BOT_SPOT_EXIT_PLANS_LIVE must be true or false, got {v:?}"
                 ));
             }
         };
-        let default_plan = match get("CLAUDE_SPOT_DEFAULT_EXIT_PLAN") {
+        let default_plan = match get("BOT_SPOT_DEFAULT_EXIT_PLAN") {
             None => None,
             Some(spec) => {
                 let plan = ExitPlan::parse_spec(&spec)
-                    .map_err(|e| format!("CLAUDE_SPOT_DEFAULT_EXIT_PLAN {spec:?}: {e}"))?;
-                let from = get("CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM").ok_or(
-                    "CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM (RFC 3339) is required with a default exit plan",
+                    .map_err(|e| format!("BOT_SPOT_DEFAULT_EXIT_PLAN {spec:?}: {e}"))?;
+                let from = get("BOT_SPOT_DEFAULT_EXIT_PLAN_FROM").ok_or(
+                    "BOT_SPOT_DEFAULT_EXIT_PLAN_FROM (RFC 3339) is required with a default exit plan",
                 )?;
                 let from_ms = DateTime::parse_from_rfc3339(&from)
-                    .map_err(|e| format!("CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM {from:?}: {e}"))?
+                    .map_err(|e| format!("BOT_SPOT_DEFAULT_EXIT_PLAN_FROM {from:?}: {e}"))?
                     .timestamp_millis();
                 (plan != ExitPlan::default()).then_some(DefaultPlan { plan, from_ms })
             }
         };
-        let poll_seconds = match get("CLAUDE_SPOT_EXIT_POLL_SECONDS") {
+        let poll_seconds = match get("BOT_SPOT_EXIT_POLL_SECONDS") {
             None => 5,
             Some(v) => v.parse::<u64>().ok().filter(|s| *s >= 1).ok_or_else(|| {
-                format!("CLAUDE_SPOT_EXIT_POLL_SECONDS must be a whole number >= 1, got {v:?}")
+                format!("BOT_SPOT_EXIT_POLL_SECONDS must be a whole number >= 1, got {v:?}")
             })?,
         };
         Ok(Self {
@@ -124,7 +124,7 @@ impl ExitSettings {
     }
 }
 
-/// One plan Claude set for one open position.
+/// One plan the bot set for one open position.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanEntry {
     pub asset: String,
@@ -312,18 +312,18 @@ pub struct ClosedView {
     pub exit_net_pct: Decimal,
 }
 
-/// Watch state written by `claude-spot-exit-watch` every loop.
+/// Watch state written by `bot-spot-exit-watch` every loop.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WatchState {
     pub updated_at_ms: i64,
     /// Running trials by asset.
     pub active: BTreeMap<String, WatchView>,
-    /// Keys of finished trials (closed by Claude's sell, cleared, replaced or orphaned).
+    /// Keys of finished trials (closed by the bot's sell, cleared, replaced or orphaned).
     pub finalized: BTreeSet<String>,
-    /// Trials closed by Claude's real sell.
+    /// Trials closed by the bot's real sell.
     pub closed_trials: usize,
-    /// Sum over closed trials of (with plan - Claude alone), in USDT.
-    pub plan_vs_claude_usdt: Decimal,
+    /// Sum over closed trials of (with plan - The bot alone), in USDT.
+    pub plan_vs_bot_usdt: Decimal,
     /// The newest closed trials (at most [`RECENT_CLOSED`]), oldest first.
     #[serde(default)]
     pub recent_closed: Vec<ClosedView>,
@@ -439,7 +439,7 @@ fn closed_line(view: &ClosedView, live: bool) -> String {
 }
 
 /// Cycle-prompt section on exit plans; empty when there is nothing to show. Lists every
-/// running plan (Claude's or the default), Claude's plans not picked up yet, and the
+/// running plan (the bot's or the default), the bot's plans not picked up yet, and the
 /// newest closed positions with the rule that sold and the result after fees.
 /// `watcher_stale_ms` marks the watcher as not running when its state is older.
 pub fn prompt_section(paths: &ExitPaths, now_ms: i64, watcher_stale_ms: i64, live: bool) -> String {
@@ -489,7 +489,7 @@ pub fn prompt_section(paths: &ExitPaths, now_ms: i64, watcher_stale_ms: i64, liv
             out,
             "- closed positions with a plan: {}; plan vs your own exits: {} USDT",
             state.closed_trials,
-            state.plan_vs_claude_usdt.round_dp(4).normalize()
+            state.plan_vs_bot_usdt.round_dp(4).normalize()
         );
     }
     out
@@ -576,8 +576,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = ExitPaths::from_lookup(|name| {
             let file = match name {
-                "CLAUDE_SPOT_EXIT_PLANS_PATH" => "plans.json",
-                "CLAUDE_SPOT_EXIT_WATCH_STATE_PATH" => "state.json",
+                "BOT_SPOT_EXIT_PLANS_PATH" => "plans.json",
+                "BOT_SPOT_EXIT_WATCH_STATE_PATH" => "state.json",
                 _ => "log.jsonl",
             };
             Some(dir.path().join(file).display().to_string())
@@ -595,7 +595,7 @@ mod tests {
         let mut state = WatchState {
             updated_at_ms: 9_000,
             closed_trials: 2,
-            plan_vs_claude_usdt: dec!(0.125),
+            plan_vs_bot_usdt: dec!(0.125),
             ..WatchState::default()
         };
         state.finalized.insert(op.key());

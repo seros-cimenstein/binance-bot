@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use crate::{
-    basis_arb_backtest, claude_spot_backtest, funding_arb, funding_arb_backtest, grid_backtest,
+    basis_arb_backtest, bot_spot_backtest, funding_arb, funding_arb_backtest, grid_backtest,
     mean_reversion, mean_reversion_backtest, news_event_backtest, spec_snapshot, stat_arb_backtest,
     trend_filter, trend_filter_backtest,
 };
@@ -31,8 +31,8 @@ pub enum Command {
     NewsEventBacktest(news_event_backtest::Args),
     /// Replay pair statistical arbitrage against historical klines.
     StatArbBacktest(stat_arb_backtest::Args),
-    /// Replay Claude Spot's cost-aware momentum rule against historical klines.
-    ClaudeSpotBacktest(claude_spot_backtest::Args),
+    /// Replay Bot Spot's cost-aware momentum rule against historical klines.
+    BotSpotBacktest(bot_spot_backtest::Args),
     /// Public-data Binance speculation snapshot (CSVs + facts-only SUMMARY.md).
     SpecSnapshot(spec_snapshot::Args),
 }
@@ -49,7 +49,7 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
         Command::GridBacktest(args) => grid_backtest::run_cli(args).await,
         Command::NewsEventBacktest(args) => news_event_backtest::run_cli(args).await,
         Command::StatArbBacktest(args) => stat_arb_backtest::run_cli(args).await,
-        Command::ClaudeSpotBacktest(args) => claude_spot_backtest::run_cli(args).await,
+        Command::BotSpotBacktest(args) => bot_spot_backtest::run_cli(args).await,
         Command::SpecSnapshot(args) => spec_snapshot::run_cli(args).await,
     }
 }

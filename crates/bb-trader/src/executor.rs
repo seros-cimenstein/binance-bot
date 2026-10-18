@@ -50,7 +50,7 @@ impl SpotExchange for BinanceClient {
     }
 }
 
-/// Auditable result of one submitted leg (Python `ClaudeSpotLegResult`).
+/// Auditable result of one submitted leg (Python `BotSpotLegResult`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LegResult {
     pub symbol: String,
@@ -99,7 +99,7 @@ pub fn buy_quote_reserve_bps(
     config: &TraderConfig,
 ) -> Result<Decimal, String> {
     if taker_fee_rate < Decimal::ZERO {
-        return Err("Claude Spot dynamic fee rate is invalid".into());
+        return Err("Bot Spot dynamic fee rate is invalid".into());
     }
     let dynamic = taker_fee_rate * BPS_PER_UNIT
         + config.slippage_buffer_bps
@@ -136,10 +136,10 @@ pub fn leg_order_amount(
         }
     };
     if amount <= Decimal::ZERO {
-        return Err("Claude Spot leg order amount rounded to zero".into());
+        return Err("Bot Spot leg order amount rounded to zero".into());
     }
     if amount < market.min_amount || notional < market.min_notional {
-        return Err("Claude Spot leg is below Binance minimum amount or notional".into());
+        return Err("Bot Spot leg is below Binance minimum amount or notional".into());
     }
     Ok(amount)
 }
@@ -160,7 +160,7 @@ pub async fn live_leg_order_amount(
             .map_err(|error| format!("commission lookup failed for {}: {error}", market.symbol))?;
         let reserve = buy_quote_reserve_bps(commission.taker_rate(side, false), config)?;
         if reserve >= BPS_PER_UNIT {
-            return Err("Claude Spot buy reserve consumes full quote balance".into());
+            return Err("Bot Spot buy reserve consumes full quote balance".into());
         }
         spendable = input * (Decimal::ONE - reserve / BPS_PER_UNIT);
     }
@@ -254,7 +254,7 @@ impl Executor<'_> {
         }
         if self.stopped() {
             return Err(ExecutionFailure::before_orders(format!(
-                "Claude Spot emergency stop is active: {}",
+                "Bot Spot emergency stop is active: {}",
                 self.config.stop_path.display()
             )));
         }
@@ -273,7 +273,7 @@ impl Executor<'_> {
                 return Err(fail(
                     &legs,
                     format!(
-                        "Claude Spot emergency stop is active: {}; route halted before {}",
+                        "Bot Spot emergency stop is active: {}; route halted before {}",
                         self.config.stop_path.display(),
                         leg.symbol
                     ),
@@ -336,7 +336,7 @@ impl Executor<'_> {
                 Err(message) => {
                     return Err(fail(
                         &legs,
-                        format!("Claude Spot preflight failed for {}: {message}", leg.symbol),
+                        format!("Bot Spot preflight failed for {}: {message}", leg.symbol),
                     ));
                 }
             };
@@ -345,7 +345,7 @@ impl Executor<'_> {
                 return Err(fail(
                     &legs,
                     format!(
-                        "Claude Spot preflight failed for {}; route halted: order test rejected: {error}",
+                        "Bot Spot preflight failed for {}; route halted: order test rejected: {error}",
                         leg.symbol
                     ),
                 ));
@@ -354,7 +354,7 @@ impl Executor<'_> {
                 return Err(fail(
                     &legs,
                     format!(
-                        "Claude Spot emergency stop is active: {}; route halted before {}",
+                        "Bot Spot emergency stop is active: {}; route halted before {}",
                         self.config.stop_path.display(),
                         leg.symbol
                     ),
@@ -365,7 +365,7 @@ impl Executor<'_> {
                 Err(error) => {
                     return Err(ExecutionFailure {
                         message: format!(
-                            "Claude Spot order failed for {}; route halted: {error}",
+                            "Bot Spot order failed for {}; route halted: {error}",
                             leg.symbol
                         ),
                         submission_attempted: !legs.is_empty() || !definitive_rejection(&error),
@@ -404,7 +404,7 @@ impl Executor<'_> {
                 return Err(fail(
                     &legs,
                     format!(
-                        "Claude Spot route halted after {}: order status unknown: {error}",
+                        "Bot Spot route halted after {}: order status unknown: {error}",
                         leg.symbol
                     ),
                 ));
@@ -413,7 +413,7 @@ impl Executor<'_> {
                 return Err(fail(
                     &legs,
                     format!(
-                        "Claude Spot route halted after {}: balance read failed: {error}",
+                        "Bot Spot route halted after {}: balance read failed: {error}",
                         leg.symbol
                     ),
                 ));
@@ -421,14 +421,14 @@ impl Executor<'_> {
             if status != "closed" && status != "filled" {
                 return Err(fail(
                     &legs,
-                    format!("Claude Spot route halted after {}: {status}", leg.symbol),
+                    format!("Bot Spot route halted after {}: {status}", leg.symbol),
                 ));
             }
             if destination_after <= destination_before {
                 return Err(fail(
                     &legs,
                     format!(
-                        "Claude Spot route did not increase {} after {}",
+                        "Bot Spot route did not increase {} after {}",
                         leg.destination_asset, leg.symbol
                     ),
                 ));
@@ -627,8 +627,8 @@ pub(crate) mod tests {
     fn armed(stop: &std::path::Path) -> TraderConfig {
         let stop = stop.to_string_lossy().into_owned();
         let mut config = config(&[
-            ("CLAUDE_SPOT_ENABLED", "true"),
-            ("CLAUDE_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
+            ("BOT_SPOT_ENABLED", "true"),
+            ("BOT_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
             ("USE_TESTNET", "false"),
             ("DRY_RUN", "false"),
             ("CONFIRM_LIVE_TRADING", "yes"),
@@ -662,7 +662,7 @@ pub(crate) mod tests {
         );
         assert_eq!(buy_quote_reserve_bps(dec!(0), &config).unwrap(), dec!(30));
         let floor =
-            crate::universe::tests::config(&[("CLAUDE_SPOT_MIN_LEG_QUOTE_RESERVE_BPS", "75")]);
+            crate::universe::tests::config(&[("BOT_SPOT_MIN_LEG_QUOTE_RESERVE_BPS", "75")]);
         assert_eq!(
             buy_quote_reserve_bps(dec!(0.001), &floor).unwrap(),
             dec!(75)
@@ -840,7 +840,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap_err()
                 .message
-                .contains("CLAUDE_SPOT_ENABLED")
+                .contains("BOT_SPOT_ENABLED")
         );
         let mut locked = super::tests::exchange();
         locked.can_trade = false;

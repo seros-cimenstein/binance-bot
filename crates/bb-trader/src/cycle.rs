@@ -269,7 +269,7 @@ impl Runtime {
             (Some(end), _) => end.summary.clone(),
             (None, Some(error)) => format!("{error}; no further orders this cycle"),
             (None, None) => format!(
-                "Claude ended the turn without end_cycle: {}",
+                "The bot ended the turn without end_cycle: {}",
                 report.final_text.clone().unwrap_or_default()
             ),
         };
@@ -317,7 +317,7 @@ impl Runtime {
         Ok((row, state.executions))
     }
 
-    /// Record a cycle that never asked Claude (halt, cost cap, build failure).
+    /// Record a cycle that never asked the bot (halt, cost cap, build failure).
     pub async fn record_skipped(
         &self,
         cycle_id: &str,
@@ -422,7 +422,7 @@ impl Runtime {
         }
         if bb_core::fsutil::stop_requested(&self.config.stop_path) {
             let message = format!(
-                "Claude Spot emergency stop is active: {}",
+                "Bot Spot emergency stop is active: {}",
                 self.config.stop_path.display()
             );
             return Err(self.refuse(state, &quoted, reason, spend, message).await);
@@ -618,7 +618,7 @@ impl Runtime {
     /// Sell `share` (0..=1] of the free `asset` balance into USDT because an exit plan
     /// fired. Same hard safety as `execute_route`: live arming, the emergency stop file,
     /// the failed-route halt, operator scope, `order/test` per leg, exchange filters and
-    /// fill reconciliation. Holds the cycle lock, so it never overlaps a Claude route.
+    /// fill reconciliation. Holds the cycle lock, so it never overlaps a bot route.
     pub async fn exit_sell(
         &self,
         asset: &str,
@@ -636,7 +636,7 @@ impl Runtime {
         }
         if bb_core::fsutil::stop_requested(&self.config.stop_path) {
             return Err(ExitSellError::refused(format!(
-                "Claude Spot emergency stop is active: {}",
+                "Bot Spot emergency stop is active: {}",
                 self.config.stop_path.display()
             )));
         }
@@ -881,7 +881,7 @@ impl Trader {
         let config = Arc::clone(&runtime.config);
         if bb_core::fsutil::stop_requested(&config.stop_path) {
             return Err(TraderError::safety(format!(
-                "Claude Spot emergency stop is active: {}",
+                "Bot Spot emergency stop is active: {}",
                 config.stop_path.display()
             )));
         }
@@ -906,7 +906,7 @@ impl Trader {
         let spent = state.cost_on(&today);
         if config.max_daily_llm_cost_usd > Decimal::ZERO && spent >= config.max_daily_llm_cost_usd {
             let reason = format!(
-                "daily LLM cost cap reached ({spent} / {} USD); Claude not asked until the next UTC day",
+                "daily LLM cost cap reached ({spent} / {} USD); the model not asked until the next UTC day",
                 config.max_daily_llm_cost_usd
             );
             let summary = runtime
@@ -1048,14 +1048,14 @@ mod tests {
             p("exit-watch.jsonl"),
         );
         let mut pairs = vec![
-            ("CLAUDE_SPOT_AUDIT_PATH", audit.as_str()),
-            ("CLAUDE_SPOT_JOURNAL_PATH", journal.as_str()),
-            ("CLAUDE_SPOT_STATE_PATH", state.as_str()),
-            ("CLAUDE_SPOT_STOP_PATH", stop.as_str()),
-            ("CLAUDE_SPOT_EXIT_PLANS_PATH", plans.as_str()),
-            ("CLAUDE_SPOT_EXIT_WATCH_STATE_PATH", watch_state.as_str()),
-            ("CLAUDE_SPOT_EXIT_WATCH_LOG_PATH", watch_log.as_str()),
-            ("CLAUDE_SPOT_CANDIDATE_LIMIT", "0"),
+            ("BOT_SPOT_AUDIT_PATH", audit.as_str()),
+            ("BOT_SPOT_JOURNAL_PATH", journal.as_str()),
+            ("BOT_SPOT_STATE_PATH", state.as_str()),
+            ("BOT_SPOT_STOP_PATH", stop.as_str()),
+            ("BOT_SPOT_EXIT_PLANS_PATH", plans.as_str()),
+            ("BOT_SPOT_EXIT_WATCH_STATE_PATH", watch_state.as_str()),
+            ("BOT_SPOT_EXIT_WATCH_LOG_PATH", watch_log.as_str()),
+            ("BOT_SPOT_CANDIDATE_LIMIT", "0"),
         ];
         pairs.extend_from_slice(extra);
         config(&pairs)
@@ -1245,8 +1245,8 @@ mod tests {
         let config = trader_config(
             dir.path(),
             &[
-                ("CLAUDE_SPOT_ENABLED", "true"),
-                ("CLAUDE_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
+                ("BOT_SPOT_ENABLED", "true"),
+                ("BOT_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
                 ("USE_TESTNET", "false"),
                 ("DRY_RUN", "false"),
                 ("CONFIRM_LIVE_TRADING", "yes"),
@@ -1538,8 +1538,8 @@ mod tests {
         let config = trader_config(
             dir.path(),
             &[
-                ("CLAUDE_SPOT_ENABLED", "true"),
-                ("CLAUDE_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
+                ("BOT_SPOT_ENABLED", "true"),
+                ("BOT_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
                 ("USE_TESTNET", "false"),
                 ("DRY_RUN", "false"),
                 ("CONFIRM_LIVE_TRADING", "yes"),
@@ -1596,8 +1596,8 @@ mod tests {
 
     fn live_pairs() -> [(&'static str, &'static str); 5] {
         [
-            ("CLAUDE_SPOT_ENABLED", "true"),
-            ("CLAUDE_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
+            ("BOT_SPOT_ENABLED", "true"),
+            ("BOT_SPOT_DYNAMIC_SCOPE", "all_eligible_spot"),
             ("USE_TESTNET", "false"),
             ("DRY_RUN", "false"),
             ("CONFIRM_LIVE_TRADING", "yes"),
@@ -1722,7 +1722,7 @@ mod tests {
         let report = TurnReport {
             status: "error".into(),
             error: Some(format!(
-                "{BRAIN_UNAVAILABLE} (no orders placed): anthropic/claude-haiku-5-5 error: 429; openai-codex/gpt-6.1-sol timeout: Claude timed out after 300s"
+                "{BRAIN_UNAVAILABLE} (no orders placed): anthropic/claude-haiku-5-5 error: 429; openai-codex/gpt-6.1-sol timeout: The bot timed out after 300s"
             )),
             model: "openai-codex/gpt-6.1-sol".into(),
             thinking: "low".into(),

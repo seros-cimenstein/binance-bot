@@ -17,7 +17,7 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::claude_spot_backtest::{UniverseBanner, sort_desc_by_volume};
+use crate::bot_spot_backtest::{UniverseBanner, sort_desc_by_volume};
 use crate::common::{
     self, json_error, parse_iso, py_round, sharpe_annualized, split_csv, value_f64, value_i64,
 };

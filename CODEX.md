@@ -66,27 +66,27 @@ driven project.
   preflight, risk limits, reconciliation, audit logging, and Telegram alerting.
   It must not be installed as a background service without a separate reviewed
   phase.
-- Phase 32 added a separate Claude agentic Spot runtime (`bb claude-spot`,
+- Phase 32 added a separate bot agentic Spot runtime (`bb bot-spot`,
   crate `bb-trader`). It is the only approved exception to the Phase 13/31
   live-paper warm-up gate and the foreground-only Spot allocator rule. It may
-  control the whole available Spot wallet when `CLAUDE_SPOT_ENABLED=true`,
-  `CLAUDE_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
+  control the whole available Spot wallet when `BOT_SPOT_ENABLED=true`,
+  `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
   `DRY_RUN=false`, and `CONFIRM_LIVE_TRADING=yes` are all set, and it runs as a
-  long-lived daemon (`bb claude-spot --submit-live --daemon`, systemd
-  `binance-claude-spot.service`, compose service `claude-spot`). Claude runs
+  long-lived daemon (`bb bot-spot --submit-live --daemon`, systemd
+  `binance-bot-spot.service`, compose service `bot-spot`). The bot runs
   through omp in RPC mode with one persistent session (resumed across restarts,
   compacted, backed by a durable journal) and acts only through the bot's host
-  tools; `execute_route` is the only order path. Claude Spot must not call
+  tools; `execute_route` is the only order path. Bot Spot must not call
   margin, futures, universal-transfer, withdrawal, or prediction write
   endpoints.
-- Claude Spot model fallback (operator decisions 2026-10-13, 2026-10-15 and
-  2026-10-16): the primary model (`CLAUDE_SPOT_MODEL`) is
+- Bot Spot model fallback (operator decisions 2026-10-13, 2026-10-15 and
+  2026-10-16): the primary model (`BOT_SPOT_MODEL`) is
   `openai-codex/gpt-6.1-sol` at thinking `high` since 2026-10-16 (before
   that `anthropic/claude-sonnet-5-5` from 2026-10-14 and
   `anthropic/claude-haiku-5-5`), on a 20-minute deployed cycle since
   2026-10-15 so it fits the subscription allowance. The brain chain is
   gpt-6.1-sol (OpenAI Codex) -> `google-antigravity/gemini-4-argon-high` at
-  `high` (`CLAUDE_SPOT_FALLBACK_MODELS` and `retry.fallbackChains` in the Pi's
+  `high` (`BOT_SPOT_FALLBACK_MODELS` and `retry.fallbackChains` in the Pi's
   `omp-agent/config.yml`); each provider uses its own omp login on the Pi.
   When the active model is rate- or usage-limited (or times out, errors or
   fails a compaction), the turn moves to the next model in the chain and
@@ -95,38 +95,38 @@ driven project.
   and every hard-safety item below apply unchanged. Each login is made on
   the Pi with `omp login <provider>`, never a copied token. Adding another
   model or provider needs a new operator decision.
-- Claude Spot has no trading guardrails, by operator decision. The edge /
+- Bot Spot has no trading guardrails, by operator decision. The edge /
   market-evidence minimum, friction cap, speculative mode, loss-streak limit,
   trade cooldown, daily trade cap, proven-edge gate, rules-engine decision mode,
   and the LLM `go_off` decision flag are removed; their env vars are ignored
   with one warning. Fees, spread, slippage, short-window (`5m`/`15m`) and
   longer momentum, market evidence, social data, and trade memory are
-  information in tool output for Claude to weigh, never blocking gates. Do not
+  information in tool output for the bot to weigh, never blocking gates. Do not
   reintroduce any of them as a blocking gate without explicit operator
-  approval. `CLAUDE_SPOT_MAX_DAILY_LLM_COST_USD` is LLM cost control, not a
+  approval. `BOT_SPOT_MAX_DAILY_LLM_COST_USD` is LLM cost control, not a
   trading gate. By operator decision (2026-10-14) the trader has no stop-loss
-  or take-profit levels: the prompt must not ask Claude for invalidation
+  or take-profit levels: the prompt must not ask the bot for invalidation
   prices, exit triggers or profit targets, and no automatic price-level exit
-  may be added to Claude Spot without explicit operator approval.
-- Phase 45 Claude-chosen exit plans (operator approval 2026-10-14): Claude may
+  may be added to Bot Spot without explicit operator approval.
+- Phase 45 bot-chosen exit plans (operator approval 2026-10-14): The bot may
   pick a sell plan per position from a fixed, deterministic menu (follow the
   peak by percent or ATR, take part, stretch above the Bollinger band,
-  slowdown, momentum fade, deadline) by setting its parameters; Claude
+  slowdown, momentum fade, deadline) by setting its parameters; The bot
   never writes or runs code. Approved: the historical replay
-  (`bb claude-spot-exit-replay`) and, after the operator reviewed it, the
+  (`bb bot-spot-exit-replay`) and, after the operator reviewed it, the
   paper trial: the optional `set_exit_plan` host tool and the
-  `claude-spot-exit-watch` watcher, which records would-be sells and must
+  `bot-spot-exit-watch` watcher, which records would-be sells and must
   never place an order or hold an order path. The prompt may offer the tool
   but must not require exit plans.
 - Phase 45 live exit plans (operator decision 2026-10-15, before a paper
-  run, after the 40-trade backtest): with `CLAUDE_SPOT_EXIT_PLANS_LIVE=true`
-  the `claude-spot` daemon follows positions between cycles and sells a
-  position into USDT when its plan (Claude's from `set_exit_plan`, or the
-  default `CLAUDE_SPOT_DEFAULT_EXIT_PLAN`, deployed `deadline=120` since
+  run, after the 40-trade backtest): with `BOT_SPOT_EXIT_PLANS_LIVE=true`
+  the `bot-spot` daemon follows positions between cycles and sells a
+  position into USDT when its plan (The bot's from `set_exit_plan`, or the
+  default `BOT_SPOT_DEFAULT_EXIT_PLAN`, deployed `deadline=120` since
   2026-10-17 (was `stretch=2:1,atr=3:1h`),
-  for positions opened from `CLAUDE_SPOT_DEFAULT_EXIT_PLAN_FROM`) fires.
+  for positions opened from `BOT_SPOT_DEFAULT_EXIT_PLAN_FROM`) fires.
   These sells use `Runtime::exit_sell`: the cycle lock (never during a
-  Claude route), live arming, the emergency stop file, the failed-route
+  bot route), live arming, the emergency stop file, the failed-route
   halt, operator scope, `order/test` per leg, exchange filters, fill
   reconciliation, and one durable audit row (`cycle_id` `exit-plan`) before
   the alert; an ambiguous sell halts live trading like any route. Only the
@@ -134,38 +134,38 @@ driven project.
   Exit plans only sell, never buy. Changing the default plan or the menu
   needs a new operator decision. Operator decision 2026-10-17 (branch
   `old-gold-way`): back to the v7 system after the fixed plan (2026-10-16)
-  and locked rules (2026-10-17) cut winners short. Claude's `set_exit_plan`
+  and locked rules (2026-10-17) cut winners short. The bot's `set_exit_plan`
   (full menu, deadline included; setting again replaces, `clear` removes)
   overrides the default per position, and the system prompt is the v7 text
-  (tag `claude-spot-v11-agentic`). Kept from 2026-10-17: `stretch` sells
+  (tag `bot-spot-v11-agentic`). Kept from 2026-10-17: `stretch` sells
   only when its line is above break-even (entry plus buy and sell fees at
-  the trip's fee rate), and the cycle prompt and trade history show Claude
+  the trip's fee rate), and the cycle prompt and trade history show the bot
   which rule sold each position and the result after fees (information
   only). The trader session was restored to the v7 conversation up to the
   last gpt-6.1-sol cycle before Sonnet took over (cycle 542, 2026-10-16
   05:02 UTC), with the journal cut at the same point.
-- Claude Spot hard safety stays always on and fails closed: the live arming
+- Bot Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,
   Binance `order/test` before every leg, exchange filters with orders sized
   from live balances net of authenticated per-symbol taker fees plus slippage
   and rounding reserve, per-leg fill reconciliation that halts on anything
   ambiguous, operator scope (allow/block lists, blocked quotes, default fiat
-  blocking), Spot MARKET orders only with at most `CLAUDE_SPOT_MAX_ROUTE_LEGS`
+  blocking), Spot MARKET orders only with at most `BOT_SPOT_MAX_ROUTE_LEGS`
   legs, and the failed-route halt. A route that submitted an order and then
   failed, or whose submission was ambiguous, halts live trading until the
-  operator reviews it and runs `bb claude-spot --mark-failed-route-reviewed`;
+  operator reviews it and runs `bb bot-spot --mark-failed-route-reviewed`;
   nothing else may clear it. Never weaken or bypass any hard-safety item.
-- Claude Spot audit is one fsync'd JSONL row per route or cycle, written before
+- Bot Spot audit is one fsync'd JSONL row per route or cycle, written before
   any Telegram alert, preserving submitted-leg truth after any partial route
   failure. Signed Binance request details must stay out of logs.
 - Phase 35 social-signal intelligence is read-only evidence collection and
   context enrichment only. It may ingest Telegram Bot API updates visible to a
   configured bot and official X API search results, normalize/hash records, and
-  feed per-asset evidence to Claude Spot through `get_social_evidence`. It must
+  feed per-asset evidence to Bot Spot through `get_social_evidence`. It must
   not bypass platform terms, scrape private chats, use browser automation for
   X (except the Phase 43 collector below), store unnecessary raw personal data,
-  or create an order-submission path. Social evidence is information for Claude
+  or create an order-submission path. Social evidence is information for the bot
   only and must never bypass exchange rules, order-test, emergency-stop, or
   reconciliation.
 - Phase 43 X pre-pump signal insighter: by operator decision (2026-10-13) the
@@ -177,13 +177,13 @@ driven project.
   traction and exhaustion calls are information for deterministic entry/exit
   rules only. Nothing executes until the Phase 43 paper gate passes and a
   separate execution approval is given.
-- Phase 36 Claude Spot Telegram decision explanations are observability-only.
+- Phase 36 Bot Spot Telegram decision explanations are observability-only.
   They must be derived from the completed cycle result/audit data, must not
   make a separate LLM call, and must not change live routing, prompt, order-test,
   emergency-stop, audit, or reconciliation behavior. Long explanations are
   delivered through safe message splitting.
 - The capital pool (`bb capital-pool`, crate `bb-capital`) keeps a
-  deterministic reserve and per-module min/max plan. The Claude allocator
+  deterministic reserve and per-module min/max plan. The bot allocator
   (`--advise`) may only clamp within those deterministic bounds, and any
   allocator failure must fall back to the deterministic plan. Auto-convert
   (`AUTO_CONVERT_TO_QUOTE=true`) may only market-sell `AUTO_CONVERT_ASSETS` to

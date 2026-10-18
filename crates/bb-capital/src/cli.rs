@@ -13,9 +13,9 @@ use serde_json::{Value, json};
 
 use crate::advisor::{AllocationContext, FileProposalProvider, GuardedAdvisor, guard_proposal};
 use crate::allocator::{AllocationPlan, Scoring};
-use crate::claude::{AdviceReport, ClaudeAllocator, LiveFleet};
+use crate::bot::{AdviceReport, BotAllocator, LiveFleet};
 use crate::config::{
-    AdvisorConfig, AutoConvertConfig, CapitalPoolConfig, ClaudeAllocatorConfig, parse_assets,
+    AdvisorConfig, AutoConvertConfig, CapitalPoolConfig, BotAllocatorConfig, parse_assets,
 };
 use crate::convert::{ConvertMode, FundingRequest, audit_row, ensure_quote_for_order};
 use crate::distributor::{
@@ -35,7 +35,7 @@ pub enum Command {
     BotStatus(BotStatusArgs),
     /// Compute an advisory cash-distribution plan across all running bots.
     CashDistributor(CashDistributorArgs),
-    /// Show the capital pool plan and persisted state; --advise asks the Claude allocator once.
+    /// Show the capital pool plan and persisted state; --advise asks the bot allocator once.
     CapitalPool(CapitalPoolArgs),
     /// Fund a quote shortfall by market-selling an allowed asset (order/test unless --submit-live).
     AutoConvert(AutoConvertArgs),
@@ -83,7 +83,7 @@ pub struct CapitalPoolArgs {
     /// Scoring policy: scorecard or lifetime-pnl.
     #[arg(long, default_value = "scorecard")]
     pub scoring: Scoring,
-    /// Ask the Claude allocator (omp) once and show the guarded result.
+    /// Ask the bot allocator (omp) once and show the guarded result.
     #[arg(long)]
     pub advise: bool,
     #[arg(long)]
@@ -180,7 +180,7 @@ enum Advice {
         path: PathBuf,
         proposal: Option<Value>,
     },
-    Claude(Box<AdviceReport>),
+    Bot(Box<AdviceReport>),
 }
 
 async fn capital_pool(args: CapitalPoolArgs) -> anyhow::Result<ExitCode> {
@@ -224,12 +224,12 @@ async fn capital_pool(args: CapitalPoolArgs) -> anyhow::Result<ExitCode> {
     let context = pool.context(equity, &module_ids);
 
     let (plan, advice) = if args.advise {
-        let claude_config = ClaudeAllocatorConfig::from_env()?;
+        let bot_config = BotAllocatorConfig::from_env()?;
         let fleet = Arc::new(LiveFleet {
             client: client.clone(),
             data_dir: args.data_dir.clone(),
         });
-        let allocator = ClaudeAllocator::new(claude_config, fleet);
+        let allocator = BotAllocator::new(bot_config, fleet);
         let report = allocator.advise(&context).await;
         allocator.shutdown().await;
         let plan = guard_proposal(
@@ -237,7 +237,7 @@ async fn capital_pool(args: CapitalPoolArgs) -> anyhow::Result<ExitCode> {
             &context.fallback_plan,
             &pool_config,
         );
-        (plan, Advice::Claude(Box::new(report)))
+        (plan, Advice::Bot(Box::new(report)))
     } else if let (true, Some(path)) =
         (advisor_config.enabled, advisor_config.proposal_file.clone())
     {
@@ -263,7 +263,7 @@ async fn capital_pool(args: CapitalPoolArgs) -> anyhow::Result<ExitCode> {
             Advice::File { path, proposal } => {
                 json!({"source": "file", "path": path, "proposal": proposal})
             }
-            Advice::Claude(report) => json!({"source": "claude", "report": report}),
+            Advice::Bot(report) => json!({"source": "bot", "report": report}),
         };
         let document = json!({
             "state_file": state_file,
@@ -360,10 +360,10 @@ fn render_pool(
                 }
             );
         }
-        Advice::Claude(report) => {
+        Advice::Bot(report) => {
             let _ = writeln!(
                 out,
-                "\nADVISOR: Claude via omp — {} (session {}{}), {} in / {} out tokens, ${}",
+                "\nADVISOR: The bot via omp — {} (session {}{}), {} in / {} out tokens, ${}",
                 report.status,
                 if report.session_id.is_empty() {
                     "-"

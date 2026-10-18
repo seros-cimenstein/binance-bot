@@ -1,6 +1,6 @@
-//! Exit-plan menu (Phase 45): the sell plans Claude may choose for a position.
+//! Exit-plan menu (Phase 45): the sell plans the bot may choose for a position.
 //!
-//! Claude never writes code. It picks parameters for a fixed menu and the bot evaluates
+//! The bot never writes code. It picks parameters for a fixed menu and the bot evaluates
 //! the plan on prices it sees between cycles:
 //!
 //! - follow the peak: sell everything once the price falls a set distance below the

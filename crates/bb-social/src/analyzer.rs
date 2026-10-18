@@ -1,7 +1,7 @@
-//! Optional headless-Claude reclassification of already-collected posts, run through one
-//! stateless omp session per batch (`--no-session`, no built-in tools). Claude delivers the
+//! Optional headless-bot reclassification of already-collected posts, run through one
+//! stateless omp session per batch (`--no-session`, no built-in tools). The model delivers the
 //! classification by calling the `submit_classification` host tool, which validates it against
-//! the schema; posts Claude does not classify (or a failed/timed-out turn) keep their heuristic
+//! the schema; posts the model does not classify (or a failed/timed-out turn) keep their heuristic
 //! label, confidence and manipulation risk.
 
 use std::collections::{HashMap, HashSet};
@@ -29,7 +29,7 @@ Do not give trading instructions. Deliver the classification by calling submit_c
 exactly once with a JSON object matching its schema; if it returns an error, fix the \
 classification and call it again. Do not answer in plain text.";
 
-/// Classifies posts with Claude through omp (`SOCIAL_SIGNAL_AI_COMMAND`, `SOCIAL_SIGNAL_AI_MODEL`,
+/// Classifies posts with the model through omp (`SOCIAL_SIGNAL_AI_COMMAND`, `SOCIAL_SIGNAL_AI_MODEL`,
 /// `SOCIAL_SIGNAL_AI_TIMEOUT_SECONDS`).
 #[derive(Debug, Clone)]
 pub struct HeadlessSocialAnalyzer<'a> {
@@ -61,7 +61,7 @@ impl<'a> HeadlessSocialAnalyzer<'a> {
         })
     }
 
-    /// Records with the AI-provided label/confidence/risk where Claude submitted one. Starts omp
+    /// Records with the AI-provided label/confidence/risk where the model submitted one. Starts omp
     /// only for a non-empty batch and shuts it down afterwards; any AI failure keeps the
     /// heuristic records (logged as a warning).
     pub async fn classify(&self, records: Vec<SocialSignalRecord>) -> Vec<SocialSignalRecord> {
@@ -432,7 +432,7 @@ mod tests {
             (pid, message)
         }
 
-        /// Claude calls `submit_classification` with `args`; returns the host result frame.
+        /// The model calls `submit_classification` with `args`; returns the host result frame.
         async fn submit(&mut self, call_id: &str, args: Value) -> Map<String, Value> {
             self.send(json!({"type": "tool_execution_start", "toolCallId": call_id, "toolName": SUBMIT_TOOL, "args": args}))
                 .await;
@@ -515,7 +515,7 @@ mod tests {
         assert!((classified[0].manipulation_risk - 0.25).abs() < f64::EPSILON);
         assert_eq!(classified[1].label, SocialLabel::ManipulationRisk);
         assert!((classified[1].manipulation_risk - 1.0).abs() < f64::EPSILON);
-        // Not classified by Claude: heuristic record kept.
+        // Not classified by the model: heuristic record kept.
         assert_eq!(classified[2], record("m3"));
     }
 

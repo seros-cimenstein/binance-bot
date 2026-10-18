@@ -116,7 +116,7 @@ pub fn hash_payload(payload: &Value) -> String {
     hex::encode(Sha256::digest(python_json(payload).as_bytes()))
 }
 
-/// Invariants the runtime enforces regardless of what Claude asks for.
+/// Invariants the runtime enforces regardless of what the bot asks for.
 pub fn execution_invariants(config: &TraderConfig) -> Vec<String> {
     vec![
         "execute_route only accepts route_id values quoted in the current cycle (cycle prompt or list_routes); \
@@ -142,7 +142,7 @@ pub fn execution_invariants(config: &TraderConfig) -> Vec<String> {
     ]
 }
 
-/// Scope + information settings shown to Claude (no trading gates remain).
+/// Scope + information settings shown to the bot (no trading gates remain).
 pub fn route_scope(config: &TraderConfig) -> Value {
     json!({
         "allowed_symbols": config.scope.allowed_symbols,
@@ -162,7 +162,7 @@ pub fn route_scope(config: &TraderConfig) -> Value {
     })
 }
 
-/// Everything the cycle knows when it asks Claude.
+/// Everything the cycle knows when it asks the bot.
 #[derive(Debug, Clone)]
 pub struct DecisionContext {
     pub timestamp: String,

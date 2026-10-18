@@ -1379,7 +1379,7 @@ mod tests {
                 "bb",
                 "api-permissions",
                 "--feature",
-                "claude_spot_autonomous",
+                "bot_spot_autonomous",
             ],
             vec![
                 "bb",

@@ -1,5 +1,5 @@
-//! The Claude capital allocator, run through one persistent omp session (replaces
-//! `tools/claude_allocator.py` and `CAPITAL_AI_ADVISOR_CMD`). Claude reads the allocation context,
+//! The bot capital allocator, run through one persistent omp session (replaces
+//! `tools/claude_allocator.py` and `CAPITAL_AI_ADVISOR_CMD`). The bot reads the allocation context,
 //! may pull fleet status / balances / scorecards through host tools, and delivers its proposal
 //! with `propose_allocation`, which validates it against the refactor JSON schema. The proposal is
 //! only advice: [`crate::advisor::guard_proposal`] clamps it into the deterministic bounds.
@@ -23,7 +23,7 @@ use crate::advisor::{
     AllocationContext, FileProposalProvider, FirstAvailable, GuardedAdvisor, ProposalProvider,
     allocation_schema, extract_allocation_proposal, guard_proposal, validate_proposal,
 };
-use crate::config::{AdvisorConfig, ClaudeAllocatorConfig};
+use crate::config::{AdvisorConfig, BotAllocatorConfig};
 use crate::error::Result;
 use crate::status::{collect_snapshot, render_json};
 use crate::wallet::fetch_wallet;
@@ -257,15 +257,15 @@ struct Live {
     resumed: bool,
 }
 
-/// The persistent omp allocator session (started lazily, resumed from `CLAUDE_ALLOCATOR_SESSION_DIR`).
-pub struct ClaudeAllocator {
-    config: ClaudeAllocatorConfig,
+/// The persistent omp allocator session (started lazily, resumed from `BOT_ALLOCATOR_SESSION_DIR`).
+pub struct BotAllocator {
+    config: BotAllocatorConfig,
     tools: Arc<AllocatorTools>,
     live: tokio::sync::Mutex<Option<Live>>,
 }
 
-impl ClaudeAllocator {
-    pub fn new(config: ClaudeAllocatorConfig, fleet: Arc<dyn FleetSource>) -> Self {
+impl BotAllocator {
+    pub fn new(config: BotAllocatorConfig, fleet: Arc<dyn FleetSource>) -> Self {
         Self {
             config,
             tools: Arc::new(AllocatorTools::new(fleet)),
@@ -274,7 +274,7 @@ impl ClaudeAllocator {
     }
 
     /// `omp --mode rpc --no-tools ... --model --system-prompt --session-dir`.
-    pub fn session_config(config: &ClaudeAllocatorConfig) -> SessionConfig {
+    pub fn session_config(config: &BotAllocatorConfig) -> SessionConfig {
         SessionConfig {
             program: config.command.clone().into(),
             model: Some(config.model.clone()),
@@ -287,7 +287,7 @@ impl ClaudeAllocator {
 
     /// Attach over an existing transport (tests, custom launchers).
     pub async fn connect(
-        config: ClaudeAllocatorConfig,
+        config: BotAllocatorConfig,
         fleet: Arc<dyn FleetSource>,
         transport: Transport,
     ) -> Result<Self> {
@@ -372,7 +372,7 @@ impl ClaudeAllocator {
                 "timeout",
                 &outcome,
                 Some(format!(
-                    "Claude timed out after {}s; turn aborted",
+                    "The bot timed out after {}s; turn aborted",
                     after.as_secs()
                 )),
             ),
@@ -429,19 +429,19 @@ async fn maybe_compact(session: &AgentSession, threshold: f64) {
 }
 
 #[async_trait]
-impl ProposalProvider for ClaudeAllocator {
+impl ProposalProvider for BotAllocator {
     async fn proposal(&self, context: &AllocationContext, timeout: Duration) -> Option<Value> {
         match tokio::time::timeout(timeout, self.advise(context)).await {
             Ok(report) => {
                 if report.proposal.is_none() {
-                    tracing::warn!(status = %report.status, error = ?report.error, "Claude allocator gave no proposal; using fallback");
+                    tracing::warn!(status = %report.status, error = ?report.error, "The bot allocator gave no proposal; using fallback");
                 }
                 report.proposal
             }
             Err(_) => {
                 tracing::warn!(
                     timeout_s = timeout.as_secs_f64(),
-                    "Claude allocator exceeded the advisor timeout; using fallback"
+                    "The bot allocator exceeded the advisor timeout; using fallback"
                 );
                 None
             }
@@ -450,7 +450,7 @@ impl ProposalProvider for ClaudeAllocator {
 }
 
 /// The advisor a pool runtime attaches: `None` unless `CAPITAL_AI_ADVISOR_ENABLED`; tries
-/// `CAPITAL_AI_ADVISOR_FILE` first, then the Claude allocator, the whole call bounded by
+/// `CAPITAL_AI_ADVISOR_FILE` first, then the bot allocator, the whole call bounded by
 /// `CAPITAL_AI_ADVISOR_TIMEOUT_SECONDS`.
 pub fn guarded_advisor_from_env(fleet: Arc<dyn FleetSource>) -> Result<Option<GuardedAdvisor>> {
     let advisor = AdvisorConfig::from_env()?;
@@ -461,8 +461,8 @@ pub fn guarded_advisor_from_env(fleet: Arc<dyn FleetSource>) -> Result<Option<Gu
     if let Some(path) = &advisor.proposal_file {
         providers.push(Arc::new(FileProposalProvider::new(path)));
     }
-    providers.push(Arc::new(ClaudeAllocator::new(
-        ClaudeAllocatorConfig::from_env()?,
+    providers.push(Arc::new(BotAllocator::new(
+        BotAllocatorConfig::from_env()?,
         fleet,
     )));
     Ok(Some(GuardedAdvisor::new(
@@ -579,7 +579,7 @@ mod tests {
             dir
         }
 
-        /// Claude calls `tool` with `args`; returns the host result frame.
+        /// The bot calls `tool` with `args`; returns the host result frame.
         async fn tool_call(&mut self, call_id: &str, tool: &str, args: Value) -> Value {
             self.send(json!({"type": "tool_execution_start", "toolCallId": call_id, "toolName": tool, "args": args}))
                 .await;
@@ -612,8 +612,8 @@ mod tests {
         }
     }
 
-    fn config(dir: &std::path::Path) -> ClaudeAllocatorConfig {
-        ClaudeAllocatorConfig {
+    fn config(dir: &std::path::Path) -> BotAllocatorConfig {
+        BotAllocatorConfig {
             command: "omp".into(),
             model: "haiku".into(),
             timeout: Duration::from_secs(10),
@@ -684,7 +684,7 @@ mod tests {
                 .await;
             (dir, message, status, balances, bad, good)
         });
-        let allocator = ClaudeAllocator::connect(cfg, Arc::new(StaticFleet), transport)
+        let allocator = BotAllocator::connect(cfg, Arc::new(StaticFleet), transport)
             .await
             .unwrap();
         let ctx = context();

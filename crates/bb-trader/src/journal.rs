@@ -73,7 +73,7 @@ pub struct LastCycle {
     pub error: String,
 }
 
-/// Persisted agent bookkeeping (`CLAUDE_SPOT_STATE_PATH`).
+/// Persisted agent bookkeeping (`BOT_SPOT_STATE_PATH`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
     pub cycle_count: u64,

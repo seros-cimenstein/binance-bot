@@ -9,7 +9,7 @@
 //! Backtests (`edge_likely` verdicts gate the `*_PROVEN_EDGE` flags):
 //! [`funding_arb_backtest`], [`trend_filter_backtest`], [`mean_reversion_backtest`],
 //! [`basis_arb_backtest`], [`grid_backtest`], [`news_event_backtest`],
-//! [`stat_arb_backtest`], [`claude_spot_backtest`].
+//! [`stat_arb_backtest`], [`bot_spot_backtest`].
 //!
 //! Research: [`spec_snapshot`] writes a public-data speculation snapshot (CSVs + `SUMMARY.md`).
 //!
@@ -26,7 +26,7 @@
 )]
 
 pub mod basis_arb_backtest;
-pub mod claude_spot_backtest;
+pub mod bot_spot_backtest;
 pub mod cli;
 pub mod common;
 pub mod error;

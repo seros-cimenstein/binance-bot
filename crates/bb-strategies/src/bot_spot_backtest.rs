@@ -1,10 +1,10 @@
-//! Historical replay harness for Claude Spot's decision regime (port of
+//! Historical replay harness for Bot Spot's decision regime (port of
 //! `src/claude_spot_backtest.py`).
 //!
 //! Deterministic momentum rotation: each bar, score every candidate by its lookback
 //! return minus a modelled round-trip cost (taker fee + half-spread proxy + slippage),
 //! rotate into the best one when its edge clears `min_edge_after_friction_bps`, otherwise
-//! sit in the base asset. A positive verdict is what justifies `CLAUDE_SPOT_PROVEN_EDGE=yes`.
+//! sit in the base asset. A positive verdict is what justifies `BOT_SPOT_PROVEN_EDGE=yes`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -478,7 +478,7 @@ pub async fn run_cli(args: Args) -> anyhow::Result<ExitCode> {
     } else {
         if args.start.is_empty() {
             return Ok(crate::cli::usage_error(
-                "claude-spot-backtest",
+                "bot-spot-backtest",
                 "either --fixture or --start must be supplied",
             ));
         }

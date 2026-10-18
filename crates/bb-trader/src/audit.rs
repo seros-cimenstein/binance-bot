@@ -52,13 +52,13 @@ impl RowStatus {
 pub enum RowType {
     /// One planned / executed / refused route.
     Route,
-    /// One per cycle: Claude's end-of-cycle statement, tool trace and usage.
+    /// One per cycle: The bot's end-of-cycle statement, tool trace and usage.
     CycleSummary,
     /// `--mark-failed-route-reviewed`.
     Review,
 }
 
-/// Python `ClaudeSpotDecision.as_dict`.
+/// Python `BotSpotDecision.as_dict`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Decision {
     pub action: String,
@@ -132,7 +132,7 @@ pub struct UsageEntry {
     pub cost_usd: Decimal,
 }
 
-/// Claude's explicit end-of-cycle statement.
+/// The bot's explicit end-of-cycle statement.
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct EndCycle {
     pub action: String,
@@ -287,7 +287,7 @@ impl AuditLog {
 pub fn failed_route_halt(rows: &AuditRows) -> Option<String> {
     if let Some(error) = &rows.error {
         return Some(format!(
-            "could not read Claude Spot audit history: {error}; no order submitted"
+            "could not read Bot Spot audit history: {error}; no order submitted"
         ));
     }
     let last = rows.rows.iter().rposition(row_attempted_submission)?;
@@ -305,20 +305,20 @@ pub fn mark_failed_route_reviewed(config: &TraderConfig, reason: &str) -> Result
     let rows = log.rows();
     if let Some(error) = rows.error {
         return Err(TraderError::safety(format!(
-            "could not read Claude Spot audit history: {error}"
+            "could not read Bot Spot audit history: {error}"
         )));
     }
     let failed = rows
         .rows
         .iter()
         .rposition(|row| row_status(row) == "failed" && row_attempted_submission(row))
-        .ok_or_else(|| TraderError::safety("no failed submitted Claude Spot route needs review"))?;
+        .ok_or_else(|| TraderError::safety("no failed submitted Bot Spot route needs review"))?;
     if rows.rows[failed + 1..]
         .iter()
         .any(row_failed_submission_reviewed)
     {
         return Err(TraderError::safety(
-            "latest failed submitted Claude Spot route is already reviewed",
+            "latest failed submitted Bot Spot route is already reviewed",
         ));
     }
     let failed_row = &rows.rows[failed];
@@ -357,7 +357,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let audit = dir.path().join("audit.jsonl");
         let audit_text = audit.to_string_lossy().into_owned();
-        let config = config(&[("CLAUDE_SPOT_AUDIT_PATH", &audit_text)]);
+        let config = config(&[("BOT_SPOT_AUDIT_PATH", &audit_text)]);
 
         assert!(failed_route_halt(&AuditLog::new(&audit).rows()).is_none());
         assert!(
