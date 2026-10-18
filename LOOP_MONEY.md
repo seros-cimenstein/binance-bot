@@ -1,0 +1,115 @@
+# Loop ledger: make Bot Spot stop losing and find out whether it can earn (2026-10-18)
+
+STATUS: OPEN
+
+Source: the 2026-10-18 session. That includes the loss analysis (`PROGRESS.md`, entry "2026-10-18 (07:55 UTC)"), the health check (entry "05:30 UTC"), and three read-only scout reports (prompt/inputs, research tools and past results, costs/ops). The setup agent re-checked each claim against the code and the Pi data before it went into an item. This file is the loop's memory and its stop switch: the gate `~/projects/seref_omp_tools/seref_loop/bin/seref-loop-gate LOOP_MONEY.md`
+(run by `/seref_manager run LOOP_MONEY.md` or `/loop --until`) stops the loop only when the line
+above reads `STATUS: DONE`, no `- [ ]` is left, every `- [x]` carries `DONE:`/`INVALID:` evidence and
+every `- [!]` a `BLOCKED:` reason.
+
+Background (measured 2026-10-18 08:00 UTC):
+- 40 closed coin round trips (10-13 to 10-18): 13 wins, net -1.074 USDT on a ~17.8 USDT wallet. That is gross -0.472 plus fees 0.602 (14.8 bps per trip on 406 USDT traded).
+- All 40 entries came after a 30-min rise (mean +1.15%). The price after entry averaged -0.15% at +20 min, -0.17% at +90 min and -0.20% at +120 min; only 19 of 40 were up at +90 min.
+- The bot's own exits (31 trips, -1.47) beat holding to 90 min. The loss is in the entries.
+- No strategy in this repo has a durable edge after fees: every exit replay loses, as do trend filter, mean-reversion paper (0 trades) and the momentum backtest. Funding arb is the only positive multi-year backtest, but it needs futures (forbidden for Bot Spot) and lost 6.17% in 2026.
+- LLM `cost_usd` is a notional price on subscription logins, not money spent (`crates/bb-omp/src/types.rs:143-160`, CODEX.md "fits the subscription allowance").
+
+## Protocol (every iteration)
+
+1. Read this file and `CODEX.md` (binding live-money rules), then `PROGRESS.md`'s newest entries. Take the first `- [ ]` item in order (sections A, B, C, D, E in order; respect the dependencies named in items).
+2. Before editing, read the code the item names and re-check that the finding still holds. Already
+   fixed or wrong: mark `- [x] … — INVALID: <evidence>`.
+3. Fix it at the root with the project's existing patterns; migrate every caller; update the docs
+   that describe the changed behavior in the same step (README.md, OPERATIONS.md, CODEX.md when a rule's wording changes, `.env.example` for new variables).
+4. Verify on the laptop in the repo root:
+   - `cargo test -p <crate>` for the crate you changed: `bb-trader` (trader), `bb-strategies` (research harness), `cryptobot-gui` (dashboard).
+   - Then `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `scripts/smoke.sh` and `git diff --check` (last recorded run: 993 tests).
+   - Add a regression test when the bug can be shown in one. Tests must catch behavior, not wording.
+
+   Smoke the changed path where it really runs:
+   - (a) **Research commands:** run them on the laptop against public Binance klines; cache under `data/`. They must not touch `~/.cache/binance-bot/pi-data` writes or any order path.
+   - (b) **Trader input/prompt changes:** run an isolated plan-only cycle on the Pi, which places no orders and never touches the live session, audit or stop file. On `ssh pi-wired`:
+
+     ```
+     cd ~/binance-bot && docker compose run --rm -e BOT_SPOT_SESSION_DIR=data/loop-smoke/session -e BOT_SPOT_AUDIT_PATH=data/loop-smoke/decisions.jsonl -e BOT_SPOT_JOURNAL_PATH=data/loop-smoke/journal.jsonl -e BOT_SPOT_STATE_PATH=data/loop-smoke/state.json -e BOT_SPOT_LOCK_PATH=data/loop-smoke/lock -e BOT_SPOT_STOP_PATH=data/loop-smoke/stop -e BOT_SPOT_EXIT_PLANS_LIVE=false -e BOT_SPOT_EXIT_PLANS_PATH=data/loop-smoke/plans.json -e BOT_SPOT_EXIT_WATCH_STATE_PATH=data/loop-smoke/watch-state.json -e BOT_SPOT_EXIT_WATCH_LOG_PATH=data/loop-smoke/watch.jsonl -e TELEGRAM_BOT_TOKEN= bot-spot bb bot-spot --plan-only
+     ```
+
+     This needs the new image built first (step 5). Read the printed cycle, then `rm -rf docker-data/loop-smoke`.
+   - Use `--evidence-only` instead of `--plan-only` when the change is in the evidence/route context only; it skips the LLM call.
+   - (c) **Dashboard:** `scripts/cryptobot_gui_pi.sh` mirror plus Chromium, with no page errors.
+5. Deploy to the Pi. Host `pi-wired`, dir `~/binance-bot`, compose service `bot-spot`, env `~/binance-bot/.env.docker`, data `~/binance-bot/docker-data`.
+   - **Order:**
+     1. Commit.
+     2. `ssh pi-wired 'docker tag binance-bot:latest binance-bot:pre-<item>-<YYYYMMDD>'`.
+     3. `git ls-files -z | grep -zv '^\.env' | rsync -a --from0 --files-from=- ./ pi-wired:binance-bot/`, and `ssh … rm` any file the commit deleted or renamed.
+     4. `ssh pi-wired 'cd binance-bot && docker compose build bot-spot'` (10-17 min).
+     5. `cp -p .env.docker .env.docker.bak-<UTC>-<label>` before any env edit.
+     6. Recreate with `docker compose up -d --force-recreate bot-spot`.
+   - **Verify:**
+     - the container env;
+     - the log lines `keeping the cycle cadence`, `live exit plans enabled` and (when cycles run) `omp trader session ready … resumed=true`;
+     - the next audit row's `prompt_version`/`run_config`.
+   - **Rollback:** `docker tag binance-bot:pre-<item>-<YYYYMMDD> binance-bot:latest`, restore the env backup, then recreate.
+   - **When it is safe:** crypto trades 24/7, so the safe windows are between cycles.
+     - Recreate only right after a cycle row has landed in `docker-data/bot-spot-decisions.jsonl`, and at least 4 min before the next one (compaction starts about 2-3 min before a cycle).
+     - Never while a route is in flight.
+     - Never with an open position while the stop file exists, because the stop file also blocks exit-plan sells (`crates/bb-trader/src/cycle.rs:637-642`).
+     - Never touch the session dir `docker-data/bot-spot-session`, the journal or the decisions audit except by documented append.
+   - **Other services:** `scheduler` runs `bb x-insighter-snapshotter` every minute and nightly SQLite backups at 23:15/23:30 UTC. Do not recreate `scheduler` between 23:10 and 23:40 UTC.
+   - **Backups:** before any change to files in `docker-data` (renames, key rewrites, state edits), copy them to `docker-data/backup-<UTC>-<label>/`.
+6. Edit this file: `- [ ]` -> `- [x]` and append ` — DONE: <files>; <test/smoke evidence>`.
+   One item per iteration is fine; finish an item completely or leave it `- [ ]`.
+7. Blocked only for a user decision or an unreachable host/credential. For a decision, call the `ask`
+   tool; nobody may be at the keyboard, so under `/seref_manager` the loop manager answers it or
+   tells you to defer. Never end a turn waiting for a reply. Mark a blocker
+   `- [!] … — BLOCKED: <exact missing thing, what was tried>`. Difficulty, size or scope pressure
+   is not a blocker.
+   A `— MANAGER(itN): …` note is the loop manager's review: an item it reopened stays open until
+   you fix what the note names and tick it again with new evidence.
+8. When no `- [ ]` is left:
+   - Run every test suite and the final check: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `scripts/smoke.sh`, `scripts/pool_replay.sh`, `git diff --check`.
+   - Then on the Pi: `docker compose ps` shows `bot-spot` Up with RestartCount 0, the latest audit row is newer than the last deploy, and `ls docker-data/bot-spot.stop` matches the E1 decision.
+   - Add a dated `PROGRESS.md` entry with the loop summary.
+   - Replace the STATUS line with `STATUS: DONE`, append a summary (done / invalid / blocked) at the bottom, then run the gate command above. It must exit 0; if it does not, fix what its message names before yielding.
+
+Rules:
+- Commit each finished item on the current branch (`old-gold-way`), code and this ledger together, with a message naming the item ID. Run `git status --short` first. If it shows changes you did not make, those are the user's: stop committing and leave the work uncommitted. The tree was clean at setup (2026-10-18 08:05 UTC).
+- Do not touch:
+  - `docker-data/archive/` and the `docker-data/omp-agent/` logins;
+  - the live session `docker-data/bot-spot-session/` and the decisions audit (never rewrite rows);
+  - the laptop's `~/.local/share/binance-bot` and its systemd units;
+  - `CLAUDE.md`, `AGENTS.md`;
+  - older `PROGRESS.md` entries (add new ones at the top).
+  - Never add a blocking trading gate, a stop-loss/take-profit, or a new exit-plan default or menu change without the operator's explicit approval (CODEX.md). Information for the bot is allowed.
+- No destructive commands on live data without a backup.
+
+## A. Stop the bleeding (now: each live round trip loses ~0.027 USDT on average, ~6-10 per day)
+
+- [x] A1 The live trader keeps opening losing entries (40 trips, -1.074 USDT, 40/40 entries after a 30-min run-up, mean -0.17% 90 min later; `crates/bb-trader/src/agent.rs:87-88` "Trade actively … Holding is a decision, not a default"). Pause live trading by creating `docker-data/bot-spot.stop` on the Pi right after a cycle ends with no open position (the stop file also blocks exit-plan sells, `cycle.rs:637-642`). Do not resume until E1. Conservative default: pause. Acceptance: `ssh pi-wired 'ls ~/binance-bot/docker-data/bot-spot.stop'` succeeds, `bot-spot-exit-watch-state.json` `active` is `{}`, and the next cycle row has no LLM call and no order. — DONE: the 07:53 cycle ended in cash (15.0986 USDT, wallet 17.7810, `active` []); `touch ~/binance-bot/docker-data/bot-spot.stop` at 08:11:16 UTC. At 08:13:25 the daemon logged `ERROR Bot Spot cycle failed error=Bot Spot emergency stop is active: data/bot-spot.stop`. That refusal comes before any LLM call (`cycle.rs:882`), so no audit row was written (last row still 07:53:25), there was no compaction log, `llm_cost_usd` stayed 5.6431 and no order was placed. Container `running`, RestartCount 0. Correction to the acceptance text: a stopped cycle writes no row at all.
+- [ ] A2 A paused trader crash-loops on any restart or deploy. In `crates/bb-trader/src/cli.rs:114`, `stop_guard` makes `bb bot-spot --daemon` exit at startup when the stop file exists, and compose has `restart: unless-stopped` (`docker-compose.yml:32`), so every later deploy in this loop (B, D) would restart in a loop. In `--daemon` mode, start and idle instead: log once, skip cycles while the stop file exists (the per-cycle check at `cycle.rs:882-887` already refuses before any LLM call), and resume automatically when it is deleted. One-shot runs keep refusing. Do A1 first. Acceptance: test that daemon startup with a stop file does not return an error and makes no LLM call; on the Pi after deploy, `docker inspect -f '{{.RestartCount}}' bot-spot` stays 0 for 5 min with the stop file present.
+
+## B. Truthful inputs for the bot (information only; never a gate, per CODEX.md)
+
+- [ ] B1 The route table presents trailing momentum as "edge". The column `edge after friction bps` is `relative_momentum - friction` (`crates/bb-trader/src/evidence.rs:370-374`), and relative momentum is a weighted trailing return (weights at `evidence.rs:15-23`; 5m+15m = 25%). For USDT->coin routes it is the coin's own recent run-up, which matches the measured chasing. Rename the column and the payload field (`expected_edge_after_friction_bps`) to say "trailing momentum minus cost" everywhere it reaches the model (`agent.rs` route-table header ~277-317, tool outputs in `tools.rs`, evidence payload). Keep the values the same. Bump `PROMPT_VERSION` (`config.rs:19`) and the Pi's `BOT_SPOT_PROMPT_VERSION` (the env overrides the constant, `config.rs:312`). Acceptance: a test that the cycle prompt and the evidence payload no longer contain "edge after friction"/"expected_edge"; an isolated `--evidence-only` run on the Pi shows the new name.
+- [ ] B2 Quoted trading costs are far above the real ones. Routes use fee_rate 0.001 without the BNB discount (`commission_discount_asset` empty in every audit leg; real fees are ~7.5 bps per side, 14.8 bps per round trip over 40 trips) plus a 25 bps slippage buffer (`config.rs:346-347`). Mean quoted buy friction since 10-17 is ~61 bps (n=12), yet fills beat the quoted price by a mean 23.7 bps on buys and 26.6 bps on sells (40/40 legs). Show the bot a separate "expected cost" figure based on the account's effective commission (Binance account commission endpoint, incl. BNB discount) and the half spread. Leave order sizing, the reserve (`executor.rs:97-107`) and the quote path unchanged, because they are hard safety. Acceptance: tests that sizing/reserve outputs are identical before and after; an isolated `--evidence-only` run shows the expected cost on a large market within 5 bps of 7.5 + half spread.
+- [ ] B3 Trade memory prints only the 5 newest outcomes while `trade_memory_limit` is 8 (`crates/bb-trader/src/agent.rs:211` `.take(5)`; `config.rs:359`; Pi `.env.docker` sets 8). Use the configured limit. Acceptance: a test with 8 outcomes shows all 8 in the cycle prompt.
+- [ ] B4 Trade-memory outcome P&L may leave out the sell-side fee: it compares `estimated_output_usdt` at entry with the next route's `source_value_usdt` (`crates/bb-trader/src/memory.rs:262-297`; scout claim, confidence medium, not yet re-checked). Verify. If it holds, make outcomes net of both fees using the recorded fills. Acceptance: a test on a recorded buy+sell pair where the memory P&L equals `cryptobot-gui` `history.rs`'s `pnl_usdt` for the same rows (the dashboard computes net after both fees); or INVALID with the evidence.
+- [ ] B5 The bot never sees its own record (no win rate, total P&L, fees paid; scout grep found these only in `exit_replay.rs`). Add an information-only `## Your record` section to the cycle prompt after Trade memory (`agent.rs` ~233). Cover all time and the last 7 days: closed trips, wins, net after fees, fees paid, mean hold. Build it from `exit_replay::read_audit` + `round_trips` (`exit_replay.rs:188-277`) over the full audit. Do B4 first so the numbers agree. Acceptance: a test on a fixture audit; an isolated `--plan-only` run on the Pi shows the section with all-time numbers equal to the dashboard's `/api/history` closed trades (2026-10-18: 40 trips, 13 wins, -1.074 USDT).
+- [ ] B6 Add entry timing to `## Your record`: the mean 30-min price change before the bot's entries and the mean change +20/+90 min after them (measured 2026-10-18: +1.15% before; -0.15%/-0.17% after; 40/40 entries after a rise). Use 1m klines cached on disk (e.g. `data/bot-spot-entry-klines/`) so a cycle never refetches old trips; only new trips trigger a fetch. Information only. Do B5 first. Acceptance: a test with fixture klines; on the Pi, the isolated plan-only run shows numbers within 0.05 percentage points of an independent script over the same trips.
+
+## C. Find an entry approach that pays after costs (research only: public data, no order path, no live change)
+
+- [ ] C1 No tool can test entry rules the way the bot trades. `bot-spot-backtest` only rotates one position on 1h bars with no volume (`crates/bb-strategies/src/bot_spot_backtest.rs:146-300`, `common.rs:47-54`), and `bot-spot-exit-replay` only replays the audit's entries (`crates/bb-trader/src/exit_replay.rs:188-277`). Add a research command `bb entry-study` in `bb-strategies` that reuses `fetch_klines_for_symbols` and its disk cache (`common.rs:298-357`): universe = top 20 USDT spot pairs by quote volume, excluding stablecoins, fiat and tokenized stocks (permission group `TRD_GRP_261`, as in `crates/cryptobot-gui/src/market.rs`); data = ≥90 days of 1m klines; features at every 20-min mark × coin = 5m/15m/30m/1h/4h/24h returns and the volume ratio; outcomes = forward returns at +20/+60/+90/+120 min, net of 15 bps round-trip fees plus half the 1m high-low range as spread; output = JSON plus a markdown summary. Acceptance: unit tests for the feature and forward-return math on fixture bars; the command completes on 90 days × 20 coins on the laptop.
+- [ ] C2 Prove the harness matches reality before trusting it. Feed the bot's 40 real entries (coin, minute) from `docker-data/bot-spot-decisions.jsonl` (use the laptop mirror `~/.cache/binance-bot/pi-data`, read-only) through the C1 forward-return code. The harness must reproduce the measured gross drift (-0.15%/-0.17%/-0.20% at +20/+90/+120 min) and the +1.15% 30-min run-up within 0.05 percentage points. Do C1 first. Acceptance: printed comparison table in the C3 report.
+- [ ] C3 Run the study. Report net forward return by bucket of 30-min run-up (≤-1%, -1..-0.25%, -0.25..+0.25%, +0.25..+1%, >+1%), by 1h and 4h trend sign, and by 24h market breadth. Train on the first 60 days and test on the last 30, with n, mean, median and t-stat per bucket. Write `docs/research/entry-study-<YYYY-MM-DD>.md`. Do C2 first. Acceptance: the report exists with numbers and states, out of sample, whether "buy after a >+1% 30-min run-up" loses after costs and whether any bucket has a positive net mean with n≥200 and t>2.
+- [ ] C4 Run the existing dip-buying harness `bb mean-reversion-backtest` (`crates/bb-strategies/src/mean_reversion_backtest.rs:51-67, 576-595`; it never fired in paper, 0 decisions in 11,104 cycles per `notes-2026-06-10-paper-results.txt:31-34`). Use the same 90 days and top-20 universe, fee 7.5 bps per side, and a threshold sweep (dump 1%/2%/3% over 15/30 min). Add the results to the C3 report. Acceptance: a table in the report with trades, net %, Sharpe and verdict per threshold, train vs test.
+
+## D. Running costs and operations
+
+- [ ] D1 The trader compacts before almost every cycle. The context sits at 95-118k tokens against `BOT_SPOT_COMPACT_AT_TOKENS=100000`, with 14 compactions in ~21 cycles between 21:44 and 05:09 and one before every cycle since 02:57 on 10-18. One compaction timed out at 23:18 (180 s cap, `agent.rs:42-43`) and sent two cycles to argon. Each compaction resets the prompt cache (~100k uncached input per cycle). `agent.rs:850` drops the compact result, so the size after compaction is never logged. Log the token count before and after compaction. Raise the Pi's `BOT_SPOT_COMPACT_AT_TOKENS` to 150000; that is the conservative default, and gpt-6.1-sol's 70% mark is about 190k. Acceptance: a test for the log line. On the Pi, a copy of the live session in `docker-data/loop-smoke/session` run for 3 isolated plan-only cycles (step 4b) shows at most one compaction, logs its before/after sizes, and has no timeout.
+- [ ] D2 The bot's own data has no backup. The nightly backup covers SQLite only (`scripts/backup_db.sh:51-63`, `docker/crontab:37-38`), so `docker-data/bot-spot-decisions.jsonl` (the only record of every trade), the journal, the state, the exit-plan files and `bot-spot-session/` are not backed up. Add a nightly tar.gz of them to the scheduler, keeping 14. Use existing `backup_db.sh` patterns and a time outside 23:15/23:30. Acceptance: the script run once on the Pi produces an archive whose listing contains those paths; `bash -n` passes in `scripts/smoke.sh`.
+- [ ] D3 `scheduler` still runs the pre-rename image `sha256:81ce61b2…` with the old `CLAUDE_*` env. It was created 2026-10-13 and has been up 5 days. A Pi reboot runs `docker compose --profile all up -d` (`deploy/seref/binance-bot-compose.service:15`) and would then switch every service at once. Recreate `scheduler` on the current image outside 23:10-23:40 UTC. Do D2 first, since it changes the crontab and needs the rebuild. Acceptance: `docker inspect -f '{{.Image}}' scheduler` equals the `binance-bot:latest` id; the x-insighter snapshot job logs a run within 2 minutes; no `CLAUDE_` names in `docker exec scheduler env`.
+
+## E. Decide with the evidence
+
+- [ ] E1 Decide whether and how to resume trading. Do A-D first. If C3/C4 found a rule with a positive out-of-sample net mean (n≥200, t>2), write a concrete proposal. It can be information for the bot (a measured-pattern line in `## Your record`) or a prompt or entry-style change; prompt or entry-style changes need operator approval under CODEX.md. Also give its expected net per trip and the wallet math (17.8 USDT, ~15 bps per round trip). If nothing qualifies, write "no edge found" with the numbers. Either way, call `ask` with the options (keep paused / resume as is with the B information / resume with the proposal), the conservative default being to keep paused. Record the verdict in the C3 report and `PROGRESS.md`. Acceptance: a verdict paragraph with numbers in the report and PROGRESS; the operator's answer applied (stop file present or removed accordingly), or `BLOCKED: awaiting operator answer` with the question asked.
