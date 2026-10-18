@@ -405,7 +405,10 @@ below. A turn that failed on every model holds with
   `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`.
 - The emergency stop file `data/bot-spot.stop` (`BOT_SPOT_STOP_PATH`),
   checked at cycle start, before every route, before every leg and before
-  every order.
+  every order. A one-shot run refuses to start under it; the `--daemon`
+  keeps running and idles (no cycle, no LLM call, one log line when the stop
+  starts and one when it ends), so a paused trader survives restarts and
+  deploys. Cycles resume at the next interval after the file is deleted.
 - An exclusive run lock (`BOT_SPOT_LOCK_PATH`).
 - Account READING plus canTrade.
 - Binance `order/test` before every leg.

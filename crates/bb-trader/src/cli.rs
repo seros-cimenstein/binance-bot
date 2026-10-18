@@ -89,14 +89,31 @@ fn print_json(value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-fn stop_guard(config: &TraderConfig) -> Result<()> {
-    if bb_core::fsutil::stop_requested(&config.stop_path) {
+/// One-shot runs refuse to start under the emergency stop file. The daemon starts anyway and
+/// idles (see [`daemon_slot_runs`]), so a paused trader survives restarts and deploys instead
+/// of exiting into a `restart: unless-stopped` loop.
+fn stop_guard(config: &TraderConfig, daemon: bool) -> Result<()> {
+    if !daemon && bb_core::fsutil::stop_requested(&config.stop_path) {
         return Err(TraderError::safety(format!(
             "Bot Spot emergency stop is active: {}",
             config.stop_path.display()
         )));
     }
     Ok(())
+}
+
+/// Daemon: whether this cycle slot runs a cycle. Under the stop file it skips the cycle (no
+/// LLM call, no order) and logs only when the stop starts or ends, not every interval.
+fn daemon_slot_runs(stop_active: bool, idling: &mut bool, stop_path: &std::path::Path) -> bool {
+    if stop_active != *idling {
+        *idling = stop_active;
+        if stop_active {
+            tracing::warn!(path = %stop_path.display(), "emergency stop active: no cycles until the stop file is removed");
+        } else {
+            tracing::info!("emergency stop removed: cycles resume");
+        }
+    }
+    !stop_active
 }
 
 async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
@@ -111,7 +128,7 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
     } else {
         CycleMode::PlanOnly
     };
-    stop_guard(&config)?;
+    stop_guard(&config, args.daemon)?;
     if mode == CycleMode::Live {
         // Hard safety: refuse before any LLM call, lock or order.
         config.check_live_arming()?;
@@ -169,7 +186,18 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
         );
         pause(tokio::time::Instant::now() + wait, exit_guard.as_mut(), &shutdown).await;
     }
+    let mut idling = false;
     while !shutdown.is_cancelled() {
+        if args.daemon
+            && !daemon_slot_runs(
+                bb_core::fsutil::stop_requested(&config.stop_path),
+                &mut idling,
+                &config.stop_path,
+            )
+        {
+            pause(tokio::time::Instant::now() + interval, exit_guard.as_mut(), &shutdown).await;
+            continue;
+        }
         match trader.run_cycle(&shutdown).await {
             Ok(outcome) => {
                 print_json(&serde_json::to_value(&outcome.summary)?)?;
@@ -288,5 +316,32 @@ mod tests {
         assert_eq!(cadence_wait(&state("2026-10-17T12:30:00+00:00"), interval, now), None);
         assert_eq!(cadence_wait(&AgentState::default(), interval, now), None);
         assert_eq!(cadence_wait(&state("yesterday"), interval, now), None);
+    }
+
+    #[test]
+    fn under_the_stop_file_one_shot_refuses_but_the_daemon_starts_and_idles() {
+        let dir = tempfile::tempdir().unwrap();
+        let stop = dir.path().join("bot-spot.stop");
+        let stop_text = stop.to_string_lossy().into_owned();
+        let config = TraderConfig::from_lookup(crate::config::tests::lookup(&[(
+            "BOT_SPOT_STOP_PATH",
+            &stop_text,
+        )]))
+        .unwrap();
+        assert!(stop_guard(&config, false).is_ok());
+        assert!(stop_guard(&config, true).is_ok());
+
+        std::fs::write(&stop, "").unwrap();
+        assert!(stop_guard(&config, false).is_err());
+        assert!(stop_guard(&config, true).is_ok());
+
+        // Stopped slots run no cycle (no LLM call, no order); removing the file resumes.
+        let mut idling = false;
+        let runs: Vec<bool> = [true, true, false, false, true]
+            .into_iter()
+            .map(|stopped| daemon_slot_runs(stopped, &mut idling, &stop))
+            .collect();
+        assert_eq!(runs, [false, false, true, true, false]);
+        assert!(idling);
     }
 }
