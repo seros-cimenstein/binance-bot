@@ -489,6 +489,7 @@ impl Runtime {
             source,
             &quoted.route.destination_asset,
             amount,
+            state.balances.free("BNB") > Decimal::ZERO,
         )
         .await
         .map_err(|e| format!("re-quote failed: {e}"))?
@@ -682,7 +683,8 @@ impl Runtime {
         if amount <= Decimal::ZERO {
             return Err(ExitSellError::refused(format!("no free {asset} balance")));
         }
-        let candidate = quote_candidate(view, &self.config, asset, EXIT_QUOTE, amount)
+        let bnb_discount = balances.free("BNB") > Decimal::ZERO;
+        let candidate = quote_candidate(view, &self.config, asset, EXIT_QUOTE, amount, bnb_discount)
             .await
             .map_err(|e| ExitSellError::refused(format!("quote failed: {e}")))?
             .ok_or_else(|| {
@@ -801,6 +803,7 @@ pub fn route_summary(candidate: &RouteCandidate) -> Value {
         "source_value_usdt": candidate.source_value_usdt.map(decimal_json),
         "estimated_output_usdt": candidate.estimated_output_usdt.map(decimal_json),
         "friction_bps": candidate.immediate_friction_bps.map(|f| (f * 100.0).round() / 100.0),
+        "expected_cost_bps": candidate.expected_cost_bps.map(|f| (f * 100.0).round() / 100.0),
         "liquidity_tier": candidate.liquidity_tier,
         "spread_bps": candidate.spread_bps.map(decimal_json),
         "pick_score": if candidate.market_pick_score.is_finite() { json!((candidate.market_pick_score * 100.0).round() / 100.0) } else { Value::Null },

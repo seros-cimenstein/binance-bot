@@ -362,6 +362,14 @@ the paper-only pool.
   `get_trade_history`, `execute_route`, `journal_read` / `journal_write`, and
   `end_cycle`. `execute_route` is the only order path.
 
+The route table shows two costs per route. "Quoted friction" is what the
+order quote reserves: the account's undiscounted taker fee, the
+`BOT_SPOT_SLIPPAGE_BUFFER_BPS` buffer (25) and lot rounding. It stays the
+basis for order sizing. "Expected cost" is the account's effective taker fee
+from `account/commission` (BNB-discounted while the wallet holds BNB) plus
+half the spread, per side. Over 40 round trips to 2026-10-18 the real fees
+were about 7.5 bps per side, and fills beat the quote by about 25 bps.
+
 ### Trading guardrails removed
 
 By operator decision Bot Spot has no trading guardrails. Fees, spread,

@@ -279,13 +279,15 @@ pub fn cycle_prompt(
         "\n## Top quoted routes ({} shown; amounts = whole free source balance)",
         context.candidate_routes.len()
     );
-    out.push_str("Momentum columns are past weighted returns (5m to 7d), not a forecast of the next move.\n");
-    out.push_str("route_id | legs | in → out | value USDT in→out | friction bps | tier | spread bps | trailing rel.momentum bps | trailing momentum minus cost bps\n");
+    out.push_str("Momentum columns are past weighted returns (5m to 7d), not a forecast of the next move. \
+Quoted friction includes the order-sizing slippage buffer and lot rounding; expected cost is the account's \
+fee (BNB discount when held) plus half the spread, per side.\n");
+    out.push_str("route_id | legs | in → out | value USDT in→out | quoted friction bps | expected cost bps | tier | spread bps | trailing rel.momentum bps | trailing momentum minus cost bps\n");
     for candidate in &context.candidate_routes {
         let evidence = candidate.market_evidence.as_ref();
         let _ = writeln!(
             out,
-            "{} | {} | {} {} → {} {} | {} → {} | {} | {} | {} | {} | {}",
+            "{} | {} | {} {} → {} {} | {} → {} | {} | {} | {} | {} | {} | {}",
             candidate.route_id,
             candidate.legs_label(),
             fmt_decimal(candidate.route.input_amount, 8),
@@ -300,6 +302,9 @@ pub fn cycle_prompt(
                 .map_or("?".into(), |v| fmt_decimal(v, 2)),
             candidate
                 .immediate_friction_bps
+                .map_or("?".into(), |v| format!("{v:.1}")),
+            candidate
+                .expected_cost_bps
                 .map_or("?".into(), |v| format!("{v:.1}")),
             candidate.liquidity_tier,
             candidate

@@ -148,6 +148,10 @@ pub struct RouteCandidate {
     pub estimated_output_usdt: Option<Decimal>,
     pub source_value_usdt: Option<Decimal>,
     pub immediate_friction_bps: Option<f64>,
+    /// Expected one-way cost of the route in bps: per leg, the account's effective taker
+    /// commission (BNB discount when the wallet holds BNB) plus half the market's spread.
+    /// Information only; the quote and order sizing keep their safety buffers.
+    pub expected_cost_bps: Option<f64>,
     pub market_pick_score: f64,
     pub market_pick_reason: String,
     pub quote_volume_usdt: Option<Decimal>,
@@ -189,6 +193,7 @@ impl RouteCandidate {
             "estimated_output_usdt": opt_decimal_json(self.estimated_output_usdt),
             "source_value_usdt": opt_decimal_json(self.source_value_usdt),
             "immediate_friction_bps": self.immediate_friction_bps,
+            "expected_cost_bps": self.expected_cost_bps,
             "market_pick_score": finite(self.market_pick_score),
             "market_pick_reason": self.market_pick_reason,
             "quote_volume_usdt": opt_decimal_json(self.quote_volume_usdt),
@@ -440,14 +445,31 @@ pub fn immediate_friction_bps(
     (spent > Decimal::ZERO).then(|| to_f64((spent - output) / spent * BPS_PER_UNIT))
 }
 
+/// Expected one-way cost of `route` in bps: per leg the account's taker commission for that
+/// side (BNB-discounted when `bnb_discount` and the account enables it) plus half the leg
+/// market's spread. `None` when a leg's market or spread is unknown.
+pub async fn expected_cost_bps(view: &MarketView, route: &RouteQuote, bnb_discount: bool) -> Result<Option<f64>> {
+    let mut total = Decimal::ZERO;
+    for leg in &route.legs {
+        let Some(spread) = view.markets.get(&leg.symbol).and_then(|m| m.spread_bps) else {
+            return Ok(None);
+        };
+        let commission = view.fees.get(&leg.symbol).await?;
+        total += commission.taker_rate(leg.side, bnb_discount) * BPS_PER_UNIT + spread / Decimal::TWO;
+    }
+    Ok(Some(to_f64(total)))
+}
+
 /// Quote `amount` of `source` into `destination` and decorate it as a candidate.
-/// `None` when no rule-valid, in-scope route exists.
+/// `None` when no rule-valid, in-scope route exists. `bnb_discount`: the wallet holds free
+/// BNB, so Binance can take fees at the discounted rate (only the expected-cost figure uses it).
 pub async fn quote_candidate(
     view: &MarketView,
     config: &TraderConfig,
     source: &str,
     destination: &str,
     amount: Decimal,
+    bnb_discount: bool,
 ) -> Result<Option<RouteCandidate>> {
     let Some(route) = view
         .routes
@@ -468,6 +490,7 @@ pub async fn quote_candidate(
         .filter_map(|leg| view.usdt_value(&leg.source_asset, leg.input_amount - leg.spent_amount))
         .sum();
     let friction = immediate_friction_bps(source_value_usdt, kept_usdt, estimated_output_usdt);
+    let expected_cost = expected_cost_bps(view, &route, bnb_discount).await?;
     let market = focus_market(&route, &view.markets);
     let (score, reason) = pick_score(&route, market, source_value_usdt, friction, config);
     Ok(Some(RouteCandidate {
@@ -475,6 +498,7 @@ pub async fn quote_candidate(
         estimated_output_usdt,
         source_value_usdt,
         immediate_friction_bps: friction,
+        expected_cost_bps: expected_cost,
         market_pick_score: score,
         market_pick_reason: reason,
         quote_volume_usdt: market.and_then(|m| m.quote_volume_usdt),
@@ -496,6 +520,7 @@ pub async fn quote_routes(
     destinations: &[String],
 ) -> Result<Vec<RouteCandidate>> {
     let mut candidates = Vec::new();
+    let bnb_discount = free.get("BNB").is_some_and(|bnb| *bnb > Decimal::ZERO);
     for (source, amount) in free {
         if *amount <= Decimal::ZERO
             || config.scope.asset_block_reason(source).is_some()
@@ -505,7 +530,7 @@ pub async fn quote_routes(
         }
         for destination in destinations.iter().filter(|d| *d != source) {
             if let Some(candidate) =
-                quote_candidate(view, config, source, destination, *amount).await?
+                quote_candidate(view, config, source, destination, *amount, bnb_discount).await?
             {
                 candidates.push(candidate);
             }
@@ -677,6 +702,37 @@ pub(crate) mod tests {
         let candidates = build_route_candidates(&view, &config, &free).await.unwrap();
         assert_eq!(candidates.len(), 1);
         assert!(candidates[0].immediate_friction_bps.unwrap() > 900.0);
+    }
+
+    #[tokio::test]
+    async fn expected_cost_is_discounted_fee_plus_half_spread_and_leaves_the_quote_alone() {
+        let config = config(&[]);
+        let mut btc = market("BTC/USDT", dec!(60000), dec!(60012), dec!(5000000));
+        btc.spread_bps = Some(dec!(2));
+        let fees = CommissionService::new(Arc::new(NoCommissions), 3_600.0);
+        let mut schedule = CommissionSnapshot::flat("BTC/USDT", dec!(0.001), dec!(0.001));
+        schedule.discount_enabled = true;
+        schedule.discount_asset = "BNB".into();
+        schedule.discount_multiplier = dec!(0.75);
+        fees.insert(schedule);
+        let view = MarketView::from_snapshots(vec![btc], Arc::new(fees), &config);
+
+        let with_bnb = quote_candidate(&view, &config, "USDT", "BTC", dec!(100), true)
+            .await
+            .unwrap()
+            .unwrap();
+        let without_bnb = quote_candidate(&view, &config, "USDT", "BTC", dec!(100), false)
+            .await
+            .unwrap()
+            .unwrap();
+        // 10 bps taker x 0.75 BNB discount + 2 bps spread / 2.
+        assert!((with_bnb.expected_cost_bps.unwrap() - 8.5).abs() < 1e-9);
+        assert!((without_bnb.expected_cost_bps.unwrap() - 11.0).abs() < 1e-9);
+        // Sizing, the slippage buffer and the quoted friction do not depend on the figure.
+        assert_eq!(with_bnb.route.legs, without_bnb.route.legs);
+        assert_eq!(with_bnb.route.output_amount, without_bnb.route.output_amount);
+        assert_eq!(with_bnb.immediate_friction_bps, without_bnb.immediate_friction_bps);
+        assert!(with_bnb.immediate_friction_bps.unwrap() > with_bnb.expected_cost_bps.unwrap());
     }
 
     #[tokio::test]
