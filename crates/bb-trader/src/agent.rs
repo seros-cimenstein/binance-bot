@@ -208,7 +208,8 @@ pub fn cycle_prompt(
             );
         }
     }
-    for outcome in memory.recent_outcomes.iter().rev().take(5) {
+    // Trade memory is already capped at `trade_memory_limit` when it is built.
+    for outcome in memory.recent_outcomes.iter().rev() {
         let result = if outcome.status == "cash" {
             "to cash".to_owned()
         } else {
@@ -1747,5 +1748,42 @@ mod tests {
         assert!(prompt.contains("route USDT->SOL:1 planned"));
         assert!(prompt.contains("SOL breakout thesis"));
         assert!(prompt.contains("no executable route"));
+    }
+
+    #[test]
+    fn trade_memory_shows_every_outcome_up_to_the_configured_limit() {
+        let config = config(&[("BOT_SPOT_TRADE_MEMORY_LIMIT", "8")]);
+        let mut memory =
+            crate::memory::TradeMemory::from_rows(&Default::default(), &Default::default(), |_, _| None, 8);
+        memory.recent_outcomes = (0..8)
+            .map(|i| crate::memory::TradeOutcome {
+                timestamp: format!("2026-10-18T0{i}:00:00Z"),
+                route_id: format!("USDT->C{i}:x"),
+                source_asset: "USDT".into(),
+                destination_asset: format!("C{i}"),
+                entry_value_usdt: None,
+                exit_value_usdt: None,
+                current_value_usdt: None,
+                pnl_bps: Some(-10.0),
+                status: "closed",
+                route_friction_bps: None,
+                exit_plan: None,
+            })
+            .collect();
+        let context = DecisionContext {
+            timestamp: "2026-10-18T08:00:00+00:00".into(),
+            prompt_version: config.prompt_version.clone(),
+            market_pick_mode: "liquid_top_value",
+            balances: Default::default(),
+            portfolio_value_usdt: Decimal::ZERO,
+            candidate_routes: Vec::new(),
+            execution_invariants: Vec::new(),
+            route_scope: Value::Null,
+            trade_memory: memory,
+        };
+        let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
+        for i in 0..8 {
+            assert!(prompt.contains(&format!("USDT->C{i} closed pnl -10.0 bps")), "outcome {i} missing");
+        }
     }
 }
