@@ -115,3 +115,28 @@ over 30m (n=206, t 1.9). Neither held up out of sample: +0.03%/trade over 15m (n
 -0.11% over 30m (n=396, t -1.1). No threshold reaches n >= 200 with t > 2 in test. The harness's
 own verdict calls the -3%/15m test `edge_marginal`, but that is +0.8% on the wallet over 30 days,
 inside noise.
+
+## E1. Verdict: no edge found
+
+No entry tested here pays after costs out of sample. None of the C3 entry buckets and none of
+the C4 dip thresholds has a positive test mean with n >= 200 and t > 2. No C3 bucket is
+positive in both train and test. The only bucket that looks positive in test (a 1% dip
+in a 4h uptrend, +120 min: +0.17%, n=780, t 1.6, t_c 0.7) lost in train, and the -3% dip rule
+that won in train (+0.24 to +0.27% per trade) went flat or negative in test. On these coins and
+horizons, a random entry earns about +0.02 to +0.05% gross against a round-trip cost of about
+0.21%.
+
+Wallet math (17.8 USDT; about 15 bps of fees per round trip, plus spread):
+
+- Real record: 40 round trips, -1.074 USDT (-0.027 per trip, -0.38% per trip on ~7.9 USDT
+  positions), about 8 trips a day, so about -0.21 USDT a day while trading.
+- An average entry at the bot's size and horizons loses about 0.19% x 8 USDT = -0.015 USDT per
+  trip, about -0.12 USDT a day at 8 trips. The bot did worse than average (-0.23 pp at +90 min,
+  not significant).
+- Even the best test bucket's +0.17% (not significant) would earn +0.014 USDT per 8-USDT
+  trip, cents per day. On this wallet, no tested short-horizon spot entry can earn more
+  than cents a day, and none is reliably positive.
+
+Options for the operator: keep the trader paused (default); resume as is, with the B section
+information now in its prompt; or resume with a changed entry style. No entry style here
+qualifies as a proposal under the n >= 200, t > 2 rule.
