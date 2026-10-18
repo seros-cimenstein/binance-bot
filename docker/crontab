@@ -35,3 +35,5 @@
 # Daily SQLite backups — 23:15 / 23:30 UTC (~ 02:15 / 02:30 Europe/Istanbul next day)
 15  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=14 bash scripts/backup_db.sh
 30  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=35 BINANCE_BOT_DB_SETTING_KEY=POOL_DB_PATH BINANCE_BOT_DB_DEFAULT_PATH=data/pool-paper.db bash scripts/backup_db.sh
+# Bot Spot data (audit, journal, state, exit-plan files, session) — 23:45 UTC, keep 14
+45  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=14 bash scripts/backup_bot_data.sh

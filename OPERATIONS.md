@@ -1033,6 +1033,20 @@ BINANCE_BOT_DB_DEFAULT_PATH=data/pool-paper.db \
 systemctl --user start binance-pool-paper.service
 ```
 
+### Bot Spot data backups
+
+The SQLite backups do not cover Bot Spot. Its record is files: the decisions
+audit (the only record of every trade), journal, agent state, exit-plan book
+and watch files, the entry-timing cache, and the omp session directory.
+`scripts/backup_bot_data.sh` archives them into
+`backups/bot-spot-data-<UTC>-<pid>.tar.gz`. It keeps 14
+(`BINANCE_BOT_BACKUP_RETENTION`) and resolves each path from the trader's
+`BOT_SPOT_*_PATH` / `BOT_SPOT_SESSION_DIR` settings. On Docker the `scheduler`
+runs it at 23:45 UTC into `docker-backups/`. The archive's paths start with
+`data/`, which is `docker-data/` on the Docker host. To restore, stop
+`bot-spot`, extract into a temporary directory, copy its `data/` contents over
+`docker-data/`, then start `bot-spot`.
+
 ## Legacy Live State
 
 Historic live-order data (`data/live.db`) and its backups are retained for
