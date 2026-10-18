@@ -167,9 +167,10 @@ impl Runtime {
         )
     }
 
-    /// The bot's record from the whole audit log; fees in other coins valued at the view's
-    /// prices. `None` when the log cannot be read.
-    pub(crate) fn trade_record(&self, balances: &Balances, view: &MarketView) -> Option<TradeRecord> {
+    /// The bot's record from the whole audit log, fees in other coins valued at the view's
+    /// prices, plus how the price moved around its entries (candles fetched once per entry,
+    /// cached next to the audit). `None` when the log cannot be read.
+    pub(crate) async fn trade_record(&self, balances: &Balances, view: &MarketView) -> Option<TradeRecord> {
         let rows = match crate::exit_replay::read_audit(&self.config.audit_path) {
             Ok(rows) => rows,
             Err(error) => {
@@ -183,7 +184,16 @@ impl Runtime {
                 price_usdt: view.usdt_value(asset, Decimal::ONE)?,
             })
         };
-        Some(TradeRecord::from_rows(&rows, mark, bb_core::time::now()))
+        let mut record = TradeRecord::from_rows(&rows, mark, bb_core::time::now());
+        let (trips, _) = crate::exit_replay::round_trips(&rows, Some("USDT"), None);
+        record.entry_timing = crate::entry_timing::summary(
+            &self.client,
+            &crate::entry_timing::cache_path(&self.config.audit_path),
+            &trips,
+            bb_core::time::now_ms(),
+        )
+        .await;
+        Some(record)
     }
 
     /// Catalog, balances, candidate routes, evidence, social evidence and trade memory.
@@ -192,7 +202,7 @@ impl Runtime {
         let view = self.load_view().await?;
         let mut candidates = build_route_candidates(&view, &self.config, &balances.free).await?;
         let trade_memory = self.trade_memory(&balances, &view, self.config.trade_memory_limit);
-        let trade_record = self.trade_record(&balances, &view);
+        let trade_record = self.trade_record(&balances, &view).await;
         self.evidence.clear().await;
         if self.config.market_evidence_enabled {
             for candidate in &mut candidates {

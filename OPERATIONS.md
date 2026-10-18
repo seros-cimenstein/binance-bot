@@ -374,7 +374,11 @@ Trade memory and the "Your record" section use the same fill-based ledger as
 the dashboard (`bb_trader::trades`): each outcome's P&L is net of the buy and
 sell fees. "Your record" summarizes the whole audit log every cycle: closed
 coin trades, wins, net P&L after fees, fees paid and mean hold, all time and
-for the last 7 days. It is information, never a gate.
+for the last 7 days, plus entry timing: the mean price move in the 30
+minutes before the bot's buys and 20 and 90 minutes after them, from 1-minute
+candles against the entry fill. Each finished entry is measured once and kept
+in `bot-spot-entry-timing.json` next to the audit log. It is information,
+never a gate.
 
 ### Trading guardrails removed
 

@@ -254,6 +254,18 @@ pub fn cycle_prompt(
         for (label, window) in [("all time", &record.all_time), ("last 7 days", &record.last_7_days)] {
             let _ = writeln!(out, "- {label}: {}", record_line(window));
         }
+        if let Some(timing) = &record.entry_timing {
+            let _ = writeln!(
+                out,
+                "- entry timing ({} entries, gross, before fees): price change in the 30 min before your buys {:+.2}% on average ({} of {} after a rise); after your buys {:+.2}% at +20 min, {:+.2}% at +90 min",
+                timing.entries,
+                timing.mean_before_30m_pct,
+                timing.rose_before,
+                timing.entries,
+                timing.mean_after_20m_pct,
+                timing.mean_after_90m_pct,
+            );
+        }
     }
 
     out.push_str("\n## Last cycle\n");

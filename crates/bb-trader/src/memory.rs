@@ -186,6 +186,9 @@ pub struct CurrentHolding {
 pub struct TradeRecord {
     pub all_time: RecordWindow,
     pub last_7_days: RecordWindow,
+    /// How the price moved around the bot's entries (filled in by the cycle; needs candles).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_timing: Option<crate::entry_timing::EntryTimingSummary>,
 }
 
 impl TradeRecord {
@@ -200,6 +203,7 @@ impl TradeRecord {
         Self {
             all_time: record_window(&trades, None),
             last_7_days: record_window(&trades, Some(now - chrono::Duration::days(7))),
+            entry_timing: None,
         }
     }
 }

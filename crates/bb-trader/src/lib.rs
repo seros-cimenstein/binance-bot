@@ -29,6 +29,7 @@ pub mod audit;
 pub mod cli;
 pub mod config;
 pub mod context;
+pub mod entry_timing;
 pub mod cycle;
 pub mod error;
 pub mod evidence;
