@@ -238,21 +238,16 @@ pub fn candidate_assets(
     eligible.sort_by_key(|market| Reverse(market.quote_volume_usdt.unwrap_or_default()));
     let mut assets: Vec<String> = Vec::new();
     for market in eligible {
-        if !assets.contains(&market.base) && config.scope.asset_block_reason(&market.base).is_none()
+        let base = market.base.trim().to_uppercase();
+        if !base.is_empty()
+            && !is_low_upside(&base)
+            && !assets.contains(&base)
+            && config.scope.asset_block_reason(&base).is_none()
         {
-            assets.push(market.base.clone());
+            assets.push(base);
         }
         if config.candidate_limit > 0 && assets.len() >= config.candidate_limit {
             break;
-        }
-    }
-    for asset in free.keys() {
-        let normalized = asset.trim().to_uppercase();
-        if !normalized.is_empty()
-            && !assets.contains(&normalized)
-            && config.scope.asset_block_reason(&normalized).is_none()
-        {
-            assets.push(normalized);
         }
     }
     if !assets.iter().any(|a| a == "USDT") && config.scope.asset_block_reason("USDT").is_none() {
@@ -754,6 +749,29 @@ pub(crate) mod tests {
                 .all(|pair| pair[0].market_pick_score >= pair[1].market_pick_score)
         );
     }
+    #[test]
+    fn liquid_top_value_skips_stablecoins_and_dust_as_buy_targets_while_keeping_usdt_exit() {
+        let config = config(&[
+            ("BOT_SPOT_MARKET_PICK_MODE", "liquid_top_value"),
+            ("BOT_SPOT_CANDIDATE_LIMIT", "2"),
+        ]);
+        let markets = vec![
+            market("USDC/USDT", dec!(1), dec!(1.0001), dec!(90_000_000)),
+            market("FDUSD/USDT", dec!(1), dec!(1.0001), dec!(80_000_000)),
+            market("BTC/USDT", dec!(60000), dec!(60010), dec!(50_000_000)),
+            market("SOL/USDT", dec!(150), dec!(150.05), dec!(30_000_000)),
+            market("ETH/USDT", dec!(3000), dec!(3001), dec!(20_000_000)),
+        ];
+        let view = MarketView::from_snapshots(
+            markets,
+            fees(&["USDC/USDT", "FDUSD/USDT", "BTC/USDT", "SOL/USDT", "ETH/USDT"]),
+            &config,
+        );
+        let free = BTreeMap::from([("ETH".to_owned(), dec!(0.1))]);
+        let assets = candidate_assets(&view, &free, &config);
+        assert_eq!(assets, vec!["BTC", "SOL", "USDT"]);
+    }
+
 
     #[test]
     fn friction_counts_only_the_spent_part() {

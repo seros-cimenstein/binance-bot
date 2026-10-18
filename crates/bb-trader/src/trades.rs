@@ -447,15 +447,15 @@ pub struct RecordWindow {
     pub mean_hold_minutes: Option<f64>,
 }
 
-/// [`RecordWindow`] of the trades closed at or after `since` (all of them when `None`).
-pub fn record_window(trades: &[Trade], since: Option<DateTime<Utc>>) -> RecordWindow {
-    let closed: Vec<&Trade> = trades
-        .iter()
-        .filter(|t| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
-        .filter(|t| {
-            since.is_none_or(|since| t.closed_at.as_deref().and_then(parse_time).is_some_and(|at| at >= since))
-        })
-        .collect();
+/// Closed coin trades grouped by hold time: under 30 min, 30 to 60 min, and 60 min or longer.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct HoldBuckets {
+    pub under_30m: RecordWindow,
+    pub from_30_to_60m: RecordWindow,
+    pub over_60m: RecordWindow,
+}
+
+fn summarize_closed(closed: &[&Trade]) -> RecordWindow {
     let holds: Vec<i64> = closed.iter().filter_map(|t| t.hold_seconds).collect();
     RecordWindow {
         trips: closed.len(),
@@ -464,6 +464,40 @@ pub fn record_window(trades: &[Trade], since: Option<DateTime<Utc>>) -> RecordWi
         fees_usdt: closed.iter().filter_map(|t| t.fees_usdt).sum(),
         mean_hold_minutes: (!holds.is_empty())
             .then(|| holds.iter().sum::<i64>() as f64 / holds.len() as f64 / 60.0),
+    }
+}
+
+/// [`RecordWindow`] of the trades closed at or after `since` (all of them when `None`).
+pub fn record_window(trades: &[Trade], since: Option<DateTime<Utc>>) -> RecordWindow {
+    let closed: Vec<&Trade> = trades
+        .iter()
+        .filter(|t| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
+        .filter(|t| {
+            since.is_none_or(|since| {
+                t.closed_at
+                    .as_deref()
+                    .and_then(parse_time)
+                    .is_some_and(|at| at >= since)
+            })
+        })
+        .collect();
+    summarize_closed(&closed)
+}
+
+/// [`HoldBuckets`] over all closed coin trades with a known hold duration.
+pub fn hold_buckets(trades: &[Trade]) -> HoldBuckets {
+    let closed = |pred: fn(i64) -> bool| -> RecordWindow {
+        let matching: Vec<&Trade> = trades
+            .iter()
+            .filter(|t| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
+            .filter(|t| t.hold_seconds.is_some_and(pred))
+            .collect();
+        summarize_closed(&matching)
+    };
+    HoldBuckets {
+        under_30m: closed(|s| s < 30 * 60),
+        from_30_to_60m: closed(|s| (30 * 60..60 * 60).contains(&s)),
+        over_60m: closed(|s| s >= 60 * 60),
     }
 }
 

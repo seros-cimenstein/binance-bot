@@ -19,8 +19,10 @@ use crate::exit_replay::RoundTrip;
 const MINUTE_MS: i64 = 60_000;
 /// Minutes before the entry the "before" move starts.
 pub const BEFORE_MINUTES: i64 = 30;
-/// Minutes after the entry the two "after" moves end.
+/// Minutes after the entry the two short "after" moves end.
 pub const AFTER_MINUTES: [i64; 2] = [20, 90];
+/// Minutes after the entry the 4-hour move ends.
+pub const AFTER_LONG_MINUTES: i64 = 240;
 
 /// One measured entry, in percent of the entry fill price (gross, before fees).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -28,6 +30,8 @@ pub struct EntryTiming {
     pub before_30m_pct: f64,
     pub after_20m_pct: f64,
     pub after_90m_pct: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_240m_pct: Option<f64>,
 }
 
 /// Means over every measured entry.
@@ -39,6 +43,8 @@ pub struct EntryTimingSummary {
     pub mean_before_30m_pct: f64,
     pub mean_after_20m_pct: f64,
     pub mean_after_90m_pct: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mean_after_240m_pct: Option<f64>,
 }
 
 /// Cache file next to the audit log.
@@ -68,6 +74,8 @@ pub fn measure(entry_ms: i64, entry_price: Decimal, candles: &[Kline]) -> Option
         before_30m_pct: pct(before, entry_price)?,
         after_20m_pct: pct(entry_price, close_of(minute + (first - 1) * MINUTE_MS)?)?,
         after_90m_pct: pct(entry_price, close_of(minute + (second - 1) * MINUTE_MS)?)?,
+        after_240m_pct: close_of(minute + (AFTER_LONG_MINUTES - 1) * MINUTE_MS)
+            .and_then(|close| pct(entry_price, close)),
     })
 }
 
@@ -84,15 +92,17 @@ pub fn summarize<'a>(timings: impl IntoIterator<Item = &'a EntryTiming>) -> Opti
     }
     let n = timings.len() as f64;
     let mean = |f: fn(&EntryTiming) -> f64| timings.iter().map(|t| f(t)).sum::<f64>() / n;
+    let long: Vec<f64> = timings.iter().filter_map(|t| t.after_240m_pct).collect();
     Some(EntryTimingSummary {
         entries: timings.len(),
         rose_before: timings.iter().filter(|t| t.before_30m_pct > 0.0).count(),
         mean_before_30m_pct: mean(|t| t.before_30m_pct),
         mean_after_20m_pct: mean(|t| t.after_20m_pct),
         mean_after_90m_pct: mean(|t| t.after_90m_pct),
+        mean_after_240m_pct: (!long.is_empty())
+            .then(|| long.iter().sum::<f64>() / long.len() as f64),
     })
 }
-
 /// Entries on USDT markets whose 90-minute window has passed by `now_ms`.
 fn finished(trips: &[RoundTrip], now_ms: i64) -> impl Iterator<Item = &RoundTrip> {
     let span = (AFTER_MINUTES[1] + 1) * MINUTE_MS;
@@ -114,13 +124,18 @@ pub async fn summary(
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
     let mut added = false;
+    let long_span = (AFTER_LONG_MINUTES + 1) * MINUTE_MS;
     for trip in finished(trips, now_ms) {
         let key = key(trip);
-        if cache.contains_key(&key) {
+        let minute = floor_minute(trip.entry_ms);
+        let long_ready = minute + long_span <= now_ms;
+        if let Some(existing) = cache.get(&key)
+            && (existing.after_240m_pct.is_some() || !long_ready)
+        {
             continue;
         }
-        let start = floor_minute(trip.entry_ms) - BEFORE_MINUTES * MINUTE_MS;
-        let limit = u32::try_from(BEFORE_MINUTES + AFTER_MINUTES[1] + 2).unwrap_or(1000);
+        let start = minute - BEFORE_MINUTES * MINUTE_MS;
+        let limit = u32::try_from(BEFORE_MINUTES + AFTER_LONG_MINUTES + 2).unwrap_or(1000);
         match client.klines(&trip.symbol, "1m", Some(start), None, Some(limit)).await {
             Ok(candles) => {
                 if let Some(timing) = measure(trip.entry_ms, trip.entry_price, &candles) {
@@ -190,9 +205,20 @@ mod tests {
         // A missing candle means no measurement, not a made-up one.
         assert_eq!(measure(minute + 20_000, dec!(101), &candles[..100]), None);
 
-        let summary = summarize([&timing, &EntryTiming { before_30m_pct: -0.5, after_20m_pct: 0.25, after_90m_pct: 0.5 }]).unwrap();
+        assert_eq!(timing.after_240m_pct, None);
+        let summary = summarize([
+            &timing,
+            &EntryTiming {
+                before_30m_pct: -0.5,
+                after_20m_pct: 0.25,
+                after_90m_pct: 0.5,
+                after_240m_pct: Some(1.2),
+            },
+        ])
+        .unwrap();
         assert_eq!((summary.entries, summary.rose_before), (2, 1));
         assert!((summary.mean_before_30m_pct - 0.25).abs() < 1e-9);
         assert!((summary.mean_after_90m_pct - -0.25).abs() < 1e-9);
+        assert!((summary.mean_after_240m_pct.unwrap() - 1.2).abs() < 1e-9);
     }
 }

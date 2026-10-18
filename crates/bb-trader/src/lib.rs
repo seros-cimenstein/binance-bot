@@ -40,6 +40,7 @@ pub mod exit_plan;
 pub mod exit_replay;
 pub mod exit_watch;
 pub mod journal;
+pub mod market_mood;
 pub mod memory;
 pub mod scope;
 pub mod tools;

@@ -12,7 +12,8 @@ use serde_json::Value;
 use bb_core::money::{BPS_PER_UNIT, to_f64};
 
 use crate::trades::{
-    Mark, RecordWindow, RouteRecord, Trade, TradeStatus, build_trades, record_window, route_record,
+    HoldBuckets, Mark, RecordWindow, RouteRecord, Trade, TradeStatus, build_trades, hold_buckets,
+    record_window, route_record,
 };
 
 /// Python reads the last 500 audit lines.
@@ -186,6 +187,7 @@ pub struct CurrentHolding {
 pub struct TradeRecord {
     pub all_time: RecordWindow,
     pub last_7_days: RecordWindow,
+    pub by_hold: HoldBuckets,
     /// How the price moved around the bot's entries (filled in by the cycle; needs candles).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_timing: Option<crate::entry_timing::EntryTimingSummary>,
@@ -203,6 +205,7 @@ impl TradeRecord {
         Self {
             all_time: record_window(&trades, None),
             last_7_days: record_window(&trades, Some(now - chrono::Duration::days(7))),
+            by_hold: hold_buckets(&trades),
             entry_timing: None,
         }
     }
@@ -526,6 +529,15 @@ pub(crate) mod tests {
         let week = &record.last_7_days;
         assert_eq!((week.trips, week.wins, week.net_usdt), (1, 1, dec!(0.03778)));
         assert_eq!(week.mean_hold_minutes, Some(30.0));
+        assert_eq!(record.by_hold.under_30m.trips, 0);
+        assert_eq!(
+            (record.by_hold.from_30_to_60m.trips, record.by_hold.from_30_to_60m.wins),
+            (1, 1)
+        );
+        assert_eq!(
+            (record.by_hold.over_60m.trips, record.by_hold.over_60m.wins),
+            (1, 0)
+        );
     }
 
     #[test]

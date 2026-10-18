@@ -82,14 +82,20 @@ pub fn system_prompt(config: &TraderConfig) -> String {
     let mut prompt = format!(
         "You are the autonomous trader of a Binance Spot wallet.\n\nMission: {MISSION}\n\n\
 How you work:\n\
-- Each cycle you receive a user message with the wallet, recent outcomes and a table of quoted routes. \
+- Each cycle you receive a user message with the wallet, recent outcomes, your record, 20-coin market breadth and a table of quoted routes. \
 You remember earlier cycles through this conversation and through your journal.\n\
-- Trade actively and with conviction: you may hold, rotate, enter, exit, scale in or out (execute_route with \
-spend_amount), and run several routes in one cycle. Holding is a decision, not a default.\n\
-- Trading costs are real and shown to you per route (immediate friction in bps = fees + spread + slippage \
-versus the indicative value). Weigh them against the move you expect; they are information, not rules.\n\
-- Market evidence (returns over 5m/15m/1h/4h/24h/7d, volatility, volume change, relative momentum), social \
-evidence and trade memory are information for your judgement. Nothing blocks a route on their behalf.\n\
+- Trade with conviction when the setup justifies the cost: you may hold, rotate, enter, exit, scale in or out (execute_route with \
+spend_amount), and run several routes in one cycle.\n\
+- Spot is long-only: when broad 1h/4h/24h market breadth is flat, choppy or negative, sitting in USDT cash avoids paying round-trip \
+costs into headwinds. Favour multi-hour swing theses in liquid leaders where expected continuation is many times the round-trip cost, \
+and prefer entries on pullbacks or early structure inside 4h/24h uptrends over chasing 30-minute spikes.\n\
+- Asymmetric management: if a thesis breaks down on completed candles and broad demand fails at a cycle check, exit cleanly so a \
+loser does not drift into a deep drawdown; while a 1h/4h uptrend and demand hold, let winners work instead of capping them with \
+short 60-90 minute deadlines or selling on a single 5m/15m dip.\n\
+- Trading costs are real and shown to you per route (expected one-way cost in bps = effective fee + half spread; quoted friction \
+includes the sizing reserve). Weigh them against the move you expect; they are information, not rules.\n\
+- Market breadth, market evidence (returns over 5m/15m/1h/4h/24h/7d, volatility, volume change, relative momentum), social \
+evidence, trade memory and your record are information for your judgement. Nothing blocks a route on their behalf.\n\
 - Write down every thesis (why, expected move, horizon) with journal_write, and review open theses at the \
 start of each cycle. Record lessons from closed trades.\n\
 - No stop-loss or take-profit levels in your own trading: do not set yourself invalidation prices or profit \
@@ -142,6 +148,19 @@ fn record_line(window: &crate::trades::RecordWindow) -> String {
         window.net_usdt.round_dp(3).normalize(),
         window.fees_usdt.round_dp(3).normalize(),
         window.mean_hold_minutes.map_or("?".into(), |m| format!("{m:.0} min")),
+    )
+}
+
+fn hold_bucket_line(window: &crate::trades::RecordWindow) -> String {
+    if window.trips == 0 {
+        return "0 trips".into();
+    }
+    format!(
+        "{} trips, {} wins ({:.0}%), net {} USDT",
+        window.trips,
+        window.wins,
+        window.wins as f64 * 100.0 / window.trips as f64,
+        window.net_usdt.round_dp(3).normalize(),
     )
 }
 
@@ -254,10 +273,22 @@ pub fn cycle_prompt(
         for (label, window) in [("all time", &record.all_time), ("last 7 days", &record.last_7_days)] {
             let _ = writeln!(out, "- {label}: {}", record_line(window));
         }
-        if let Some(timing) = &record.entry_timing {
+        if record.all_time.trips > 0 {
             let _ = writeln!(
                 out,
-                "- entry timing ({} entries, gross, before fees): price change in the 30 min before your buys {:+.2}% on average ({} of {} after a rise); after your buys {:+.2}% at +20 min, {:+.2}% at +90 min",
+                "- by hold time (all time): <30m: {} | 30-60m: {} | >=60m: {}",
+                hold_bucket_line(&record.by_hold.under_30m),
+                hold_bucket_line(&record.by_hold.from_30_to_60m),
+                hold_bucket_line(&record.by_hold.over_60m),
+            );
+        }
+        if let Some(timing) = &record.entry_timing {
+            let long_note = timing
+                .mean_after_240m_pct
+                .map_or(String::new(), |v| format!(", {v:+.2}% at +4h"));
+            let _ = writeln!(
+                out,
+                "- entry timing ({} entries, gross, before fees): price change in the 30 min before your buys {:+.2}% on average ({} of {} after a rise); after your buys {:+.2}% at +20 min, {:+.2}% at +90 min{long_note}",
                 timing.entries,
                 timing.mean_before_30m_pct,
                 timing.rose_before,
@@ -268,6 +299,37 @@ pub fn cycle_prompt(
         }
     }
 
+    if let Some(mood) = context.market_mood.as_ref().filter(|m| m.score.is_some()) {
+        out.push_str("\n## Market breadth (top 20 liquid USDT crypto markets; information, not a rule)\n");
+        let _ = writeln!(
+            out,
+            "- mood: {:+.1} ({}, scale -100 bearish to +100 bullish; moves within ±{:.1}% count as flat)",
+            mood.score.unwrap_or(0.0),
+            mood.label.unwrap_or("Unknown"),
+            mood.flat_band_pct,
+        );
+        for h in &mood.horizons {
+            let med = h
+                .median_return_pct
+                .map_or("n/a".into(), |m| format!("{m:+.2}%"));
+            let _ = writeln!(
+                out,
+                "- {}: {} up / {} down / {} flat, median {med}",
+                h.name, h.up, h.down, h.flat
+            );
+        }
+        let fmt_list = |rows: Vec<(&str, f64)>| -> String {
+            rows.into_iter()
+                .map(|(asset, r)| format!("{asset} {r:+.2}%"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let leaders = fmt_list(mood.ranked_at(2, true, 3));
+        let laggards = fmt_list(mood.ranked_at(2, false, 3));
+        if !leaders.is_empty() {
+            let _ = writeln!(out, "- 4h leaders: {leaders} | 4h laggards: {laggards}");
+        }
+    }
     out.push_str("\n## Last cycle\n");
     match last_cycle {
         None => out.push_str("- none recorded (first cycle in this state file)\n"),
@@ -1782,6 +1844,7 @@ mod tests {
                 8,
             ),
             trade_record: None,
+            market_mood: None,
         };
         let last = LastCycle {
             cycle_id: "c0".into(),
@@ -1852,10 +1915,107 @@ mod tests {
             route_scope: Value::Null,
             trade_memory: memory,
             trade_record: None,
+            market_mood: None,
         };
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
         for i in 0..8 {
             assert!(prompt.contains(&format!("USDT->C{i} closed pnl -10.0 bps after fees")), "outcome {i} missing");
         }
+    }
+
+    #[test]
+    fn cycle_prompt_renders_market_breadth_hold_buckets_and_4h_entry_timing() {
+        use rust_decimal_macros::dec;
+        let config = config(&[]);
+        let window = |trips: usize, wins: usize, net: Decimal, fees: Decimal, hold: f64| {
+            crate::trades::RecordWindow {
+                trips,
+                wins,
+                net_usdt: net,
+                fees_usdt: fees,
+                mean_hold_minutes: Some(hold),
+            }
+        };
+        let record = crate::memory::TradeRecord {
+            all_time: window(30, 12, dec!(0.115), dec!(0.45), 49.0),
+            last_7_days: window(30, 12, dec!(0.115), dec!(0.45), 49.0),
+            by_hold: crate::trades::HoldBuckets {
+                under_30m: window(11, 2, dec!(-0.594), dec!(0.15), 21.0),
+                from_30_to_60m: window(9, 3, dec!(0.017), dec!(0.14), 42.0),
+                over_60m: window(10, 7, dec!(0.692), dec!(0.16), 74.0),
+            },
+            entry_timing: Some(crate::entry_timing::EntryTimingSummary {
+                entries: 30,
+                rose_before: 30,
+                mean_before_30m_pct: 1.20,
+                mean_after_20m_pct: -0.16,
+                mean_after_90m_pct: 0.12,
+                mean_after_240m_pct: Some(0.55),
+            }),
+        };
+        let mood = crate::market_mood::MarketView {
+            fetched_at: "2026-10-18T12:00:00Z".into(),
+            error: None,
+            score: Some(22.5),
+            label: Some("Bullish"),
+            horizons: vec![
+                crate::market_mood::HorizonBreadth {
+                    name: "15m",
+                    weight: 0.15,
+                    up: 12,
+                    down: 5,
+                    flat: 3,
+                    breadth: 0.35,
+                    median_return_pct: Some(0.18),
+                },
+                crate::market_mood::HorizonBreadth {
+                    name: "4h",
+                    weight: 0.30,
+                    up: 16,
+                    down: 2,
+                    flat: 2,
+                    breadth: 0.70,
+                    median_return_pct: Some(1.42),
+                },
+            ],
+            history: Vec::new(),
+            coins: vec![
+                crate::market_mood::CoinMove {
+                    asset: "INJ".into(),
+                    returns_pct: vec![Some(0.4), Some(1.1), Some(4.25), Some(8.0)],
+                },
+                crate::market_mood::CoinMove {
+                    asset: "STX".into(),
+                    returns_pct: vec![Some(-0.2), Some(-0.5), Some(-1.10), Some(-2.0)],
+                },
+            ],
+            flat_band_pct: 0.1,
+            missing: Vec::new(),
+        };
+        let context = DecisionContext {
+            timestamp: "2026-10-18T12:00:00+00:00".into(),
+            prompt_version: config.prompt_version.clone(),
+            market_pick_mode: "liquid_top_value",
+            balances: Default::default(),
+            portfolio_value_usdt: Decimal::ZERO,
+            candidate_routes: Vec::new(),
+            execution_invariants: Vec::new(),
+            route_scope: Value::Null,
+            trade_memory: crate::memory::TradeMemory::from_rows(
+                &Default::default(),
+                &Default::default(),
+                |_, _| None,
+                8,
+            ),
+            trade_record: Some(record),
+            market_mood: Some(mood),
+        };
+        let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
+        assert!(prompt.contains("- by hold time (all time): <30m: 11 trips, 2 wins (18%), net -0.594 USDT | 30-60m: 9 trips, 3 wins (33%), net 0.017 USDT | >=60m: 10 trips, 7 wins (70%), net 0.692 USDT"));
+        assert!(prompt.contains("-0.16% at +20 min, +0.12% at +90 min, +0.55% at +4h"));
+        assert!(prompt.contains("## Market breadth (top 20 liquid USDT crypto markets; information, not a rule)"));
+        assert!(prompt.contains("- mood: +22.5 (Bullish, scale -100 bearish to +100 bullish; moves within ±0.1% count as flat)"));
+        assert!(prompt.contains("- 4h: 16 up / 2 down / 2 flat, median +1.42%"));
+        assert!(prompt.contains("- 4h leaders: INJ +4.25%, STX -1.10%"));
     }
 }

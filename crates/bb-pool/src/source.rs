@@ -56,7 +56,7 @@ impl MarketRules {
             symbol: rules.unified.clone(),
             base: rules.base_asset.clone(),
             quote: rules.quote_asset.clone(),
-            spot: true,
+            spot: !rules.permissions.iter().any(|p| p == "TRD_GRP_261"),
             active: rules.status == "TRADING",
             min_amount: rules.lot.map(|lot| lot.min_qty),
             min_notional: rules.notional.and_then(|n| n.min_notional),

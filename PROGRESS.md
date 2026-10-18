@@ -5,6 +5,61 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-18 (14:05 UTC): Phase 47 (`IMPLEMENTATION_PLAN.md`: Market-Regime
+  Breadth, Liquid Universe & Asymmetric Swing Holding; operator approved all
+  steps):
+  - Root-cause findings from the 40 real round trips (Oct 13–18) and 90-day
+    kline cache:
+    - In the one genuinely bullish altcoin session (`v7`, Oct 15 09:18 -> Oct 16
+      17:51, 32-coin market `+4.15%`), the trader earned `+0.739 USDT` (`+4.15%`
+      wallet, 60% win rate). 34 of 40 trades (85%, `-1.517 USDT` net) were
+      opened when the 32-coin 4h market median was `< +1.0%` (`v4` Market
+      `-5.93%`, `v11` Market `-0.80%`).
+    - Across all 40 closed trips: `< 30m` ($n=18$) lost `-1.708 USDT` (2 wins,
+      11%), `30–60m` ($n=10$) lost `-0.118 USDT` (3 wins, 30%), and `>= 60m`
+      ($n=12$) earned `+0.756 USDT` (8 wins, 67%). Simulating blind 6h–12h
+      holds or wide `atr=2.5..3.5:1h` stops across all 40 entries turns small
+      cuts (`-2.03%` worst actual) into `-5.6%` to `-9.5%` drawdowns (`-28.8%`
+      to `-63.6%` summed), confirming fast cycle exits on failed theses must
+      stay while short `deadline=90/120` caps on winners and entries into weak
+      1h/4h/24h breadth are addressed.
+  - Implemented Steps 1–4:
+    - Step 1: Moved the 20-coin liquid USDT crypto market-mood / breadth
+      computation into `crates/bb-trader/src/market_mood.rs` (re-exported by
+      `cryptobot-gui::market`), wired `market_mood` into `DecisionContext` and
+      `Runtime::build_snapshot`, and added `## Market breadth (top 20 liquid
+      USDT crypto markets; information, not a rule)` to `cycle_prompt` (`15m`,
+      `1h`, `4h`, `24h` up/down/flat counts, median `%`, mood score/label, and
+      top 4h leaders/laggards).
+    - Step 2: Added `HoldBuckets` (`<30m`, `30-60m`, `>=60m` trips, wins, net
+      USDT) to `TradeRecord` (`trades.rs`, `memory.rs`) and `+240m` (`+4h`)
+      post-entry drift (`after_240m_pct`) to `EntryTiming` (`entry_timing.rs`),
+      printed in `## Your record`.
+    - Step 3: Excluded `TRD_GRP_261` tokenized stocks in `MarketRules::
+      from_symbol_rules` (`bb-pool/src/source.rs`) and fixed `candidate_assets`
+      (`LiquidTopValue` in `bb-trader/src/universe.rs`) to skip `is_low_upside`
+      (stablecoins/fiat) and held dust balances (`free.keys()`) as buy targets
+      while keeping `USDT` for cash exits. Live `--evidence-only` check on the
+      Pi confirmed the top-10 candidate routes are now `DOGE, SOL, HYPE, WLD,
+      XRP, ETH, BTC, NEAR, BNB, ZEC` (previously polluted by 9 unsellable dust
+      coins `APT, POL, FIL, TRUMP, ATOM, CAKE, DOT, OPEN, SIGN`).
+    - Step 4: Updated `system_prompt` (`bot-spot-v13-agentic`, `agent.rs`) with
+      asymmetric regime/swing guidance (information and guidance only, no
+      blocking gates or price-level stops) and updated `.env.docker` on the Pi
+      (`BOT_SPOT_PROMPT_VERSION=bot-spot-v13-agentic`,
+      `BOT_SPOT_MARKET_PICK_MODE=liquid_top_value`,
+      `BOT_SPOT_CANDIDATE_LIMIT=10`,
+      `BOT_SPOT_DEFAULT_EXIT_PLAN=atr=3.5:1h,deadline=360`).
+  - Verification & deploy: `cargo test --workspace` 1005 passed, `cargo clippy
+    --workspace --all-targets -- -D warnings` clean, `scripts/smoke.sh` and
+    `scripts/pool_replay.sh` passed, `git diff --check` clean. Rollback tag
+    `binance-bot:pre-phase47-20261018`, env backup
+    `.env.docker.bak-20261018T140204Z-pre-phase47`. Deployed at 14:02:04 UTC
+    right after Cycle 696 (`held` in cash, no open positions); `bot-spot` Up
+    with `RestartCount=0`. Isolated `--plan-only` smoke cycle on the Pi
+    completed in 5 tool calls (878 output tokens), citing the 19/20 bearish 1h
+    and 18/20 bearish 4h/24h breadth plus the `<30m` (`-1.708 USDT`) vs `>=60m`
+    (`+0.756 USDT`) hold-duration record to hold `USDT`.
 - 2026-10-18 (12:00 UTC): LOOP_MONEY (`LOOP_MONEY.md`; operator: "this thing has
   to make money"). 16 items, all done.
   - A. The trader was paused at 08:11 with the stop file. The daemon now idles under the

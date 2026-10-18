@@ -204,7 +204,7 @@ impl Runtime {
         let trade_memory = self.trade_memory(&balances, &view, self.config.trade_memory_limit);
         let trade_record = self.trade_record(&balances, &view).await;
         self.evidence.clear().await;
-        if self.config.market_evidence_enabled {
+        let market_mood = if self.config.market_evidence_enabled {
             for candidate in &mut candidates {
                 let source = self
                     .evidence
@@ -220,7 +220,11 @@ impl Runtime {
                     destination,
                 ));
             }
-        }
+            let mood = crate::market_mood::fetch(Some(&self.client)).await;
+            mood.score.is_some().then_some(mood)
+        } else {
+            None
+        };
         if let Some(settings) = self.social.as_ref().filter(|s| s.enabled)
             && !candidates.is_empty()
         {
@@ -247,6 +251,7 @@ impl Runtime {
             route_scope: route_scope(&self.config),
             trade_memory,
             trade_record,
+            market_mood,
         };
         Ok(Snapshot {
             context,
@@ -1140,6 +1145,7 @@ mod tests {
             route_scope: route_scope(&config),
             trade_memory: runtime.trade_memory(&balances, &view, 8),
             trade_record: None,
+            market_mood: None,
         };
         runtime
             .begin_cycle(

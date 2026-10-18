@@ -146,7 +146,15 @@ driven project.
   05:02 UTC), with the journal cut at the same point. Tag
   `bot-spot-v12-agentic` (2026-10-18) keeps the v7 system prompt and changes
   only information in the cycle message: the route table's trailing momentum
-  is no longer labelled "edge" (it is a past move, not a forecast).
+  is no longer labelled "edge" (it is a past move, not a forecast). Tag
+  `bot-spot-v13-agentic` (operator approval 2026-10-18, Phase 47) adds 20-coin
+  market breadth (`15m/1h/4h/24h`), hold-duration buckets and `+4h` entry timing
+  to the cycle prompt, switches the candidate table to `liquid_top_value`
+  (excluding stablecoins, fiat and `TRD_GRP_261` tokenized stocks as buy
+  targets), updates the default exit plan to `atr=3.5:1h,deadline=360`, and
+  replaces the `"Holding is a decision, not a default"` line in the system
+  prompt with asymmetric regime/swing guidance (information and guidance only,
+  never a blocking gate).
 - Bot Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

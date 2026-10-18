@@ -176,6 +176,8 @@ pub struct DecisionContext {
     pub trade_memory: TradeMemory,
     /// The bot's record over the whole audit log (`None` when the log cannot be read).
     pub trade_record: Option<crate::memory::TradeRecord>,
+    /// 20-coin liquid USDT crypto market breadth (`None` when disabled or unavailable).
+    pub market_mood: Option<crate::market_mood::MarketView>,
 }
 
 impl DecisionContext {
@@ -193,6 +195,7 @@ impl DecisionContext {
             "route_scope": self.route_scope,
             "trade_memory": self.trade_memory,
             "trade_record": self.trade_record,
+            "market_mood": self.market_mood,
         })
     }
 

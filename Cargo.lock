@@ -639,6 +639,7 @@ dependencies = [
  "bb-social",
  "chrono",
  "clap",
+ "futures",
  "hex",
  "html-escape",
  "parking_lot",

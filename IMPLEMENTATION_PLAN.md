@@ -1097,6 +1097,96 @@ localhost-only.
   gauge, per-horizon up/down bars with the median move, and the score over
   the last 24 h, next to the Cumulative P&L chart. Public market data only.
 
+## 47. Market-Regime Breadth, Liquid Universe & Asymmetric Swing Holding (operator request 2026-10-18)
+
+Why the trader lost money (`-1.074 USDT` over 40 round trips, Oct 13–18) even
+while coins rallied from Oct 15 (`INJ +17.3%`, `HBAR +6.5%`, `NEAR +6.2%`,
+`PENDLE +4.6%`, `BCH +4.2%`, `UNI +4.0%`):
+
+1. **Trading into flat/falling broad breadth**: 34 of 40 entries (85%) were
+   opened when the 32-coin 4h market median was `< +1.0%` (`-1.517 USDT` net,
+   10 wins / 24 losses). In the 6 entries opened when the 4h market median was
+   `>= +1.0%`, the trader made `+0.441 USDT` (`+4.19%` summed), and in the one
+   bullish session (`v7`, Market `+4.15%`) it made `+0.739 USDT` (`+4.15%`
+   wallet, 60% win rate).
+2. **Sub-hour churn vs. letting winners work**: Since Oct 15 (30 trades),
+   positions held `< 30m` ($n=11$) lost `-6.80%` (`-0.594 USDT`, 2/11 wins),
+   `30–60m` ($n=9$) returned `+0.19%` (`+0.017 USDT`), and `>= 60m` ($n=10$)
+   earned `+7.41%` (`+0.692 USDT`, 7/10 wins). Holding losers for 6h–12h blows
+   up drawdowns (`-28.8%` to `-63.6%` summed, `-5.6%` to `-9.5%` worst trade),
+   so fast discretionary exits on failed theses must stay while `deadline=90` /
+   `deadline=120` time caps on working winners are removed.
+3. **Micro-cap candidate table**: `BOT_SPOT_MARKET_PICK_MODE=
+   small_market_aggressive` scores volume as `-log10(volume) * 5.0` and gives
+   `+100` to `< 100k USDT` pairs, filling `Top quoted routes` with illiquid
+   micro-caps instead of liquid trend leaders.
+
+All trader additions below are information and guidance only—never a blocking
+gate and never a price-level stop-loss or take-profit (`CODEX.md`).
+
+Step 1, shared market-regime breadth in the cycle prompt:
+
+- [x] Move the 20-coin liquid USDT crypto market-mood / breadth computation
+  (`15m`, `1h`, `4h`, `24h` up/down/flat counts, median return, `-100..+100`
+  score and label, excluding fiat, stablecoins and `TRD_GRP_261` tokenized
+  stocks) from `crates/cryptobot-gui/src/market.rs` into `bb-trader`
+  (`crates/bb-trader/src/market_mood.rs`) and re-use it in `cryptobot-gui`.
+- [x] Add `market_mood` to `DecisionContext` (`crates/bb-trader/src/context.rs`,
+  populated in `Runtime::build_snapshot`) and render a `## Market breadth
+  (top 20 liquid USDT crypto markets; information, not a rule)` section in
+  `cycle_prompt` (`crates/bb-trader/src/agent.rs`) with the mood score/label,
+  per-horizon `up / down / flat` counts and median return `%`, and top 4h
+  leaders/laggards.
+- [x] Tests: unit tests for `market_mood` formatting in `cycle_prompt` and
+  regression check that `/api/market` in `cryptobot-gui` is unchanged.
+
+Step 2, hold-duration and regime breakdown in `## Your record`:
+
+- [x] Extend `TradeRecord` (`crates/bb-trader/src/trades.rs`, `memory.rs`) with
+  a hold-duration breakdown of closed coin trips (`< 30 min`, `30–60 min`,
+  `>= 60 min`: trips, wins, net USDT after fees) and print it in `## Your
+  record` (`agent.rs`).
+- [x] Extend `EntryTiming` (`crates/bb-trader/src/entry_timing.rs`) with the
+  `+4h` (`+240 min`) post-entry move (`after_240m_pct`, bumping cache schema or
+  backfilling missing `+240m` entries) so the bot sees 30m pre-buy run-up vs
+  `+20m`, `+90m`, and `+4h` post-entry drift.
+- [x] Tests: fixture tests for the hold-duration buckets and `+240m` entry
+  timing in `bb-trader`.
+
+Step 3, liquid-leader candidate table (`liquid_top_value`):
+
+- [x] In `crates/bb-trader/src/universe.rs`, update `MarketPickMode::
+  LiquidTopValue` (`candidate_assets`) to exclude `is_low_upside` (stablecoins
+  and fiat) and `TRD_GRP_261` tokenized stocks as buy destinations while keeping
+  `USDT` as the cash exit destination for held coins, and rank candidate routes
+  by liquidity and low spread (`expected_cost_bps`).
+- [x] Raise default `candidate_limit` / configure `BOT_SPOT_MARKET_PICK_MODE=
+  liquid_top_value` (`BOT_SPOT_CANDIDATE_LIMIT=10`) so `## Top quoted routes`
+  presents the most-traded liquid crypto pairs (`BTC`, `ETH`, `SOL`, `BNB`,
+  `TAO`, `SUI`, `AAVE`, `UNI`, `NEAR`, `INJ`, etc.) with `1–4 bps` spreads.
+- [x] Tests: `LiquidTopValue` skips stablecoins, fiat and tokenized stocks while
+  quoting `COIN -> USDT` exits for any held position.
+
+Step 4, asymmetric swing prompt & exit-plan default (needs operator approval
+before live deploy per `CODEX.md`):
+
+- [x] Update `system_prompt` (`crates/bb-trader/src/agent.rs`, prompt tag
+  `bot-spot-v13-agentic`): replace `"Trade actively and with conviction …
+  Holding is a decision, not a default"` with asymmetric regime/swing guidance
+  (sit in `USDT` when broad 1h/4h/24h market breadth is flat or negative;
+  prefer multi-hour theses where expected continuation dwarfs the `~18 bps`
+  round-trip cost; cut failed theses at the cycle check when completed-candle
+  demand breaks down rather than letting losers drift, but do not cap working
+  multi-hour uptrends with short 60–90m deadlines or panic-sell on one 5m/15m
+  pullback while 1h/4h structure holds).
+- [x] With operator approval, update `.env.docker`
+  `BOT_SPOT_DEFAULT_EXIT_PLAN` from `deadline=120` to `atr=3.5:1h,deadline=360`
+  (or `deadline=360` with `stretch` break-even floor kept) and
+  `BOT_SPOT_MARKET_PICK_MODE=liquid_top_value`.
+- [x] Verify with `cargo test --workspace`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `scripts/smoke.sh`, an isolated `--plan-only`
+  smoke cycle on the Pi, and safe between-cycle deployment.
+
 ## Post-Implementation Handoff
 
 Roadmap phases 1 through 11 are implemented and locally verified. Future
