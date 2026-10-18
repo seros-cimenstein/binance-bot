@@ -16,7 +16,8 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 
-use crate::history::{CycleRecord, ParsedAudit, Trade, TradeStatus};
+use crate::history::{CycleRecord, ParsedAudit};
+use bb_trader::trades::{Trade, TradeStatus};
 
 /// A watch-log plan whose position was opened within this long of a trade belongs to it.
 const PLAN_MATCH_MS: i64 = 10 * 60_000;
@@ -220,7 +221,7 @@ pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade], watch_log: &Path) ->
     let plans = started_plans(watch_log);
     let mut unattributed = 0;
     for trade in trades {
-        if crate::history::CASH_ASSETS.contains(&trade.destination_asset.as_str()) {
+        if bb_trader::trades::CASH_ASSETS.contains(&trade.destination_asset.as_str()) {
             continue;
         }
         let opened = millis(&trade.opened_at);
@@ -333,7 +334,7 @@ mod tests {
     use rust_decimal_macros::dec;
 
     use super::*;
-    use crate::history::Valuation;
+    use bb_trader::trades::Valuation;
 
     fn cycle(at: &str, id: &str, prompt: &str, session: &str, config: Option<Value>) -> CycleRecord {
         CycleRecord {

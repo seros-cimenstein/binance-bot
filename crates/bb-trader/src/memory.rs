@@ -10,6 +10,8 @@ use serde_json::Value;
 
 use bb_core::money::{BPS_PER_UNIT, to_f64};
 
+use crate::trades::{Mark, RouteRecord, Trade, TradeStatus, build_trades, route_record};
+
 /// Python reads the last 500 audit lines.
 pub const AUDIT_TAIL_LINES: usize = 500;
 
@@ -117,10 +119,6 @@ fn selected_decimal(row: &Value, field: &str) -> Option<Decimal> {
     value_decimal(row.get("selected_route").and_then(|s| s.get(field)))
 }
 
-fn pnl_bps(entry: Decimal, exit: Decimal) -> Option<f64> {
-    (entry > Decimal::ZERO).then(|| to_f64((exit / entry - Decimal::ONE) * BPS_PER_UNIT))
-}
-
 /// One submitted route and how it has done since.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TradeOutcome {
@@ -128,12 +126,15 @@ pub struct TradeOutcome {
     pub route_id: String,
     pub source_asset: String,
     pub destination_asset: String,
+    /// USDT paid for the position ([`crate::trades`]: fills when available, else the quote).
     #[serde(with = "rust_decimal::serde::arbitrary_precision_option")]
     pub entry_value_usdt: Option<Decimal>,
+    /// USDT the closing sale fetched for it, before fees.
     #[serde(with = "rust_decimal::serde::arbitrary_precision_option")]
     pub exit_value_usdt: Option<Decimal>,
     #[serde(with = "rust_decimal::serde::arbitrary_precision_option")]
     pub current_value_usdt: Option<Decimal>,
+    /// Result after the buy and sell fees, in bps of the entry (the dashboard's P&L).
     pub pnl_bps: Option<f64>,
     /// `closed`, `open`, `cash` (a sale into cash or fiat: parking, no P&L) or `unknown`.
     pub status: &'static str,
@@ -213,7 +214,15 @@ impl TradeMemory {
                 "no submitted Bot Spot routes in audit history".into(),
             );
         };
-        let outcomes = outcomes(&submitted, free, &value_usdt);
+        let records: Vec<RouteRecord> = submitted.iter().map(|row| route_record(row)).collect();
+        let mark = |asset: &str| {
+            Some(Mark {
+                free: free.get(asset).copied().unwrap_or_default(),
+                price_usdt: value_usdt(asset, Decimal::ONE)?,
+            })
+        };
+        let trades = build_trades(&records, mark, bb_core::time::now());
+        let outcomes = outcomes(&submitted, &trades);
         let recent = if limit == 0 {
             outcomes
         } else {
@@ -224,7 +233,7 @@ impl TradeMemory {
             reason: None,
             recent_trade_count: submitted.len(),
             recent_loss_streak: loss_streak(&recent),
-            current_holding: Some(current_holding(last, free, &value_usdt)),
+            current_holding: Some(current_holding(last, trades.last(), free, &value_usdt)),
             recent_outcomes: recent,
         }
     }
@@ -241,25 +250,19 @@ impl TradeMemory {
     }
 }
 
-fn outcomes(
-    submitted: &[&Value],
-    free: &BTreeMap<String, Decimal>,
-    value_usdt: &impl Fn(&str, Decimal) -> Option<Decimal>,
-) -> Vec<TradeOutcome> {
+/// Net result of `trade` in bps of what it cost.
+fn trade_pnl_bps(trade: &Trade) -> Option<f64> {
+    let (pnl, cost) = trade.pnl_usdt.zip(trade.cost_usdt)?;
+    (cost > Decimal::ZERO).then(|| to_f64(pnl / cost * BPS_PER_UNIT))
+}
+
+/// One outcome per submitted route; `trades` is [`build_trades`] over the same routes.
+fn outcomes(submitted: &[&Value], trades: &[Trade]) -> Vec<TradeOutcome> {
     submitted
         .iter()
-        .enumerate()
-        .map(|(index, row)| {
+        .zip(trades)
+        .map(|(row, trade)| {
             let destination = row_asset(row, "destination_asset");
-            let entry = selected_decimal(row, "estimated_output_usdt");
-            let exit = if destination.is_empty() {
-                None
-            } else {
-                submitted[index + 1..]
-                    .iter()
-                    .find(|later| row_asset(later, "source_asset") == destination)
-                    .and_then(|later| selected_decimal(later, "source_value_usdt"))
-            };
             let mut outcome = TradeOutcome {
                 timestamp: row
                     .get("timestamp")
@@ -269,8 +272,8 @@ fn outcomes(
                 route_id: row_route_id(row),
                 source_asset: row_asset(row, "source_asset"),
                 destination_asset: destination.clone(),
-                entry_value_usdt: entry,
-                exit_value_usdt: exit,
+                entry_value_usdt: trade.cost_usdt,
+                exit_value_usdt: None,
                 current_value_usdt: None,
                 pnl_bps: None,
                 status: "unknown",
@@ -285,28 +288,33 @@ fn outcomes(
                 }),
             };
             if crate::evidence::is_low_upside(&destination) {
-                // Into cash or fiat: parking, not a bet. Its "exit" would be the next route's
-                // whole balance, which is no return of this route.
+                // Into cash or fiat: parking, not a bet.
                 outcome.status = "cash";
-                outcome.exit_value_usdt = None;
-            } else if let (Some(entry), Some(exit)) = (entry, exit) {
-                outcome.status = "closed";
-                outcome.pnl_bps = pnl_bps(entry, exit);
-            } else if let Some(entry) = entry
-                && let Some(amount) = free.get(&destination).filter(|a| **a > Decimal::ZERO)
-                && let Some(current) = value_usdt(&destination, *amount)
-            {
-                outcome.status = "open";
-                outcome.current_value_usdt = Some(current);
-                outcome.pnl_bps = pnl_bps(entry, current);
+                return outcome;
+            }
+            match trade.status {
+                TradeStatus::Win | TradeStatus::Loss => {
+                    outcome.status = "closed";
+                    outcome.exit_value_usdt = trade.exit_usdt;
+                    outcome.pnl_bps = trade_pnl_bps(trade);
+                }
+                TradeStatus::Open => {
+                    outcome.status = "open";
+                    outcome.current_value_usdt = trade.exit_usdt;
+                    outcome.pnl_bps = trade_pnl_bps(trade);
+                }
+                TradeStatus::Cash => outcome.status = "cash",
+                TradeStatus::Unknown => {}
             }
             outcome
         })
         .collect()
 }
 
+/// What the last submitted route bought; `trade` is that route in the trade ledger.
 fn current_holding(
     last: &Value,
+    trade: Option<&Trade>,
     free: &BTreeMap<String, Decimal>,
     value_usdt: &impl Fn(&str, Decimal) -> Option<Decimal>,
 ) -> CurrentHolding {
@@ -349,16 +357,15 @@ fn current_holding(
             ..blank
         };
     }
-    let entry = selected_decimal(last, "estimated_output_usdt");
+    // Entry: what the position cost (fills); unrealized: marked now, net of the buy fee.
+    let entry = trade.and_then(|t| t.cost_usdt);
     CurrentHolding {
         status: "open",
         reason: None,
         amount: Some(amount),
         entry_value_usdt: entry,
         current_value_usdt: current,
-        unrealized_pnl_bps: entry
-            .zip(current)
-            .and_then(|(entry, current)| pnl_bps(entry, current)),
+        unrealized_pnl_bps: trade.and_then(trade_pnl_bps),
         entered_at: Some(
             last.get("timestamp")
                 .and_then(Value::as_str)
@@ -414,20 +421,67 @@ pub(crate) mod tests {
         }
     }
 
+    /// One filled market order against USDT with its fee in BNB.
+    fn filled_row(at: &str, from: &str, to: &str, filled: &str, cost: &str, bnb_fee: f64) -> Value {
+        let (coin, side) = if from == "USDT" { (to, "buy") } else { (from, "sell") };
+        json!({"timestamp": at, "status": "submitted", "submission_attempted": true, "row_type": "route",
+               "decision": {"source_asset": from, "destination_asset": to},
+               // The quote reserves slippage and the undiscounted fee: worse than the fills.
+               "selected_route": {"source_value_usdt": 8.0, "estimated_output_usdt": 7.94,
+                                  "input_amount": 8.0, "output_amount": 0.05},
+               "submitted_legs": [{"symbol": format!("{coin}/USDT"), "side": side,
+                   "order": {"filled": filled, "cost": cost, "fees": [{"cost": bnb_fee, "currency": "BNB"}]}}]})
+    }
+
+    #[test]
+    fn outcomes_are_net_of_both_fees_from_the_fills_like_the_dashboard() {
+        // AAVE 2026-10-18: bought 0.052 for 7.93728, sold 0.052 for 7.98668, 0.0000083 BNB
+        // fee each way. The old memory used the quotes (estimated output vs next quote).
+        let rows = vec![
+            filled_row("2026-10-18T02:36:56Z", "USDT", "AAVE", "0.052", "7.93728", 0.0000083),
+            filled_row("2026-10-18T04:04:53Z", "AAVE", "USDT", "0.052", "7.98668", 0.0000083),
+        ];
+        let value = |asset: &str, amount: Decimal| match asset {
+            "USDT" => Some(amount),
+            "BNB" => Some(amount * dec!(700)),
+            _ => None,
+        };
+        let memory = TradeMemory::from_rows(
+            &AuditRows { rows: rows.clone(), error: None },
+            &BTreeMap::new(),
+            value,
+            8,
+        );
+        let records: Vec<_> = rows.iter().map(route_record).collect();
+        let mark = |asset: &str| (asset == "BNB").then_some(Mark { free: dec!(0.01), price_usdt: dec!(700) });
+        let dashboard = build_trades(&records, mark, bb_core::time::now());
+
+        let aave = &memory.recent_outcomes[0];
+        assert_eq!(aave.status, "closed");
+        assert_eq!(aave.entry_value_usdt, Some(dec!(7.93728)));
+        let (pnl, cost) = (dashboard[0].pnl_usdt.unwrap(), dashboard[0].cost_usdt.unwrap());
+        // 7.98668 - 7.93728 - 2 x 0.0000083 x 700 = 0.03778.
+        assert_eq!(pnl, dec!(0.03778));
+        assert!((aave.pnl_bps.unwrap() - to_f64(pnl / cost * BPS_PER_UNIT)).abs() < 1e-9);
+        assert_eq!(memory.recent_outcomes[1].status, "cash");
+    }
+
     #[test]
     fn trade_memory_records_current_holding_pnl() {
-        let rows = AuditRows {
-            rows: vec![submitted_row("USDT", "ETH", 100.0, 100.5)],
-            error: None,
-        };
+        let mut row = submitted_row("USDT", "ETH", 100.0, 100.5);
+        row["selected_route"]["input_amount"] = json!(100.5);
+        row["selected_route"]["output_amount"] = json!(0.035);
+        let rows = AuditRows { rows: vec![row], error: None };
         let free = BTreeMap::from([("ETH".to_owned(), dec!(0.035))]);
         let memory = TradeMemory::from_rows(&rows, &free, value, 8);
         assert_eq!(memory.status, "ready");
         assert_eq!(memory.recent_trade_count, 1);
         let holding = memory.current_holding.unwrap();
         assert_eq!(holding.status, "open");
+        assert_eq!(holding.entry_value_usdt, Some(dec!(100.5)));
         assert_eq!(holding.current_value_usdt, Some(dec!(105.000)));
-        assert!((holding.unrealized_pnl_bps.unwrap() - 500.0).abs() < 1e-9);
+        // 0.035 x 3000 = 105 against the 100.5 spent.
+        assert!((holding.unrealized_pnl_bps.unwrap() - 4.5 / 100.5 * 10_000.0).abs() < 1e-9);
         assert_eq!(memory.recent_outcomes[0].status, "open");
     }
 

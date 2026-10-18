@@ -214,7 +214,7 @@ pub fn cycle_prompt(
             "to cash".to_owned()
         } else {
             format!(
-                "{} pnl {} bps",
+                "{} pnl {} bps after fees",
                 outcome.status,
                 outcome.pnl_bps.map_or("?".into(), |v| format!("{v:.1}"))
             )
@@ -1783,7 +1783,7 @@ mod tests {
         };
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
         for i in 0..8 {
-            assert!(prompt.contains(&format!("USDT->C{i} closed pnl -10.0 bps")), "outcome {i} missing");
+            assert!(prompt.contains(&format!("USDT->C{i} closed pnl -10.0 bps after fees")), "outcome {i} missing");
         }
     }
 }

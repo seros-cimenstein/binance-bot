@@ -9,7 +9,7 @@ use bb_binance::spot::{AccountInfo, ApiRestrictions, Balance};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
-use crate::history::Mark;
+use bb_trader::trades::Mark;
 
 /// One spot balance, valued in USDT when a price is known.
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -42,6 +42,7 @@ pub mod journal;
 pub mod memory;
 pub mod scope;
 pub mod tools;
+pub mod trades;
 pub mod universe;
 
 pub use config::TraderConfig;

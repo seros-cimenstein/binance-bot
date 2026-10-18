@@ -54,7 +54,8 @@ use bb_trader::journal::{AgentState, Journal};
 use bb_trader::memory::load_audit_rows;
 use serde_json::{Value, json};
 
-use crate::history::{ParsedAudit, build_trades, parse_audit};
+use crate::history::{ParsedAudit, parse_audit};
+use bb_trader::trades::build_trades;
 use crate::market::MarketView;
 use crate::signals::SignalsCache;
 use crate::wallet::WalletView;
