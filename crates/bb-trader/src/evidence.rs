@@ -336,8 +336,9 @@ pub struct RouteEvidence {
     pub relative_momentum_bps: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub short_relative_momentum_bps: Option<f64>,
+    /// Trailing relative momentum minus the quoted friction: a past move, not a forecast.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub expected_edge_after_friction_bps: Option<f64>,
+    pub trailing_momentum_minus_cost_bps: Option<f64>,
 }
 
 /// Python `_route_market_evidence` without the min-edge gate fields.
@@ -353,7 +354,7 @@ pub fn route_evidence(
         reason: "source or destination market evidence is not ready".into(),
         relative_momentum_bps: None,
         short_relative_momentum_bps: None,
-        expected_edge_after_friction_bps: None,
+        trailing_momentum_minus_cost_bps: None,
         source,
         destination,
     };
@@ -367,11 +368,13 @@ pub fn route_evidence(
         return packet;
     };
     packet.status = EvidenceStatus::Ready;
-    packet.reason = "relative momentum minus immediate friction (information, not a rule)".into();
+    packet.reason =
+        "trailing relative momentum minus quoted cost: a past move, not a forecast (information, not a rule)"
+            .into();
     packet.relative_momentum_bps = Some(momentum);
     packet.short_relative_momentum_bps =
         weighted_short_relative_momentum_bps(&packet.source, &packet.destination);
-    packet.expected_edge_after_friction_bps = Some(momentum - friction);
+    packet.trailing_momentum_minus_cost_bps = Some(momentum - friction);
     packet
 }
 
@@ -603,10 +606,13 @@ mod tests {
         let expected = (10.0 * 0.15 + 20.0 * 0.20 + 30.0 * 0.25 + 40.0 * 0.15) / 0.75;
         assert!((packet.relative_momentum_bps.unwrap() - expected).abs() < 1e-9);
         assert!(
-            (packet.expected_edge_after_friction_bps.unwrap() - (expected - 12.0)).abs() < 1e-9
+            (packet.trailing_momentum_minus_cost_bps.unwrap() - (expected - 12.0)).abs() < 1e-9
         );
         let json = serde_json::to_value(&packet).unwrap();
         assert!(json.get("gate_pass").is_none() && json.get("minimum_expected_edge_bps").is_none());
+        // The model reads this payload: a trailing move must not be presented as expected edge.
+        assert!(json.get("expected_edge_after_friction_bps").is_none());
+        assert!(json["trailing_momentum_minus_cost_bps"].is_number());
 
         let missing = route_evidence(
             Some(-5.0),

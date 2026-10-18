@@ -279,7 +279,8 @@ pub fn cycle_prompt(
         "\n## Top quoted routes ({} shown; amounts = whole free source balance)",
         context.candidate_routes.len()
     );
-    out.push_str("route_id | legs | in → out | value USDT in→out | friction bps | tier | spread bps | rel.momentum bps | edge after friction bps\n");
+    out.push_str("Momentum columns are past weighted returns (5m to 7d), not a forecast of the next move.\n");
+    out.push_str("route_id | legs | in → out | value USDT in→out | friction bps | tier | spread bps | trailing rel.momentum bps | trailing momentum minus cost bps\n");
     for candidate in &context.candidate_routes {
         let evidence = candidate.market_evidence.as_ref();
         let _ = writeln!(
@@ -308,7 +309,7 @@ pub fn cycle_prompt(
                 .and_then(|e| e.relative_momentum_bps)
                 .map_or("n/a".into(), |v| format!("{v:.1}")),
             evidence
-                .and_then(|e| e.expected_edge_after_friction_bps)
+                .and_then(|e| e.trailing_momentum_minus_cost_bps)
                 .map_or("n/a".into(), |v| format!("{v:.1}")),
         );
     }

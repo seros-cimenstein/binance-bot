@@ -143,7 +143,10 @@ driven project.
   which rule sold each position and the result after fees (information
   only). The trader session was restored to the v7 conversation up to the
   last gpt-6.1-sol cycle before Sonnet took over (cycle 542, 2026-10-16
-  05:02 UTC), with the journal cut at the same point.
+  05:02 UTC), with the journal cut at the same point. Tag
+  `bot-spot-v12-agentic` (2026-10-18) keeps the v7 system prompt and changes
+  only information in the cycle message: the route table's trailing momentum
+  is no longer labelled "edge" (it is a past move, not a forecast).
 - Bot Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,
