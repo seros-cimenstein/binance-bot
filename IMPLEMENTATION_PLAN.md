@@ -788,13 +788,16 @@ Gate 0, decisions before code:
 
 Collector:
 
-- [ ] Python sidecar `collectors/x-camoufox/` (uv project; Camoufox is
+- [x] Python sidecar `collectors/x-camoufox/` (uv project; Camoufox is
   Python/Playwright only) in its own container and compose profile
   `x-collector`, outside the `bb` image (the browser is ~650 MB). Pin a
   known-good Camoufox release and verify the `lin.arm64` binary on the Pi 5
   (64-bit OS; the 16 KB-page kernel may need `kernel8.img`). Built and pinned
   (`camoufox[geoip]==0.5.8`, browser 156.0.1-beta.36; image built and
-  launched on amd64, 2026-10-13). Open: arm64 build and run on the Pi 5.
+  launched on amd64, 2026-10-13). Pi 5 (2026-10-19): image
+  `binance-bot-x-camoufox` built on arm64 and the browser launched headless
+  on the stock 16K-page kernel (`6.12.75+rpt-rpi-2712`), no `kernel8.img`
+  needed. Not started as a service and not logged in on the Pi.
 - [x] Sources: a curated account list (callers, KOLs, launchpad trackers) plus
   cashtag and contract-address searches. Dedicated burner account with its
   session on the data volume; jittered polling, a hard pages-per-hour cap,

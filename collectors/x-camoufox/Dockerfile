@@ -35,8 +35,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # The Camoufox browser build paired with camoufox==0.5.8, GeoIP db and fingerprint model.
+# `camoufox fetch` exits 0 even when GitHub's API refuses it (seen on the Pi 2026-10-19:
+# 403 rate limit, nothing installed), so the build checks the browser is really there.
 USER collector
-RUN /opt/x-collector/.venv/bin/python -m camoufox fetch
+RUN /opt/x-collector/.venv/bin/python -m camoufox fetch \
+ && /opt/x-collector/.venv/bin/python -c "from camoufox.pkgman import camoufox_path; print('camoufox browser:', camoufox_path(download_if_missing=False))"
 
 COPY --chown=collector:collector src ./src
 RUN uv sync --frozen --no-dev

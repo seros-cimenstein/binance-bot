@@ -121,7 +121,15 @@ dependencies, and the `lin.arm64` Camoufox build fetched at build time; the
 browser download is about 1.3 GB). Raspberry Pi OS on the Pi 5 boots a kernel
 with 16K memory pages by default, which Firefox builds can crash under; if the
 browser fails to start, add `kernel=kernel8.img` to `/boot/firmware/config.txt`
-(4K pages) and reboot.
+(4K pages) and reboot. Checked 2026-10-19 on the Pi 5 (kernel
+`6.12.75+rpt-rpi-2712`, 16K pages): browser 156.0.1-beta.36 launched headless
+and opened a page without that change.
+
+`camoufox fetch` asks GitHub's API for the release; unauthenticated, that is
+60 requests per hour per public IP. When the limit is used up the fetch exits 0
+with nothing installed, so the Dockerfile checks the browser after it and the
+build fails instead: wait for the hourly reset (`curl -s
+https://api.github.com/rate_limit`) and build again.
 
 ## Operator responsibility
 
