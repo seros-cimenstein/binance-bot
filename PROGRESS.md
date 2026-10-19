@@ -5,6 +5,34 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-19 (19:15 UTC): `LOOP_BOT_HEALTH.md` done (10 items: 10 done, 0
+  invalid, 0 blocked). Since the 16:15 entry:
+  - A3 (operator: "replace it real totals"): prompt `bot-spot-v14-agentic`.
+    Live, the exit-plan section ends with "positions sold by a plan: 9 (6
+    wins), net 0.395 USDT after fees" (`TradeRecord.by_plan` from the
+    audit) instead of "plan vs your own exits: -0.0397". Paper mode keeps
+    the comparison.
+  - B4 (operator: "remove backup"): no fallback model.
+    `BOT_SPOT_FALLBACK_MODELS` removed from both `.env.docker`, `.env.example`
+    empty; the Pi's `omp-agent/config.yml` has `modelFallback: false` and no
+    `fallbackChains` (backups `*.bak-20261019T165731Z-pre-b4`). A failed
+    turn now holds without a retry on another model; the brain-down alert
+    stays. `CODEX.md`/`OPERATIONS.md` updated.
+  - B3 again: at 360 s the 17:11 compaction timed out and finished inside
+    omp after 468 s, and that cycle ran on the out-of-quota argon. The
+    timeout is now 600 s (omp's default). The 19:04 compaction took 155 s
+    and logged `tokens_before=158864 tokens_after=None
+    local_tokens_after=3549 short_summary="Remote compaction"` (B2's
+    fields; the session file has the real `tokensAfter` 98884).
+  - Deploys: 17:19:49 (A3+B4, tag `pre-a3b4-20261019`) and 18:02:10 (600 s,
+    tag `pre-b3b-20261019`), each right after a cycle with no position.
+    After the first one, the resumed session was still on argon and the
+    trader moved it back to sol before the 17:41 turn (one notice).
+  - Final state: `bot-spot` and `scheduler` Up, restarts 0; cycles 18:44 and
+    19:07 `held` on gpt-6.1-sol, v14, no fallback, no WARN since 18:02; no
+    stop file, no failed-route halt. Final checks: `cargo test --workspace`
+    1010 passed, clippy, `scripts/smoke.sh`, `scripts/pool_replay.sh`,
+    collector `uv run pytest` (86) and `git diff --check` all exit 0.
 - 2026-10-19 (16:15 UTC): `LOOP_BOT_HEALTH.md` B2, B3, C1, D1, E1.
   - B2 compaction log: omp's RPC `compact` reply carries no `tokensAfter`
     or `method` (checked in the Pi's omp 18.8.9 `dist/cli.js` and the
