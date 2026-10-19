@@ -506,7 +506,13 @@ and sell fees at the trip's fee rate), so it cannot sell a fee-negative
   net result after fees (watch state `recent_closed`); trade history marks
   plan sells with the plan, rule, share and trigger price (`exit_plan`).
 - Results: `bb bot-spot-exit-watch --summary` compares, for each closed
-  position with a plan, "with the plan" and "The bot alone".
+  position with a plan, "with the plan" and "The bot alone". A position a
+  live plan sell closed has no bot exit to compare with: it is listed as
+  `plan (live)` with its real result and left out of the plan-vs-bot total
+  (its watch-log row has `closed_by_plan`, `exit_net_pct` and
+  `fill_vs_trigger_usdt`; rows from before 2026-10-19 are matched against
+  the audit's `exit-plan` sells, so `--summary` also reads
+  `BOT_SPOT_AUDIT_PATH`). The dashboard's Exits tab shows the same split.
 
 ### omp authentication
 

@@ -106,7 +106,7 @@ bb bot-spot --submit-live --daemon          # live, one cycle every --interval-s
 bb bot-spot --mark-failed-route-reviewed    # clear the failed-route halt after review
 bb bot-spot-exit-replay --table             # replay the Phase 45 sell-plan menu on real round trips
 bb bot-spot-exit-watch --daemon             # paper exit-plan watcher (no orders)
-bb bot-spot-exit-watch --summary            # paper trial results vs the bot's own exits
+bb bot-spot-exit-watch --summary            # closed plan trials vs the bot's own exits (live plan-sold positions apart)
 ```
 
 `bb bot-spot-exit-replay` (Phase 45, research only, public klines, no

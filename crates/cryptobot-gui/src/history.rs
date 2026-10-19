@@ -1,9 +1,11 @@
 //! Dashboard view of the audit log: submitted routes (valued by [`bb_trader::trades`]),
 //! failed routes and cycle summaries.
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+use bb_trader::exit_replay::plan_exit_key;
 use bb_trader::memory::{row_asset, row_attempted_submission, row_status, value_decimal};
 use bb_trader::trades::{RouteRecord, route_record};
 use rust_decimal::Decimal;
@@ -40,6 +42,8 @@ pub struct ParsedAudit {
     pub routes: Vec<RouteRecord>,
     pub failed: Vec<FailedRoute>,
     pub cycles: Vec<CycleRecord>,
+    /// `(asset, order ms)` of each live exit-plan sell (see [`plan_exit_key`]).
+    pub plan_exits: BTreeSet<(String, i64)>,
     pub error: Option<String>,
 }
 
@@ -67,6 +71,9 @@ pub fn parse_audit(path: &Path) -> ParsedAudit {
         let Ok(row) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        if let Some(key) = plan_exit_key(&row) {
+            parsed.plan_exits.insert(key);
+        }
         if text(&row, "/row_type") == "cycle_summary" {
             parsed.cycles.push(CycleRecord {
                 timestamp: text(&row, "/timestamp"),

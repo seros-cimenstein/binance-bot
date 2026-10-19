@@ -21,6 +21,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::config::DEFAULT_AUDIT_PATH;
+use crate::cycle::EXIT_CYCLE_ID;
 use crate::error::{Result, TraderError};
 use crate::exit_plan::{
     ATR_PERIODS, AtrTimeframe, ExitFill, ExitPlan, ExitWatch, PriceBar, average_true_range,
@@ -104,6 +105,23 @@ pub struct ActualExit {
     /// Average fill on the entry market; `None` when sold on another market.
     pub price: Option<Decimal>,
     pub partial: bool,
+    /// The closing sell was a live exit-plan sell (`cycle_id` [`EXIT_CYCLE_ID`]), not the bot's.
+    pub by_plan: bool,
+}
+
+/// Asset and order time of the first sell leg of a submitted live exit-plan sell row: the
+/// same `(asset, ts_ms)` as the [`ActualExit`] it produces when it closes a round trip.
+pub fn plan_exit_key(row: &Value) -> Option<(String, i64)> {
+    if row.get("cycle_id").and_then(Value::as_str) != Some(EXIT_CYCLE_ID)
+        || row.get("status").and_then(Value::as_str) != Some("submitted")
+    {
+        return None;
+    }
+    legs(row)
+        .into_iter()
+        .next()
+        .filter(|leg| leg.side == "sell")
+        .map(|leg| (leg.base, leg.ts_ms))
 }
 
 /// One real position: bought on `symbol`, closed by the bot (or still open).
@@ -219,6 +237,7 @@ pub fn round_trips(
                     ts_ms: first.ts_ms,
                     price: (first.symbol == trip.symbol).then_some(first.price),
                     partial: partly_sold.remove(&trip.asset),
+                    by_plan: row.get("cycle_id").and_then(Value::as_str) == Some(EXIT_CYCLE_ID),
                 });
                 done.push(trip);
             }
@@ -916,7 +935,8 @@ mod tests {
             Some(ActualExit {
                 ts_ms: 2_000,
                 price: Some(dec!(0.25)),
-                partial: false
+                partial: false,
+                by_plan: false
             })
         );
         // Half sold, then the rest on another market: the trip stays open through the
@@ -926,7 +946,8 @@ mod tests {
             Some(ActualExit {
                 ts_ms: 4_500,
                 price: None,
-                partial: true
+                partial: true,
+                by_plan: false
             })
         );
         assert_eq!(trips[1].quantity, dec!(5));
@@ -943,6 +964,23 @@ mod tests {
             ["OP", "FIL", "XLM"]
         );
         assert_eq!(all[2].entry_value_usdt, dec!(11.5));
+    }
+
+    #[test]
+    fn a_live_plan_sell_closes_its_trip_as_plan_sold_with_the_same_key() {
+        let mut plan_sell = route(vec![leg("ENA/USDT", "sell", "0.25", "100", 2_000)], 0.001);
+        plan_sell["cycle_id"] = json!(EXIT_CYCLE_ID);
+        let rows = vec![
+            route(vec![leg("ENA/USDT", "buy", "0.2", "100", 1_000)], 0.001),
+            plan_sell.clone(),
+            route(vec![leg("ENA/USDT", "buy", "0.2", "100", 3_000)], 0.001),
+            route(vec![leg("ENA/USDT", "sell", "0.21", "100", 4_000)], 0.001),
+        ];
+        let (trips, _) = round_trips(&rows, Some("USDT"), None);
+        let exits: Vec<_> = trips.iter().map(|t| t.exit.clone().unwrap()).collect();
+        assert_eq!((exits[0].by_plan, exits[1].by_plan), (true, false));
+        assert_eq!(plan_exit_key(&plan_sell), Some(("ENA".into(), exits[0].ts_ms)));
+        assert_eq!(plan_exit_key(&rows[3]), None);
     }
 
     fn bar(minute: i64, open: Decimal, high: Decimal, low: Decimal, close: Decimal) -> PriceBar {
@@ -970,6 +1008,7 @@ mod tests {
                 ts_ms: 2 * MS_PER_MINUTE,
                 price: Some(dec!(99)),
                 partial: false,
+                by_plan: false,
             }),
         };
         let window = [
@@ -1065,6 +1104,7 @@ mod tests {
                 ts_ms: 5 * MS_PER_MINUTE + 30_000,
                 price: None,
                 partial: false,
+                by_plan: false,
             }),
         };
         let bars: Vec<PriceBar> = (0..8)

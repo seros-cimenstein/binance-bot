@@ -1344,6 +1344,8 @@ const EXIT_EVENTS = { started: ["Watching", "accent"], would_sell: ["Plan fired"
 function exitEventText(e) {
   if (e.event === "would_sell") return share(e.fraction) + " at " + px(e.price) + " · " + (e.reason || "");
   if (e.event === "sold") return share(e.share) + " of what was held · " + (e.reason || "");
+  if (e.event === "closed" && e.closed_by_plan) return "Sold by the plan (live) · net " + pct(e.exit_net_pct)
+    + (num(e.fill_vs_trigger_usdt) !== null ? " · fill vs trigger " + usd(e.fill_vs_trigger_usdt, { sign: true }) : "");
   if (e.event === "closed") return "Bot alone " + pct(e.bot_alone_net_pct) + " · with plan " + pct(e.with_plan_net_pct) + " · plan vs bot " + usd(e.plan_vs_bot_usdt, { sign: true });
   if (e.event === "started") return "entry " + px(e.entry_price) + (num(e.trail_pct) !== null ? " · trail " + fixed(e.trail_pct, 2) + "%" : "") + (num(e.peak) !== null ? " · peak " + px(e.peak) : "");
   if (e.event === "sell_failed" || e.event === "sell_abandoned") return (e.error || "") + (e.attempts ? " (attempt " + e.attempts + ")" : "");

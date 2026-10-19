@@ -5,11 +5,13 @@
 //! Each loop: read the plan book and the Bot Spot audit; start trials for new plans
 //! (the peak is seeded with the highest 1-minute high since entry, then the minutes since
 //! the plan was set are caught up); feed each running trial the current bid; and close a
-//! trial when the audit shows the bot sold the position. A closed trial compares "The bot
+//! trial when the audit shows the position was sold. A closed trial compares "The bot
 //! with the plan" (the plan's sells before the bot's, the rest at the bot's real fill) with
 //! "The bot alone", both net of the entry leg's fee rate (plan sells also pay slippage).
+//! A position a live plan sell closed has no bot exit to compare with: its row records the
+//! real result and the fills against the trigger prices instead.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -29,7 +31,7 @@ use crate::exit_book::{
 use crate::exit_plan::{
     ATR_PERIODS, AtrTimeframe, ExitFill, ExitWatch, PriceBar, average_true_range,
 };
-use crate::exit_replay::{ActualExit, RoundTrip, read_audit, round_trips};
+use crate::exit_replay::{ActualExit, RoundTrip, plan_exit_key, read_audit, round_trips};
 
 const MS_PER_MINUTE: i64 = 60_000;
 const BPS: Decimal = Decimal::from_parts(10_000, 0, 0, false, 0);
@@ -340,7 +342,10 @@ impl Watcher {
         self.state.finalized.insert(key);
     }
 
-    /// Close a trial on the bot's real exit.
+    /// Close a trial on the position's real exit. When a live plan sell closed it
+    /// (`exit.by_plan`), that sell is the only exit there is: no bot exit to compare with, so
+    /// the row records the real result and the fills against the trigger prices instead, and
+    /// nothing is added to `plan_vs_bot_usdt`.
     fn close(&mut self, asset: &str, trip: &RoundTrip, exit: &ActualExit, log: &mut dyn WatchLog) {
         let Some(trial) = self.trials.remove(asset) else {
             return;
@@ -366,30 +371,52 @@ impl Watcher {
         let rest = (Decimal::ONE - sold).max(Decimal::ZERO) * alone;
         with_plan += rest;
         plan_proceeds += rest;
-        let diff = (with_plan - alone) / cost * trip.entry_value_usdt;
+        let usdt = |proceeds: Decimal| (proceeds / cost * trip.entry_value_usdt).round_dp(6);
         let pct = |proceeds: Decimal| {
             ((proceeds / cost - Decimal::ONE) * Decimal::ONE_HUNDRED).round_dp(4)
         };
         let key = trial.entry.key();
-        log.append(json!({
-            "event": "closed",
-            "key": key,
-            "asset": asset,
-            "spec": trial.entry.spec,
-            "symbol": trial.entry.symbol,
-            "entry_ms": trial.entry.entry_ms,
-            "entry_price": trial.entry.entry_price,
-            "entry_value_usdt": trip.entry_value_usdt.round_dp(6),
-            "bot_exit_ms": exit.ts_ms,
-            "bot_exit_price": bot_price,
-            "bot_exit_price_known": exit.price.is_some(),
-            "plan_fills": plan_fills,
-            "bot_alone_net_pct": pct(alone),
-            "with_plan_net_pct": pct(with_plan),
-            "plan_vs_bot_usdt": diff.round_dp(6),
-        }));
+        if exit.by_plan {
+            log.append(json!({
+                "event": "closed",
+                "key": key,
+                "asset": asset,
+                "spec": trial.entry.spec,
+                "symbol": trial.entry.symbol,
+                "entry_ms": trial.entry.entry_ms,
+                "entry_price": trial.entry.entry_price,
+                "entry_value_usdt": trip.entry_value_usdt.round_dp(6),
+                "closed_by_plan": true,
+                "exit_ms": exit.ts_ms,
+                "exit_price": bot_price,
+                "exit_price_known": exit.price.is_some(),
+                "plan_fills": plan_fills,
+                "exit_net_pct": pct(alone),
+                // The real sells against the plan's trigger prices (both after the fee).
+                "fill_vs_trigger_usdt": usdt(alone - plan_proceeds),
+            }));
+        } else {
+            let diff = usdt(with_plan - alone);
+            log.append(json!({
+                "event": "closed",
+                "key": key,
+                "asset": asset,
+                "spec": trial.entry.spec,
+                "symbol": trial.entry.symbol,
+                "entry_ms": trial.entry.entry_ms,
+                "entry_price": trial.entry.entry_price,
+                "entry_value_usdt": trip.entry_value_usdt.round_dp(6),
+                "bot_exit_ms": exit.ts_ms,
+                "bot_exit_price": bot_price,
+                "bot_exit_price_known": exit.price.is_some(),
+                "plan_fills": plan_fills,
+                "bot_alone_net_pct": pct(alone),
+                "with_plan_net_pct": pct(with_plan),
+                "plan_vs_bot_usdt": diff,
+            }));
+            self.state.plan_vs_bot_usdt += diff;
+        }
         self.state.closed_trials += 1;
-        self.state.plan_vs_bot_usdt += diff.round_dp(6);
         self.state.recent_closed.push(ClosedView {
             asset: asset.to_owned(),
             spec: trial.entry.spec.clone(),
@@ -657,8 +684,30 @@ async fn shutdown_signal() {
     }
 }
 
-/// Markdown table of the closed trials in the watch log.
-pub fn summary_table(log_path: &Path) -> Result<String> {
+/// `(asset, order ms)` of every live exit-plan sell in the audit rows (see
+/// [`plan_exit_key`]).
+pub fn plan_exits(audit_rows: &[Value]) -> BTreeSet<(String, i64)> {
+    audit_rows.iter().filter_map(plan_exit_key).collect()
+}
+
+/// Whether a `closed` watch-log row is a position a live plan sell closed, so its "bot
+/// alone" was the plan's own fill and its `plan_vs_bot_usdt` only measures that fill
+/// against the trigger price. Rows written since 2026-10-19 carry `closed_by_plan`; older
+/// rows are matched by asset and exit time against the audit's plan sells (`plan_exits`).
+pub fn closed_by_plan(row: &Value, plan_exits: &BTreeSet<(String, i64)>) -> bool {
+    if let Some(flag) = row.get("closed_by_plan").and_then(Value::as_bool) {
+        return flag;
+    }
+    let asset = row.get("asset").and_then(Value::as_str).unwrap_or_default();
+    row.get("bot_exit_ms")
+        .and_then(Value::as_i64)
+        .is_some_and(|ms| plan_exits.contains(&(asset.to_owned(), ms)))
+}
+
+/// Markdown table of the closed trials in the watch log. Positions a live plan sell closed
+/// have no bot exit to compare with: they show their real result and stay out of the
+/// plan-vs-bot total.
+pub fn summary_table(log_path: &Path, plan_exits: &BTreeSet<(String, i64)>) -> Result<String> {
     let rows: Vec<Value> = match read_audit(log_path) {
         Ok(rows) => rows,
         Err(error) if error_is_not_found(&error) => Vec::new(),
@@ -668,9 +717,9 @@ pub fn summary_table(log_path: &Path) -> Result<String> {
         .iter()
         .filter(|r| r.get("event").and_then(Value::as_str) == Some("closed"))
         .collect();
-    let mut out = format!("Exit-plan paper trial: {} closed trials.\n\n", closed.len());
-    out.push_str("| asset | plan | bot alone % | with plan % | plan vs bot |\n|---|---|---:|---:|---:|\n");
-    let mut total = Decimal::ZERO;
+    let mut out = format!("Exit-plan trials: {} closed.\n\n", closed.len());
+    out.push_str("| asset | plan | sold by | bot alone % | with plan % | plan vs bot |\n|---|---|---|---:|---:|---:|\n");
+    let (mut total, mut compared, mut by_plan, mut plan_net) = (Decimal::ZERO, 0, 0, Decimal::ZERO);
     for row in &closed {
         let text = |k: &str| {
             row.get(k)
@@ -678,21 +727,38 @@ pub fn summary_table(log_path: &Path) -> Result<String> {
                 .unwrap_or_default()
                 .to_owned()
         };
-        let num = |k: &str| crate::memory::value_decimal(row.get(k)).unwrap_or_default();
-        total += num("plan_vs_bot_usdt");
-        out.push_str(&format!(
-            "| {} | {} | {} | {} | {} |\n",
-            text("asset"),
-            text("spec"),
-            num("bot_alone_net_pct").round_dp(2),
-            num("with_plan_net_pct").round_dp(2),
-            num("plan_vs_bot_usdt").round_dp(4)
-        ));
+        let num = |k: &str| crate::memory::value_decimal(row.get(k));
+        let line = if closed_by_plan(row, plan_exits) {
+            by_plan += 1;
+            // Older rows: "the bot alone" is the plan's own fill, the real result.
+            let net = num("exit_net_pct").or_else(|| num("bot_alone_net_pct")).unwrap_or_default();
+            plan_net += net;
+            format!("| {} | {} | plan (live) | — | {} | — |\n", text("asset"), text("spec"), net.round_dp(2))
+        } else {
+            compared += 1;
+            let diff = num("plan_vs_bot_usdt").unwrap_or_default();
+            total += diff;
+            format!(
+                "| {} | {} | bot | {} | {} | {} |\n",
+                text("asset"),
+                text("spec"),
+                num("bot_alone_net_pct").unwrap_or_default().round_dp(2),
+                num("with_plan_net_pct").unwrap_or_default().round_dp(2),
+                diff.round_dp(4)
+            )
+        };
+        out.push_str(&line);
     }
     out.push_str(&format!(
-        "\nTotal plan vs the bot: {} USDT.\n",
+        "\nPlan vs the bot over {compared} positions the bot closed: {} USDT.\n",
         total.round_dp(4)
     ));
+    if by_plan > 0 {
+        out.push_str(&format!(
+            "Closed by a live plan sell: {by_plan} (summed net {}%); no bot exit to compare, so left out of the total.\n",
+            plan_net.round_dp(2)
+        ));
+    }
     Ok(out)
 }
 
@@ -703,8 +769,19 @@ fn error_is_not_found(error: &TraderError) -> bool {
 /// `bb bot-spot-exit-watch`.
 pub async fn run_cli(args: ExitWatchArgs) -> Result<ExitCode> {
     let paths = ExitPaths::from_env();
+    let audit_path = args.audit_path.clone().unwrap_or_else(|| {
+        PathBuf::from(bb_core::env::string(
+            &["BOT_SPOT_AUDIT_PATH"],
+            DEFAULT_AUDIT_PATH,
+        ))
+    });
     if args.summary {
-        print!("{}", summary_table(&paths.log)?);
+        let audit_rows = match read_audit(&audit_path) {
+            Ok(rows) => rows,
+            Err(error) if error_is_not_found(&error) => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        print!("{}", summary_table(&paths.log, &plan_exits(&audit_rows))?);
         return Ok(ExitCode::SUCCESS);
     }
     let settings =
@@ -719,12 +796,6 @@ pub async fn run_cli(args: ExitWatchArgs) -> Result<ExitCode> {
         return Err(TraderError::config("--slippage-bps must not be negative"));
     }
     let poll = Duration::from_secs(args.poll_seconds.max(1));
-    let audit_path = args.audit_path.clone().unwrap_or_else(|| {
-        PathBuf::from(bb_core::env::string(
-            &["BOT_SPOT_AUDIT_PATH"],
-            DEFAULT_AUDIT_PATH,
-        ))
-    });
     let prices = BinancePrices::new(BinanceClient::new(BinanceConfig::new(false))?);
     let mut audit = AuditCache::new(audit_path);
     let mut log = FileLog {
@@ -893,6 +964,7 @@ mod tests {
             ts_ms: 110 * M,
             price: Some(dec!(1.00)),
             partial: false,
+            by_plan: false,
         };
         watcher
             .step(&book, &[trip(Some(exit))], &prices, 110 * M + 1, &mut log)
@@ -926,6 +998,92 @@ mod tests {
             .step(&book, &[trip(None)], &prices, 111 * M, &mut log)
             .await;
         assert_eq!(log.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_live_plan_sell_that_closes_the_position_is_not_compared_with_itself() {
+        let mut bars: Vec<PriceBar> = (40..100).map(|m| bar(m, dec!(1.01), dec!(1))).collect();
+        bars.push(bar(100, dec!(1.05), dec!(1)));
+        bars.push(bar(101, dec!(1.10), dec!(1.04)));
+        bars.push(bar(102, dec!(1.09), dec!(1.08)));
+        bars.push(bar(103, dec!(1.09), dec!(1.08)));
+        let prices = FakePrices {
+            bars,
+            bid: Mutex::new(dec!(1.08)),
+        };
+        let book = book("trail=3", 103 * M);
+        let mut watcher = Watcher::new(WatchState::default(), dec!(5), None);
+        let mut log: Vec<Value> = Vec::new();
+        watcher
+            .step(&book, &[trip(None)], &prices, 104 * M + 5_000, &mut log)
+            .await;
+        *prices.bid.lock() = dec!(1.06);
+        watcher
+            .step(&book, &[trip(None)], &prices, 104 * M + 10_000, &mut log)
+            .await;
+
+        // The live guard sold on that signal and filled at 1.055, a little under the trigger.
+        let exit = ActualExit {
+            ts_ms: 104 * M + 11_000,
+            price: Some(dec!(1.055)),
+            partial: false,
+            by_plan: true,
+        };
+        watcher
+            .step(&book, &[trip(Some(exit))], &prices, 104 * M + 12_000, &mut log)
+            .await;
+        let closed = &log[2];
+        assert_eq!(closed["event"], "closed");
+        assert_eq!(closed["closed_by_plan"], true);
+        assert!(closed.get("plan_vs_bot_usdt").is_none());
+        let num = |k: &str| crate::memory::value_decimal(Some(&closed[k])).unwrap();
+        let cost = dec!(1.001);
+        assert_eq!(
+            num("fill_vs_trigger_usdt"),
+            ((dec!(1.055) - dec!(1.06)) * dec!(0.999) / cost * dec!(10.01)).round_dp(6)
+        );
+        assert_eq!(
+            num("exit_net_pct"),
+            ((dec!(1.055) * dec!(0.999) / cost - Decimal::ONE) * dec!(100)).round_dp(4)
+        );
+        let state = watcher.state();
+        assert_eq!(state.closed_trials, 1);
+        assert_eq!(state.plan_vs_bot_usdt, Decimal::ZERO);
+    }
+
+    #[test]
+    fn summary_keeps_positions_closed_by_a_plan_out_of_the_plan_vs_bot_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("watch.jsonl");
+        let rows = [
+            // Written before `closed_by_plan` existed; the audit shows a plan sold ENA then.
+            json!({"event": "closed", "asset": "ENA", "spec": "stretch=2:1", "bot_exit_ms": 5_000,
+                   "bot_alone_net_pct": "0.5", "with_plan_net_pct": "0.6", "plan_vs_bot_usdt": "-0.01"}),
+            json!({"event": "closed", "asset": "SOL", "spec": "deadline=90", "bot_exit_ms": 9_000,
+                   "bot_alone_net_pct": "-1", "with_plan_net_pct": "1", "plan_vs_bot_usdt": "0.2"}),
+            json!({"event": "closed", "asset": "UNI", "spec": "atr=3:1h", "closed_by_plan": true,
+                   "exit_net_pct": "1.5", "fill_vs_trigger_usdt": "-0.002"}),
+        ];
+        let text: String = rows.iter().map(|r| format!("{r}\n")).collect();
+        std::fs::write(&log_path, text).unwrap();
+        let audit = [
+            json!({"row_type": "route", "status": "submitted", "cycle_id": crate::cycle::EXIT_CYCLE_ID,
+                   "submitted_legs": [{"symbol": "ENA/USDT", "side": "sell",
+                       "order": {"filled": 10, "average": 1.1, "timestamp": 5_000}}]}),
+            // The bot's own sale of SOL is not a plan exit.
+            json!({"row_type": "route", "status": "submitted", "cycle_id": "c1",
+                   "submitted_legs": [{"symbol": "SOL/USDT", "side": "sell",
+                       "order": {"filled": 1, "average": 100, "timestamp": 9_000}}]}),
+        ];
+        let plan_sold = plan_exits(&audit);
+        assert_eq!(plan_sold, BTreeSet::from([("ENA".to_owned(), 5_000)]));
+
+        let table = summary_table(&log_path, &plan_sold).unwrap();
+        assert!(table.contains("| ENA | stretch=2:1 | plan (live) | — | 0.5 | — |"), "{table}");
+        assert!(table.contains("| UNI | atr=3:1h | plan (live) | — | 1.5 | — |"), "{table}");
+        assert!(table.contains("| SOL | deadline=90 | bot | -1 | 1 | 0.2 |"), "{table}");
+        assert!(table.contains("over 1 positions the bot closed: 0.2 USDT"), "{table}");
+        assert!(table.contains("Closed by a live plan sell: 2"), "{table}");
     }
 
     #[tokio::test]

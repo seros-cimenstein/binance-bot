@@ -4,10 +4,12 @@
 //! Everything is read from the files the trader's exit guard (live) or the paper watcher
 //! writes; nothing here changes a plan or places an order.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use bb_core::audit::JsonlLog;
 use bb_trader::exit_book::{ExitPaths, ExitSettings, PlanBook, WatchState, WatchView};
+use bb_trader::exit_watch::closed_by_plan;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
@@ -28,10 +30,12 @@ const SETTING_VARS: [&str; 4] = [
 ];
 
 /// Exit-plan view. `lookup` reads the `BOT_SPOT_*EXIT*` settings (the process env in
-/// production).
+/// production); `plan_exits` are the audit's live exit-plan sells, which mark the watch
+/// log's positions a plan closed (see [`closed_by_plan`]).
 pub fn exits_view(
     paths: &ExitPaths,
     lookup: impl Fn(&str) -> Option<String>,
+    plan_exits: &BTreeSet<(String, i64)>,
     now_ms: i64,
 ) -> Value {
     let configured = SETTING_VARS
@@ -96,7 +100,7 @@ pub fn exits_view(
             })
         })
         .collect();
-    let (events, events_error) = recent_events(&paths.log);
+    let (events, events_error) = recent_events(&paths.log, plan_exits);
     json!({
         "settings": settings,
         "state_present": state_present,
@@ -147,8 +151,11 @@ fn active_view(asset: &str, view: &WatchView, by_bot: bool) -> Value {
     })
 }
 
-/// Newest watch-log events first, with `ts_ms` turned into `at`.
-fn recent_events(path: &Path) -> (Vec<Value>, Option<String>) {
+/// Newest watch-log events first, with `ts_ms` turned into `at`. A `closed` event of a
+/// position a live plan sell closed gets `closed_by_plan` and its real result as
+/// `exit_net_pct`; its plan-vs-bot fields (in rows from before 2026-10-19 they compared the
+/// plan's sell with itself) are dropped.
+fn recent_events(path: &Path, plan_exits: &BTreeSet<(String, i64)>) -> (Vec<Value>, Option<String>) {
     match JsonlLog::new(path).read_tail::<Value>(EVENT_LIMIT) {
         Ok(rows) => (
             rows.into_iter()
@@ -156,6 +163,21 @@ fn recent_events(path: &Path) -> (Vec<Value>, Option<String>) {
                 .map(|mut row| {
                     if let Some(at) = row.get("ts_ms").and_then(Value::as_i64).and_then(iso) {
                         row["at"] = json!(at);
+                    }
+                    if row.get("event").and_then(Value::as_str) == Some("closed") {
+                        let by_plan = closed_by_plan(&row, plan_exits);
+                        if let Some(fields) = row.as_object_mut() {
+                            if by_plan && !fields.contains_key("exit_net_pct") {
+                                let net = fields.get("bot_alone_net_pct").cloned().unwrap_or(Value::Null);
+                                fields.insert("exit_net_pct".into(), net);
+                            }
+                            if by_plan {
+                                for key in ["bot_alone_net_pct", "with_plan_net_pct", "plan_vs_bot_usdt"] {
+                                    fields.remove(key);
+                                }
+                            }
+                            fields.insert("closed_by_plan".into(), json!(by_plan));
+                        }
                     }
                     row
                 })
@@ -259,7 +281,7 @@ mod tests {
             "BOT_SPOT_DEFAULT_EXIT_PLAN_FROM" => Some("2026-10-15T09:17:34Z".to_owned()),
             _ => None,
         };
-        let view = exits_view(&paths, settings, 10_000 + STATE_STALE_MS);
+        let view = exits_view(&paths, settings, &BTreeSet::new(), 10_000 + STATE_STALE_MS);
 
         assert_eq!(view["settings"]["live"], json!(true));
         assert_eq!(view["settings"]["default_plan"], json!("stretch=2:1"));
@@ -294,7 +316,7 @@ mod tests {
     #[test]
     fn missing_files_and_unset_env_report_an_unknown_setup_and_a_stale_watcher() {
         let dir = tempfile::tempdir().unwrap();
-        let view = exits_view(&paths(dir.path()), |_| None, 50_000);
+        let view = exits_view(&paths(dir.path()), |_| None, &BTreeSet::new(), 50_000);
 
         assert_eq!(view["settings"]["configured"], json!(false));
         assert_eq!(view["state_present"], json!(false));
@@ -310,7 +332,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = paths(dir.path());
         std::fs::write(&paths.state, r#"{"updated_at_ms": 1.5}"#).unwrap();
-        let view = exits_view(&paths, |_| None, 50_000);
+        let view = exits_view(&paths, |_| None, &BTreeSet::new(), 50_000);
         assert!(view["state_error"].as_str().unwrap().contains("cannot parse"));
         assert_eq!(view["active"], json!([]));
     }
@@ -325,12 +347,43 @@ mod tests {
         };
         state.save(&paths.state).unwrap();
         assert_eq!(
-            exits_view(&paths, |_| None, 1_000 + STATE_STALE_MS)["stale"],
+            exits_view(&paths, |_| None, &BTreeSet::new(), 1_000 + STATE_STALE_MS)["stale"],
             json!(false)
         );
         assert_eq!(
-            exits_view(&paths, |_| None, 1_001 + STATE_STALE_MS)["stale"],
+            exits_view(&paths, |_| None, &BTreeSet::new(), 1_001 + STATE_STALE_MS)["stale"],
             json!(true)
         );
+    }
+
+    #[test]
+    fn closed_events_of_plan_sold_positions_show_their_result_not_a_comparison() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(dir.path());
+        let log = JsonlLog::new(&paths.log);
+        // An old row the audit shows a plan sold, a new row that says so itself, and a
+        // position the bot sold (a real comparison).
+        for row in [
+            json!({"event": "closed", "asset": "ENA", "bot_exit_ms": 5_000, "bot_alone_net_pct": "0.5",
+                   "with_plan_net_pct": "0.6", "plan_vs_bot_usdt": "-0.01"}),
+            json!({"event": "closed", "asset": "UNI", "closed_by_plan": true, "exit_net_pct": "1.5",
+                   "fill_vs_trigger_usdt": "-0.002"}),
+            json!({"event": "closed", "asset": "SOL", "bot_exit_ms": 9_000, "bot_alone_net_pct": "-1",
+                   "with_plan_net_pct": "1", "plan_vs_bot_usdt": "0.2"}),
+        ] {
+            log.append(&row).unwrap();
+        }
+        let plan_exits = BTreeSet::from([("ENA".to_owned(), 5_000)]);
+        let view = exits_view(&paths, |_| None, &plan_exits, 50_000);
+        let events = view["events"].as_array().unwrap();
+
+        let sol = &events[0];
+        assert_eq!(sol["closed_by_plan"], json!(false));
+        assert_eq!(sol["plan_vs_bot_usdt"], json!("0.2"));
+        let uni = &events[1];
+        assert_eq!((&uni["closed_by_plan"], &uni["exit_net_pct"]), (&json!(true), &json!("1.5")));
+        let ena = &events[2];
+        assert_eq!((&ena["closed_by_plan"], &ena["exit_net_pct"]), (&json!(true), &json!("0.5")));
+        assert!(ena.get("plan_vs_bot_usdt").is_none() && ena.get("with_plan_net_pct").is_none());
     }
 }

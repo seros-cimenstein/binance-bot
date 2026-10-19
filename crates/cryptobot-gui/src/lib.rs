@@ -308,7 +308,13 @@ async fn fleet(State(app): State<Arc<AppState>>) -> Response {
 async fn exits_handler(State(app): State<Arc<AppState>>) -> Response {
     let paths = app.bot_spot.exits.clone();
     blocking_json(move || {
-        exits::exits_view(&paths, |name| std::env::var(name).ok(), bb_core::time::now_ms())
+        let audit = app.audit();
+        exits::exits_view(
+            &paths,
+            |name| std::env::var(name).ok(),
+            &audit.plan_exits,
+            bb_core::time::now_ms(),
+        )
     })
     .await
 }
