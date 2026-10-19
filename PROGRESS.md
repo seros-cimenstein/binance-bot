@@ -5,6 +5,22 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-19 (14:02 UTC): Removed the 10 ignored guardrail variables from
+  both `.env.docker` files (`LOOP_BOT_HEALTH.md` B1; config only, no code).
+  Backups `.env.docker.bak-20261019T135923Z-pre-b1` on the Pi and the
+  laptop; each diff removes exactly `BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS`,
+  `_MIN_TRADE_INTERVAL_SECONDS`, `_MAX_SUBMITTED_TRADES_PER_DAY`,
+  `_HALT_AFTER_FAILED_SUBMISSION`, `_REQUIRE_MARKET_EVIDENCE_FOR_LIVE`,
+  `_MARKET_EVIDENCE_MIN_EDGE_BPS`, `_MAX_RECENT_LOSS_STREAK`,
+  `_SPECULATIVE_MODE_ENABLED`, `_SPECULATIVE_MIN_EDGE_BPS`,
+  `_SPECULATIVE_REQUIRE_THESIS` (all in `REMOVED_VARS`, ignored with a WARN;
+  the failed-route halt stays always on in code). Isolated `--evidence-only`
+  run on the Pi: exit 0, no "ignoring removed Bot Spot guardrail settings"
+  line (the only WARN is the empty isolated audit). The running `bot-spot`
+  picks the file up at the next recreate (B2). Noticed: the laptop's
+  untracked `.env.docker` still has `BOT_SPOT_MARKET_PICK_MODE=
+  small_market_aggressive` (the Pi has `liquid_top_value` since Phase 47);
+  deploys never copy it, so left alone.
 - 2026-10-19 (13:40 UTC): Live plan-sold positions are no longer compared
   with themselves (`LOOP_BOT_HEALTH.md` A2; observability only, the trader's
   prompt and orders unchanged). Cause: in live mode the watcher closes a
