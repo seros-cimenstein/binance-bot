@@ -975,8 +975,10 @@ Step 2, paper watcher (after the operator reviews the replay):
   only) and `bb bot-spot-exit-watch`: follows the bid between cycles,
   logs would-be sells, no orders; the cycle prompt shows each plan's
   results; `--summary` compares "The bot with the plan" and "The bot alone".
-- [ ] Run it for about a week next to the live trader and review
-  `bb bot-spot-exit-watch --summary`.
+- [x] Run it for about a week next to the live trader and review
+  `bb bot-spot-exit-watch --summary` (superseded 2026-10-15 by step 3: live
+  without the paper week; the paper watcher refuses to start while exit
+  plans run live, and the live review is step 3's item).
 - [x] Research the math traders use for exits (2026-10-15) and keep every
   candidate in `docs/exit-plan-candidates.md`.
 - [x] Menu expansion from that research: ATR trail / Chandelier exit
