@@ -79,22 +79,24 @@ driven project.
   tools; `execute_route` is the only order path. Bot Spot must not call
   margin, futures, universal-transfer, withdrawal, or prediction write
   endpoints.
-- Bot Spot model fallback (operator decisions 2026-10-13, 2026-10-15 and
-  2026-10-16): the primary model (`BOT_SPOT_MODEL`) is
+- Bot Spot model fallback (operator decisions 2026-10-13, 2026-10-15,
+  2026-10-16 and 2026-10-19): the primary model (`BOT_SPOT_MODEL`) is
   `openai-codex/gpt-6.1-sol` at thinking `high` since 2026-10-16 (before
   that `anthropic/claude-sonnet-5-5` from 2026-10-14 and
   `anthropic/claude-haiku-5-5`), on a 20-minute deployed cycle since
-  2026-10-15 so it fits the subscription allowance. The brain chain is
-  gpt-6.1-sol (OpenAI Codex) -> `google-antigravity/gemini-4-argon-high` at
-  `high` (`BOT_SPOT_FALLBACK_MODELS` and `retry.fallbackChains` in the Pi's
-  `omp-agent/config.yml`); each provider uses its own omp login on the Pi.
-  When the active model is rate- or usage-limited (or times out, errors or
-  fails a compaction), the turn moves to the next model in the chain and
-  returns to the primary when its cooldown ends. A fallback model is the
-  trader for that turn: the same host tools, the same `execute_route` path
-  and every hard-safety item below apply unchanged. Each login is made on
-  the Pi with `omp login <provider>`, never a copied token. Adding another
-  model or provider needs a new operator decision.
+  2026-10-15 so it fits the subscription allowance. Since 2026-10-19 there is
+  no fallback model (operator: "remove backup", after the
+  `google-antigravity/gemini-4-argon-high` fallback answered "quota
+  reached"): `BOT_SPOT_FALLBACK_MODELS` is empty and the Pi's
+  `omp-agent/config.yml` has `retry.modelFallback: false` and no
+  `fallbackChains`. A failed turn is not retried on another model; the
+  brain-down alert (`BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES`) still fires. The
+  failover code stays: when a fallback is configured, a fallback model is
+  the trader for that turn with the same host tools, the same
+  `execute_route` path and every hard-safety item below unchanged. Each
+  login is made on the Pi with `omp login <provider>`, never a copied token.
+  Adding a fallback or another model or provider needs a new operator
+  decision.
 - Bot Spot has no trading guardrails, by operator decision. The edge /
   market-evidence minimum, friction cap, speculative mode, loss-streak limit,
   trade cooldown, daily trade cap, proven-edge gate, rules-engine decision mode,
@@ -154,7 +156,12 @@ driven project.
   targets), updates the default exit plan to `atr=3.5:1h,deadline=360`, and
   replaces the `"Holding is a decision, not a default"` line in the system
   prompt with asymmetric regime/swing guidance (information and guidance only,
-  never a blocking gate).
+  never a blocking gate). Tag `bot-spot-v14-agentic` (operator decision
+  2026-10-19) changes only information in the cycle message: live, the
+  exit-plan section ends with the real results of the positions a plan sold
+  ("positions sold by a plan: N (W wins), net X USDT after fees") instead of
+  "plan vs your own exits", which in live mode only measured trigger price
+  against fill.
 - Bot Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

@@ -19,8 +19,10 @@ use crate::scope::ScopeConfig;
 /// (2026-10-18, LOOP_MONEY section B): information-only changes to the cycle message.
 /// v13 (2026-10-18, Phase 47): 20-coin market breadth in the cycle prompt, hold-duration and
 /// +4h entry timing in "Your record", liquid-leader candidate filtering, and asymmetric
-/// regime/swing guidance in the system prompt.
-pub const PROMPT_VERSION: &str = "bot-spot-v13-agentic";
+/// regime/swing guidance in the system prompt. v14 (2026-10-19, operator decision): live, the
+/// exit-plan section ends with the real results of the positions a plan sold instead of
+/// "plan vs your own exits" (in live mode only trigger price vs fill).
+pub const PROMPT_VERSION: &str = "bot-spot-v14-agentic";
 /// The only accepted value of `BOT_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 

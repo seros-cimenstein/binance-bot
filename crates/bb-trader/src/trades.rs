@@ -501,6 +501,15 @@ pub fn hold_buckets(trades: &[Trade]) -> HoldBuckets {
     }
 }
 
+/// [`RecordWindow`] of the closed coin trades a live exit-plan sell closed.
+pub fn plan_sold(trades: &[Trade]) -> RecordWindow {
+    let closed: Vec<&Trade> = trades
+        .iter()
+        .filter(|t| t.closed_by_plan && matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
+        .collect();
+    summarize_closed(&closed)
+}
+
 #[cfg(test)]
 mod tests {
     use rust_decimal_macros::dec;

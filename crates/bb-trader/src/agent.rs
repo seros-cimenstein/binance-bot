@@ -1980,6 +1980,7 @@ mod tests {
                 from_30_to_60m: window(9, 3, dec!(0.017), dec!(0.14), 42.0),
                 over_60m: window(10, 7, dec!(0.692), dec!(0.16), 74.0),
             },
+            by_plan: window(9, 6, dec!(0.394), dec!(0.12), 54.0),
             entry_timing: Some(crate::entry_timing::EntryTimingSummary {
                 entries: 30,
                 rose_before: 30,

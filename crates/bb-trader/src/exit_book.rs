@@ -18,6 +18,7 @@ use serde_json::Value;
 
 use crate::exit_plan::{AtrTimeframe, ExitPlan, Fade, Slowdown, Stretch, TakePart, Trail};
 use crate::memory::value_decimal;
+use crate::trades::RecordWindow;
 
 pub const DEFAULT_EXIT_PLANS_PATH: &str = "data/bot-spot-exit-plans.json";
 pub const DEFAULT_EXIT_WATCH_STATE_PATH: &str = "data/bot-spot-exit-watch-state.json";
@@ -441,8 +442,16 @@ fn closed_line(view: &ClosedView, live: bool) -> String {
 /// Cycle-prompt section on exit plans; empty when there is nothing to show. Lists every
 /// running plan (the bot's or the default), the bot's plans not picked up yet, and the
 /// newest closed positions with the rule that sold and the result after fees.
-/// `watcher_stale_ms` marks the watcher as not running when its state is older.
-pub fn prompt_section(paths: &ExitPaths, now_ms: i64, watcher_stale_ms: i64, live: bool) -> String {
+/// `watcher_stale_ms` marks the watcher as not running when its state is older. Live, the
+/// closing line gives `plan_sold` (the audit's positions a plan sold, after fees; `None`
+/// when the audit could not be read); on paper it compares the plans with the bot's exits.
+pub fn prompt_section(
+    paths: &ExitPaths,
+    now_ms: i64,
+    watcher_stale_ms: i64,
+    live: bool,
+    plan_sold: Option<&RecordWindow>,
+) -> String {
     let book = PlanBook::load(&paths.plans).unwrap_or_default();
     let state = WatchState::load(&paths.state);
     let waiting: Vec<&PlanEntry> = book
@@ -484,7 +493,17 @@ pub fn prompt_section(paths: &ExitPaths, now_ms: i64, watcher_stale_ms: i64, liv
     for view in state.recent_closed.iter().rev() {
         let _ = writeln!(out, "{}", closed_line(view, live));
     }
-    if state.closed_trials > 0 {
+    if live {
+        if let Some(sold) = plan_sold.filter(|sold| sold.trips > 0) {
+            let _ = writeln!(
+                out,
+                "- positions sold by a plan: {} ({} wins), net {} USDT after fees",
+                sold.trips,
+                sold.wins,
+                sold.net_usdt.round_dp(4).normalize()
+            );
+        }
+    } else if state.closed_trials > 0 {
         let _ = writeln!(
             out,
             "- closed positions with a plan: {}; plan vs your own exits: {} USDT",
@@ -582,7 +601,7 @@ mod tests {
             };
             Some(dir.path().join(file).display().to_string())
         });
-        assert_eq!(prompt_section(&paths, 10_000, 60_000, false), "");
+        assert_eq!(prompt_section(&paths, 10_000, 60_000, false, None), "");
 
         let ena = entry("ENA", 2_000);
         let op = entry("OP", 3_000);
@@ -639,7 +658,7 @@ mod tests {
         });
         state.save(&paths.state).unwrap();
 
-        let section = prompt_section(&paths, 10_000, 60_000, false);
+        let section = prompt_section(&paths, 10_000, 60_000, false, None);
         assert!(section.contains("- ENA trail=3 (entry 0.2): peak 0.21, sell line 0.2037, last bid 0.203, would have sold 100% at 0.2036 (follow_peak, 00:00:08)"), "{section}");
         assert!(
             section.contains("- SOL trail=3 (entry 0.2, set 00:00:04): waiting for the watcher"),
@@ -648,9 +667,24 @@ mod tests {
         assert!(!section.contains("OP"), "{section}");
         assert!(section.contains("closed positions with a plan: 2; plan vs your own exits: 0.125"));
         assert!(!section.contains("watcher not running"));
-        assert!(prompt_section(&paths, 100_000, 60_000, false).contains("watcher not running"));
+        assert!(prompt_section(&paths, 100_000, 60_000, false, None).contains("watcher not running"));
 
-        let live = prompt_section(&paths, 10_000, 60_000, true);
+        // Live: the comparison line (in live mode only trigger vs fill) gives way to the
+        // audit's real results of the positions a plan sold.
+        let sold = RecordWindow {
+            trips: 9,
+            wins: 6,
+            net_usdt: dec!(0.39434),
+            ..RecordWindow::default()
+        };
+        let live = prompt_section(&paths, 10_000, 60_000, true, Some(&sold));
+        assert!(
+            live.contains("- positions sold by a plan: 9 (6 wins), net 0.3943 USDT after fees"),
+            "{live}"
+        );
+        assert!(!live.contains("plan vs your own exits"), "{live}");
+        let unknown = prompt_section(&paths, 10_000, 60_000, true, None);
+        assert!(!unknown.contains("positions sold by a plan") && !unknown.contains("plan vs your own exits"), "{unknown}");
         assert!(
             live.contains("LIVE: the trader sells a position when its plan fires"),
             "{live}"

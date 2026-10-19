@@ -409,9 +409,11 @@ Cost control (not a trading gate): `BOT_SPOT_MAX_DAILY_LLM_COST_USD`
 can resolve to another provider), `BOT_SPOT_THINKING` (default `high`).
 
 Model failover: `BOT_SPOT_FALLBACK_MODELS` (comma list of
-`provider/model-id[:thinking]`, default empty = off; the approved chain is
-`openai-codex/gpt-6.1-sol` at `high` then
-`google-antigravity/gemini-4-argon-high:high`; use the exact id from
+`provider/model-id[:thinking]`, default empty = off; empty on the Pi since
+2026-10-19 by operator decision, so the trader runs on
+`openai-codex/gpt-6.1-sol` at `high` alone, with `retry.modelFallback: false`
+in `omp-agent/config.yml`; a new fallback needs an operator decision; use the
+exact id from
 `omp models <provider>` inside the container, the trader's switch does no fuzzy
 matching), `BOT_SPOT_PRIMARY_TIMEOUT_SECONDS` (150,
 primary per-attempt timeout while fallbacks exist),
@@ -532,9 +534,9 @@ the persistent data volume, so the login survives container recreation.
 docker compose run --rm -it bot-spot omp
 ```
 
-The brain chain (`BOT_SPOT_MODEL` then `BOT_SPOT_FALLBACK_MODELS`) needs
+The brain (`BOT_SPOT_MODEL`, plus `BOT_SPOT_FALLBACK_MODELS` when set) needs
 one login per provider in that same directory: `openai-codex` (device flow)
-and `google-antigravity` (`anthropic` too while omp's own chains use it).
+today; `google-antigravity` was the fallback's login until 2026-10-19.
 `omp usage` inside the container shows each account's 5-hour and 7-day
 allowance.
 

@@ -1003,6 +1003,7 @@ impl Trader {
             bb_core::time::now_ms(),
             EXIT_WATCHER_STALE_MS,
             config.exit.live,
+            context.trade_record.as_ref().map(|record| &record.by_plan),
         ));
         let agent = self.agent().await?;
         agent.prepare_cycle().await;

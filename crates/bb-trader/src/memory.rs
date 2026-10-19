@@ -13,7 +13,7 @@ use bb_core::money::{BPS_PER_UNIT, to_f64};
 
 use crate::trades::{
     HoldBuckets, Mark, RecordWindow, RouteRecord, Trade, TradeStatus, build_trades, hold_buckets,
-    record_window, route_record,
+    plan_sold, record_window, route_record,
 };
 
 /// Python reads the last 500 audit lines.
@@ -188,6 +188,8 @@ pub struct TradeRecord {
     pub all_time: RecordWindow,
     pub last_7_days: RecordWindow,
     pub by_hold: HoldBuckets,
+    /// Closed trades a live exit-plan sell closed (all time).
+    pub by_plan: RecordWindow,
     /// How the price moved around the bot's entries (filled in by the cycle; needs candles).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_timing: Option<crate::entry_timing::EntryTimingSummary>,
@@ -206,6 +208,7 @@ impl TradeRecord {
             all_time: record_window(&trades, None),
             last_7_days: record_window(&trades, Some(now - chrono::Duration::days(7))),
             by_hold: hold_buckets(&trades),
+            by_plan: plan_sold(&trades),
             entry_timing: None,
         }
     }
@@ -502,13 +505,16 @@ pub(crate) mod tests {
 
     #[test]
     fn record_counts_closed_coin_trades_after_fees_all_time_and_last_7_days() {
+        let mut aave_plan_sell =
+            filled_row("2026-10-17T10:30:00Z", "AAVE", "USDT", "0.052", "7.98668", 0.0000083);
+        aave_plan_sell["cycle_id"] = json!(crate::cycle::EXIT_CYCLE_ID);
         let rows = vec![
             // 2026-10-01: a loss, outside the 7-day window.
             filled_row("2026-10-01T10:00:00Z", "USDT", "SOL", "1", "10", 0.00001),
             filled_row("2026-10-01T11:00:00Z", "SOL", "USDT", "1", "9.9", 0.00001),
-            // 2026-10-17: a win held 30 minutes, then a buy still open.
+            // 2026-10-17: a win held 30 minutes, sold by an exit plan, then a buy still open.
             filled_row("2026-10-17T10:00:00Z", "USDT", "AAVE", "0.052", "7.93728", 0.0000083),
-            filled_row("2026-10-17T10:30:00Z", "AAVE", "USDT", "0.052", "7.98668", 0.0000083),
+            aave_plan_sell,
             filled_row("2026-10-17T11:00:00Z", "USDT", "BCH", "0.028", "7.7616", 0.0000083),
             json!({"status": "held", "row_type": "cycle_summary"}),
         ];
@@ -537,6 +543,11 @@ pub(crate) mod tests {
         assert_eq!(
             (record.by_hold.over_60m.trips, record.by_hold.over_60m.wins),
             (1, 0)
+        );
+        // Only the AAVE sale was a plan sell.
+        assert_eq!(
+            (record.by_plan.trips, record.by_plan.wins, record.by_plan.net_usdt),
+            (1, 1, dec!(0.03778))
         );
     }
 
