@@ -5,6 +5,72 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-19 (13:10 UTC): Phase 45 live exit-plan review (`LOOP_BOT_HEALTH.md`
+  A1; analysis only, no config change). All 33 coin round trips opened since
+  live exit plans went on (2026-10-15 09:17:34 UTC) are closed (= the watch
+  state's `closed_trials` 33). Commands: `ssh pi-wired 'cd
+  binance-bot/docker-data && python3 -' < a1_review.py` (throwaway, not
+  kept: reads `bot-spot-decisions.jsonl` read-only; per coin, `route` rows'
+  `submitted_legs` filled `/USDT` buys open a trip and sells close it when
+  under 1% of the bought quantity is left; a sell row with `cycle_id`
+  `exit-plan` counts as a plan sell, its plan/rule parsed from the reason;
+  fees in BNB at the current 729.38 USDT, as `bb_trader::trades` does), and
+  `ssh pi-wired 'docker exec bot-spot bb bot-spot-exit-watch --summary'`
+  (prints the watch log and returns before any watcher starts,
+  `exit_watch.rs:706-709`). Periods by the default plan in force at entry
+  (deploy times from this file and the audit's `prompt_version` /
+  `run_config.exit_plans`):
+
+  | period | sold by | trips | wins | net USDT | mean net % | mean hold min |
+  |---|---|---:|---:|---:|---:|---:|
+  | P1 v7, default `stretch=2:1,atr=3:1h` + bot plans (10-15 09:17 → 10-16 17:54) | plan | 4 | 3 | +0.3227 | +0.90% | 65 |
+  | P1 | bot | 6 | 3 | +0.4157 | +0.74% | 69 |
+  | P2 v8, fixed `atr=3:1h,stretch=2:1` (→ 10-17 07:45) | plan | 4 | 2 | +0.0119 | +0.03% | 34 |
+  | P2 | bot | 5 | 0 | -0.3588 | -0.76% | 27 |
+  | P3 v9/v10, locked rules (→ 10-17 12:27) | — | 0 | | | | |
+  | P4 v11/v12, default `deadline=120` + bot plans (→ 10-18 14:02) | plan | 1 | 1 | +0.0597 | +0.76% | 90 |
+  | P4 | bot | 10 | 3 | -0.3393 | -0.43% | 44 |
+  | P5 v13, default `atr=3.5:1h,deadline=360` + bot plans (→ now) | bot | 3 | 1 | +0.0204 | +0.09% | 187 |
+  | all | plan | 9 | 6 | +0.3943 | +0.49% | 54 |
+  | all | bot | 24 | 7 | -0.2621 | -0.14% | 65 |
+
+  - The 4 default-plan sells were all `stretch` and sold near break-even
+    (ENA +0.01%, UNI -0.03%, UNI +0.14%, NEAR +0.08%; +0.019 USDT together).
+    The other 5 plan sells were the bot's own plans (NEAR `deadline=120`
+    +0.225, LDO `deadline=60` +0.101, RENDER `deadline=60` -0.004, ZEC
+    `atr=3:1h,stretch=2.5:1` -0.006 (entry 07:44, one minute before the v9
+    deploy), AAVE `deadline=90` +0.060): +0.375 USDT.
+  - No plan has sold since 2026-10-17 18:53 UTC. In P4 the bot put its own
+    `deadline=90` on every trip and in P5 `deadline=480` (overriding the
+    default each time), then sold before the deadline itself.
+  - Plan-sold and bot-sold trips are different trips, so these rows are not
+    a counterfactual. The watcher's `plan_vs_bot_usdt` (-0.0397) is not one
+    either in live mode: `exit_watch.rs:344-369` takes the trip's real exit
+    as "the bot alone", and for a plan-sold trip that is the plan's own sell,
+    so the figure is trigger price vs actual fill minus the modelled
+    slippage on the 9 plan sells (every non-zero row of the summary is a
+    plan-sold trip). The cycle prompt shows it to the bot as "plan vs your
+    own exits" (`exit_book.rs:487-493`). Added as `LOOP_BOT_HEALTH.md` A2.
+  - Verdict: the sample is small (9 plan sells over 4 days, none in the last
+    44 h). The deadline holds the bot set itself were the plan sells that
+    paid; the default `stretch` sells were flat. No change to the default
+    plan (that needs an operator decision).
+- 2026-10-19 (12:50 UTC): Health check (operator: "check the project and
+  bots last behaviours"; no code or config change). Pi `bot-spot` and
+  `scheduler` up 23 h on the Phase 47 deploy, `RestartCount=0`, no stop
+  file, no failed-route halt; one WARN since deploy (the expected
+  removed-guardrail notice). 63 cycles since 14:02 UTC (~21-min cadence),
+  all on gpt-6.1-sol, all turns completed, no fallback. 57 held, 3 round
+  trips (half the cash, ~7.9 USDT each): SOL 22:20->04:02 `+0.131` net
+  (5h42m), SOL 04:45->08:00 `-0.013` (3h15m), WLD 08:47->09:09 `-0.097`
+  (22 min); net `+0.021 USDT` after BNB fees, all sold by the bot (no
+  exit-plan sell). Since 09:10 in cash (15.15 USDT, wallet ~17.83 USDT).
+  13 OpenAI remote compactions at ~150-164K tokens (every ~1.5-2 h); the
+  logged `tokens_after=3549`/`summary_chars=111` is the local placeholder,
+  the session records `tokensAfter` ~97K (history kept provider-side, the
+  bot cites earlier cycles). Nightly backup ran 23:45 UTC. Phase 43
+  collector still not deployed on the Pi (snapshotter finds no due
+  snapshots each minute).
 - 2026-10-18 (14:05 UTC): Phase 47 (`IMPLEMENTATION_PLAN.md`: Market-Regime
   Breadth, Liquid Universe & Asymmetric Swing Holding; operator approved all
   steps):

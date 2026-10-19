@@ -992,7 +992,9 @@ Step 3, live (operator decision 2026-10-15: live now, without the paper week):
   `stretch=2:1,atr=3:1h` for positions opened from
   `BOT_SPOT_DEFAULT_EXIT_PLAN_FROM`; partial sells keep the position open;
   failed sells before any order retry up to 3 times.
-- [ ] Review after about a week: live plan sells vs the bot's own exits.
+- [x] Review after about a week: live plan sells vs the bot's own exits
+  (2026-10-19, after 4 days and 33 trips because the default plan changed
+  three times; `PROGRESS.md` entry "2026-10-19 (13:10 UTC)").
 
 Step 4, one fixed plan (operator decision 2026-10-16, after the 67-plan
 backtest on all 3 audits: `atr=3:1h,stretch=2:1` lost least, and the bot's
