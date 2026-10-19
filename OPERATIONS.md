@@ -354,7 +354,13 @@ the paper-only pool.
   `BOT_SPOT_SESSION_DIR` and resumed after restarts and crashes. omp
   auto-compaction stays on and the bot also compacts at
   `BOT_SPOT_COMPACT_AT_PERCENT` or `BOT_SPOT_COMPACT_AT_TOKENS` (deployed
-  150000), logging `compacted trader context tokens_before=… tokens_after=…`.
+  150000), logging `compacted trader context tokens_before=… tokens_after=…
+  local_tokens_after=… method=… short_summary=…`. `tokens_after` and
+  `method` are what omp's `compact` reply carries (omp 18.8-18.12 send
+  neither, so `None`); `local_tokens_after` is omp's count of the local
+  transcript, which after a remote compaction (`short_summary="Remote
+  compaction"`) is only a small placeholder: the provider keeps the history
+  and the session file's `compaction` entry records the real `tokensAfter`.
   The bot's theses survive compaction in the journal at
   `BOT_SPOT_JOURNAL_PATH`.
 - **Host tools plus web search.** omp runs with all built-in tools disabled

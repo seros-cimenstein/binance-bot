@@ -613,7 +613,8 @@ pub struct TraderAgent {
     route_calls: Arc<AtomicU64>,
     /// Compaction failures of the current cycle that moved it to another model.
     cycle_attempts: Vec<AttemptEntry>,
-    /// Context tokens before and after the last successful [`Self::maybe_compact`].
+    /// Context tokens before and after the last successful [`Self::maybe_compact`], as omp
+    /// reports them in the `compact` reply (after: `None` when omp does not send it).
     pub last_compaction: Option<(Option<u64>, Option<u64>)>,
     /// Model switch notices for the operator, sent after the cycle's audit row.
     notices: Vec<String>,
@@ -957,7 +958,10 @@ impl TraderAgent {
             let model = self.current_model();
             let error = match self.session.compact(Some(COMPACT_INSTRUCTIONS)).await {
                 Ok(result) => {
-                    let after = match self.session.state().await {
+                    // omp's own count of the local transcript. After a remote compaction the
+                    // provider keeps the history, so this is only the local placeholder, not
+                    // the context the model sees: logged apart from omp's `tokens_after`.
+                    let local_after = match self.session.state().await {
                         Ok(state) => {
                             self.observe_state(&state);
                             state.context_usage.as_ref().and_then(|usage| usage.tokens)
@@ -970,12 +974,15 @@ impl TraderAgent {
                     let before = result.tokens_before.or(tokens);
                     tracing::info!(
                         tokens_before = ?before,
-                        tokens_after = ?after,
+                        tokens_after = ?result.tokens_after,
+                        local_tokens_after = ?local_after,
+                        method = ?result.method,
+                        short_summary = ?result.short_summary,
                         summary_chars = result.summary.as_deref().map_or(0, str::len),
                         %model,
                         "compacted trader context"
                     );
-                    self.last_compaction = Some((before, after));
+                    self.last_compaction = Some((before, result.tokens_after));
                     return;
                 }
                 Err(error) => error,
@@ -1293,15 +1300,21 @@ mod tests {
         }
 
         async fn compact(&mut self, error: Option<&str>) {
+            match error {
+                Some(error) => {
+                    let (rid, frame) = self.expect("compact").await;
+                    assert_eq!(frame["customInstructions"], COMPACT_INSTRUCTIONS);
+                    self.fail(&rid, "compact", error).await;
+                }
+                // The reply omp 18.8-18.12 send: no `tokensAfter`.
+                None => self.compact_reply(json!({"summary": "s", "tokensBefore": 1})).await,
+            }
+        }
+
+        async fn compact_reply(&mut self, reply: Value) {
             let (rid, frame) = self.expect("compact").await;
             assert_eq!(frame["customInstructions"], COMPACT_INSTRUCTIONS);
-            match error {
-                Some(error) => self.fail(&rid, "compact", error).await,
-                None => {
-                    self.respond(&rid, "compact", json!({"summary": "s", "tokensBefore": 1}))
-                        .await;
-                }
-            }
+            self.respond(&rid, "compact", reply).await;
         }
 
         /// Prompt acknowledged; returns its id.
@@ -1721,18 +1734,39 @@ mod tests {
             // 120K tokens is only 12% of a 1M window, but over the 100K token threshold.
             server.state(PRIMARY, 120_000, 1_000_000).await;
             server.compact(None).await;
-            // The size after compaction is read back and logged.
+            // omp's local count after the compaction (the remote placeholder on the Pi).
             server.state(PRIMARY, 41_000, 1_000_000).await;
             // Below both thresholds: no compaction.
             server.state(PRIMARY, 60_000, 1_000_000).await;
             server.quiet().await;
         });
         agent.maybe_compact().await;
-        // omp reports tokensBefore 1 in the fake reply; the after size comes from get_state.
-        assert_eq!(agent.last_compaction, Some((Some(1), Some(41_000))));
+        // omp's reply has tokensBefore 1 and no tokensAfter: the local count is not taken
+        // as the size after compaction.
+        assert_eq!(agent.last_compaction, Some((Some(1), None)));
         agent.last_compaction = None;
         agent.maybe_compact().await;
         assert_eq!(agent.last_compaction, None);
+        script.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn compaction_keeps_the_after_size_omp_reports_not_the_local_count() {
+        let config = config(&[("BOT_SPOT_COMPACT_AT_TOKENS", "100000")]);
+        let (mut agent, script) = attach(&config, true).await;
+        let (mut server, _) = script.await.unwrap();
+        let script = tokio::spawn(async move {
+            server.state(PRIMARY, 161_805, 1_000_000).await;
+            server
+                .compact_reply(json!({"summary": "s", "shortSummary": "Remote compaction",
+                    "tokensBefore": 161_805, "tokensAfter": 97_323, "method": "remote"}))
+                .await;
+            // A remote compaction leaves only a small local transcript.
+            server.state(PRIMARY, 3_549, 1_000_000).await;
+            server.quiet().await;
+        });
+        agent.maybe_compact().await;
+        assert_eq!(agent.last_compaction, Some((Some(161_805), Some(97_323))));
         script.await.unwrap();
     }
 

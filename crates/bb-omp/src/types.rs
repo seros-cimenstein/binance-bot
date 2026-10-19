@@ -333,16 +333,25 @@ pub struct OpenSessionResult {
     pub session_file: Option<String>,
 }
 
-/// `compact` result (`CompactionResult`).
+/// `compact` result (`CompactionResult`). omp 18.8-18.12 send `summary`, `shortSummary`,
+/// `firstKeptEntryId`, `tokensBefore`, `details` and `preserveData`; `tokensAfter` and
+/// `method` are written only to the session file, so they stay `None` unless a later omp
+/// sends them. `shortSummary` names the method in practice ("Remote compaction").
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompactResult {
     #[serde(default)]
     pub summary: Option<String>,
     #[serde(default)]
+    pub short_summary: Option<String>,
+    #[serde(default)]
     pub first_kept_entry_id: Option<String>,
     #[serde(default)]
     pub tokens_before: Option<u64>,
+    #[serde(default)]
+    pub tokens_after: Option<u64>,
+    #[serde(default)]
+    pub method: Option<String>,
 }
 
 #[cfg(test)]
