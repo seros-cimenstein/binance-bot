@@ -5,6 +5,35 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-19 (13:40 UTC): Live plan-sold positions are no longer compared
+  with themselves (`LOOP_BOT_HEALTH.md` A2; observability only, the trader's
+  prompt and orders unchanged). Cause: in live mode the watcher closes a
+  trial on the position's real exit, and when a live plan sell closed it,
+  "the bot alone" was the plan's own fill, so `plan_vs_bot_usdt` only
+  measured trigger vs fill (the 9 non-zero rows of 33 on the Pi). Now
+  `ActualExit.by_plan` (closing row `cycle_id` `exit-plan`) makes
+  `Watcher::close` write `closed_by_plan`, `exit_net_pct` and
+  `fill_vs_trigger_usdt` instead and add nothing to `plan_vs_bot_usdt`;
+  `exit_replay::plan_exit_key` / `exit_watch::closed_by_plan` mark older log
+  rows by matching the audit's `exit-plan` sells (read-only, no file
+  rewritten). `--summary` (now also reads `BOT_SPOT_AUDIT_PATH`) lists them
+  as `plan (live)` outside the plan-vs-bot total; the Exits tab shows "Sold
+  by the plan (live) · net …". The cycle prompt's "plan vs your own exits"
+  line and the state total (-0.039677) are unchanged (A3, operator
+  decision). Tests: 4 new (watcher, summary, round trips, Exits view);
+  `cargo test --workspace` 1009 passed, clippy clean, smoke ok. Smoke on Pi
+  data: `--summary` marks exactly the 9 plan-sold trips; the Exits tab on a
+  `scripts/cryptobot_gui_pi.sh` mirror (port 8797) shows "Sold by the plan
+  (live)" rows, Plan sells +$0.394, no page errors. Deployed 13:33:48 UTC
+  right after the 13:33:40 cycle (cash, no position): rollback tag
+  `binance-bot:pre-a2-20261019`, build 13m56s, `RestartCount=0`, "live exit
+  plans enabled", "keeping the cycle cadence wait_seconds=1191"; in the
+  container `bb bot-spot-exit-watch --summary` prints "Closed by a live plan
+  sell: 9". First cycle after the deploy: 13:54:49 UTC `held`,
+  `bot-spot-v13-agentic`, same `run_config.exit_plans`, still
+  `RestartCount=0`, the only non-INFO log line is the known guardrail WARN
+  (B1). Release `cryptobot-gui` rebuilt on the laptop; restart the running
+  dashboard to serve the new Exits tab.
 - 2026-10-19 (13:10 UTC): Phase 45 live exit-plan review (`LOOP_BOT_HEALTH.md`
   A1; analysis only, no config change). All 33 coin round trips opened since
   live exit plans went on (2026-10-15 09:17:34 UTC) are closed (= the watch
