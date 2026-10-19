@@ -39,10 +39,11 @@ const LIMIT_MARKERS: [&str; 8] = [
     "quota",
 ];
 
-/// Upper bound for one compaction (omp's default is 600s, which stalls the cycle). Remote
-/// compactions on gpt-6.1-sol took 136-175s on 2026-10-19 and one took 198s; at 180s that
-/// one timed out, finished inside omp anyway and still sent the turn to the fallback.
-pub const COMPACT_TIMEOUT: Duration = Duration::from_secs(360);
+/// Upper bound for one compaction (omp's own default). Remote compactions on gpt-6.1-sol
+/// took 136-175 s on 2026-10-19, but also 198 s (15:43) and 468 s (17:11): both finished
+/// inside omp after the trader had given up at 180 s / 360 s, and the cycle then went to a
+/// fallback model. A slow compaction only delays the cycle; giving up early wastes it.
+pub const COMPACT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Instructions for `compact` when the context fills up.
 pub const COMPACT_INSTRUCTIONS: &str = "You are compacting the context of an autonomous Binance Spot trader. \
