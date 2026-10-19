@@ -5,6 +5,41 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-19 (16:15 UTC): `LOOP_BOT_HEALTH.md` B2, B3, C1, D1, E1.
+  - B2 compaction log: omp's RPC `compact` reply carries no `tokensAfter`
+    or `method` (checked in the Pi's omp 18.8.9 `dist/cli.js` and the
+    laptop's 18.12.2: the result object is `summary, shortSummary,
+    firstKeptEntryId, tokensBefore, details, preserveData`; `tokensAfter` is
+    only written to the session file). `CompactResult` now reads
+    `shortSummary`, `tokensAfter`, `method`; the log line is `tokens_before
+    tokens_after (omp's, None today) local_tokens_after (omp's local count:
+    the 3549-token placeholder after a remote compaction) method
+    short_summary`, and `last_compaction` keeps omp's after size, never the
+    local count (tests for both reply shapes). Deployed 14:40:33 UTC
+    (tag `binance-bot:pre-b2-20261019`), startup with no WARN (B1 applied).
+  - B3: the first compaction on that image (15:43:59) hit the 180 s
+    `COMPACT_TIMEOUT`; omp finished it at 15:47:17 anyway (198 s, remote,
+    151273 → 103199), the late reply was dropped as "uncorrelated", the
+    turn moved to argon, argon answered `429 Individual quota reached`, and
+    the turn went back to sol. Completed compactions earlier on 10-19 took
+    136-175 s. `COMPACT_TIMEOUT` is now 360 s. Deployed 16:09:36 UTC right
+    after the 16:09:27 cycle (tag `binance-bot:pre-b3-20261019`),
+    `restarts=0`, no WARN. For the operator: the argon fallback was out of
+    quota at 15:47 (adding or changing a model needs an operator decision).
+  - C1: `docker builder prune -f --filter until=72h` freed 8.95 GB (build
+    cache 40.11 → 31.15 GB, disk 81% → 78%, 51 GB free); all 23 image tags
+    kept.
+  - D1: the X collector image now fails its build when `camoufox fetch`
+    installs nothing (it exits 0 on a GitHub API 403 rate limit, which is
+    what the first Pi build hit). Rebuilt after the hourly reset:
+    `binance-bot-x-camoufox:latest` 5.68 GB on arm64; a one-off run launched
+    the browser headless (156.0.1-beta.36, `about:blank`, page size 16384)
+    on the stock 16K-page kernel, so no `kernel8.img`. Not started, no
+    login, no profile written.
+  - E1: `AGENTS.md` active-work line rewritten; the Phase 45 paper-week item
+    marked superseded.
+  - Verification: `cargo test --workspace` 1010 passed, clippy and smoke
+    exit 0, collector `uv run pytest` 86 passed.
 - 2026-10-19 (14:02 UTC): Removed the 10 ignored guardrail variables from
   both `.env.docker` files (`LOOP_BOT_HEALTH.md` B1; config only, no code).
   Backups `.env.docker.bak-20261019T135923Z-pre-b1` on the Pi and the
