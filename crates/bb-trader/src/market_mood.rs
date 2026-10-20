@@ -257,6 +257,18 @@ fn score(horizons: &[HorizonBreadth]) -> Option<f64> {
         })
 }
 
+/// Every horizon's breadth and the weighted score at 15m bar open time `t`, from each
+/// coin's 15m closes keyed by open time: the same numbers [`mood`] reports for its newest
+/// bar, at any time. The Phase 48 persona backtest scores past times with it.
+pub fn breadth_score_at(
+    closes: &[HashMap<i64, f64>],
+    t: i64,
+) -> (Vec<HorizonBreadth>, Option<f64>) {
+    let horizons = breadth_at(closes, t);
+    let score = score(&horizons);
+    (horizons, score)
+}
+
 /// The mood from each basket coin's 15m candles (oldest first). The newest open time across
 /// the basket is "now"; coins without a candle at a time are left out of that time.
 pub fn mood(series: &[(String, Vec<Kline>)], fetched_at: String) -> MarketView {
@@ -526,6 +538,38 @@ mod tests {
             .collect();
         assert_eq!(coins, vec![2, 2, 1, 1]);
         assert_eq!(view.coins[1].returns_pct[2], None);
+    }
+
+    #[test]
+    fn breadth_score_at_matches_mood_now_and_scores_past_times() {
+        // A dip at the end of a rally, plus a coin listed 2h ago.
+        let mut dip = trend(0.5);
+        let n = dip.len();
+        let peak = dip[n - 5];
+        for (k, close) in dip[n - 4..].iter_mut().enumerate() {
+            *close = peak * (1.0 - 0.005 * (k as f64 + 1.0));
+        }
+        let series = vec![
+            ("A".into(), candles(&dip, END)),
+            ("B".into(), candles(&trend(-0.2)[184..], END)),
+        ];
+        let view = mood(&series, String::new());
+        let closes: Vec<HashMap<i64, f64>> = series
+            .iter()
+            .map(|(_, k)| k.iter().map(|k| (k.open_time, float(k.close))).collect())
+            .collect();
+
+        let (horizons, score) = breadth_score_at(&closes, END);
+        assert_eq!(horizons, view.horizons);
+        assert_eq!(score, view.score);
+
+        // Every point of mood's 24h history is the score at that past time.
+        for point in &view.history {
+            assert_eq!(breadth_score_at(&closes, point.t).1, Some(point.score));
+        }
+        // Before the dip, A was rising on every horizon.
+        let (before, _) = breadth_score_at(&closes, END - 4 * BAR_MS);
+        assert_eq!(before.iter().map(|h| h.up).sum::<usize>(), 4);
     }
 
     #[test]

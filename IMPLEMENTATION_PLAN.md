@@ -1225,7 +1225,7 @@ Step 1, backtest foundation:
 - [x] Add a Phase 48 section to the roadmap (this section; ledger A1).
 - [x] Add an offline loader for the 1m entry-study cache, with 15m/1h
   aggregation, trailing 24h quote volume and window returns (A2).
-- [ ] Add a public point-in-time breadth score in `market_mood.rs`. This is an
+- [x] Add a public point-in-time breadth score in `market_mood.rs`. This is an
   additive change; `mood()` stays unchanged (A3).
 - [ ] Add a portfolio engine with these parts (A4):
   - a step clock and a `Persona` trait;
