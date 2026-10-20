@@ -1300,7 +1300,7 @@ Step 2, backtest:
 
 Step 3, live:
 
-- [ ] Add the live GCP2 reader in the trader cycle (C1).
+- [x] Add the live GCP2 reader in the trader cycle (C1).
 - [ ] Add per-cycle schizo state with persisted mood, GCP2 dice, votes and the
   audit field (C2).
 - [ ] Add prompt `bot-spot-v15-schizo` (C3).

@@ -90,6 +90,8 @@ pub struct Runtime {
     pub journal: Journal,
     pub evidence: EvidenceService,
     pub social: Option<SocialSettings>,
+    /// Live GCP2 reader (`None` unless `BOT_SPOT_GCP2_ENABLED`).
+    pub gcp2: Option<crate::gcp2::Gcp2LiveReader>,
     pub(crate) cycle: Mutex<Option<CycleState>>,
     shutting_down: AtomicBool,
     /// Final-order poll interval (1 s live).
@@ -119,6 +121,9 @@ impl Runtime {
             client,
             alerter,
             social,
+            gcp2: config.gcp2_enabled.then(|| {
+                crate::gcp2::Gcp2LiveReader::new(&config.gcp2_base_url, crate::gcp2::LIVE_TIMEOUT)
+            }),
             cycle: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             poll_interval: Duration::from_secs(1),
@@ -196,7 +201,7 @@ impl Runtime {
         Some(record)
     }
 
-    /// Catalog, balances, candidate routes, evidence, social evidence and trade memory.
+    /// Catalog, balances, candidate routes, evidence, social evidence, trade memory and GCP2.
     pub async fn build_snapshot(&self) -> Result<Snapshot> {
         let balances = self.balances().await?;
         let view = self.load_view().await?;
@@ -240,6 +245,10 @@ impl Runtime {
                 );
             }
         }
+        let gcp2 = match &self.gcp2 {
+            Some(reader) => Some(reader.now(crate::audit::utc_timestamp()).await),
+            None => None,
+        };
         let context = DecisionContext {
             timestamp: crate::audit::utc_timestamp(),
             prompt_version: self.config.prompt_version.clone(),
@@ -252,6 +261,7 @@ impl Runtime {
             trade_memory,
             trade_record,
             market_mood,
+            gcp2,
         };
         Ok(Snapshot {
             context,
@@ -1147,6 +1157,7 @@ mod tests {
             trade_memory: runtime.trade_memory(&balances, &view, 8),
             trade_record: None,
             market_mood: None,
+            gcp2: None,
         };
         runtime
             .begin_cycle(

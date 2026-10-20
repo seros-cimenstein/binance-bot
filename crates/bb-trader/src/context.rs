@@ -178,6 +178,9 @@ pub struct DecisionContext {
     pub trade_record: Option<crate::memory::TradeRecord>,
     /// 20-coin liquid USDT crypto market breadth (`None` when disabled or unavailable).
     pub market_mood: Option<crate::market_mood::MarketView>,
+    /// Phase 49 live GCP2 reading (`None` when the reader is off; failures are
+    /// `Gcp2Now::Unavailable`).
+    pub gcp2: Option<crate::gcp2::Gcp2Now>,
 }
 
 impl DecisionContext {
@@ -196,6 +199,7 @@ impl DecisionContext {
             "trade_memory": self.trade_memory,
             "trade_record": self.trade_record,
             "market_mood": self.market_mood,
+            "gcp2": self.gcp2.as_ref().map(crate::gcp2::Gcp2Now::payload),
         })
     }
 

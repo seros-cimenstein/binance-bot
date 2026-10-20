@@ -218,6 +218,9 @@ pub struct TraderConfig {
     pub market_evidence_lookback_hours: u32,
     pub market_evidence_max_symbols: usize,
     pub trade_memory_limit: usize,
+    /// Phase 49: read GCP2 live once per cycle (information for the schizo state).
+    pub gcp2_enabled: bool,
+    pub gcp2_base_url: String,
     // operator scope
     pub scope: ScopeConfig,
 }
@@ -363,6 +366,8 @@ impl TraderConfig {
             market_evidence_max_symbols: env
                 .integer("BOT_SPOT_MARKET_EVIDENCE_MAX_SYMBOLS", 12)?,
             trade_memory_limit: env.integer("BOT_SPOT_TRADE_MEMORY_LIMIT", 8)?,
+            gcp2_enabled: env.boolean("BOT_SPOT_GCP2_ENABLED", false)?,
+            gcp2_base_url: env.string("BOT_SPOT_GCP2_BASE_URL", crate::gcp2::DEFAULT_BASE_URL),
             scope,
         };
         config.validate()?;
@@ -535,6 +540,10 @@ impl TraderConfig {
                 "max_symbols": self.market_evidence_max_symbols,
             },
             "trade_memory_limit": self.trade_memory_limit,
+            "gcp2": {
+                "enabled": self.gcp2_enabled,
+                "base_url": self.gcp2_base_url,
+            },
             "scope": self.scope,
         })
     }

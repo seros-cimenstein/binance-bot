@@ -1,9 +1,10 @@
 //! GCP2 (gcp2.net, Global Consciousness Project 2.0) public data, read-only (Phase 49).
 //!
 //! History: the site's data-download form (no login, no captcha) returns one zipped CSV of
-//! per-second network coherence per month. Colour zones: the same public API the live page
-//! uses, with the bearer token the site publishes in `/js/data/api_token.js`. Nothing here
-//! posts anything other than the download form, logs in, or touches the trader.
+//! per-second network coherence per month. Live: the same public API the live page uses
+//! (per-minute aggregates of the last 24 h, colour zones), with the bearer token the site
+//! publishes in `/js/data/api_token.js`. Nothing here posts anything other than the
+//! download form or logs in.
 
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::error::{Result, TraderError};
 
@@ -24,7 +25,12 @@ const DOWNLOAD_PAGE: &str = "/data-results/data-download";
 const NETWORK_DOWNLOAD: &str = "/data-results/network-coherence-download";
 const TOKEN_SCRIPT: &str = "/js/data/api_token.js";
 const COLOR_ZONES_API: &str = "/api/getcolorzones";
+const AGGREGATE_24H_API: &str = "/api/getNetVarAggregate24H";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(180);
+/// Per-request timeout of the trader's live reads.
+pub const LIVE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How far before the latest minute the live reading's earlier zone is taken.
+const EARLIER_SECONDS: i64 = 20 * 60;
 const MULTIPART_BOUNDARY: &str = "bbgcp2boundary7b3f";
 
 fn http_error(what: &str, e: impl std::fmt::Display) -> TraderError {
@@ -401,6 +407,134 @@ impl Gcp2View {
     }
 }
 
+/// Parse a `getNetVarAggregate24H` reply (`{"aggregates": [{end_epoch, netvar_aggregate}]}`)
+/// into readings, oldest first. `end_epoch` is the last second of the minute's hour.
+pub fn parse_aggregates(body: &Value) -> Result<Vec<Gcp2Reading>> {
+    let list = body
+        .get("aggregates")
+        .and_then(Value::as_array)
+        .ok_or_else(|| TraderError::config("GCP2 aggregates: no `aggregates` list"))?;
+    let mut readings: Vec<Gcp2Reading> = list
+        .iter()
+        .map(|row| {
+            let end = row.get("end_epoch")?;
+            let end_s = end.as_i64().or_else(|| end.as_str()?.trim().parse().ok())?;
+            let units = match row.get("netvar_aggregate")? {
+                Value::String(text) => parse_units(text),
+                Value::Number(n) => parse_units(&n.to_string()),
+                _ => None,
+            }?;
+            Some(Gcp2Reading {
+                end_s,
+                units: units.unsigned_abs(),
+            })
+        })
+        .collect::<Option<_>>()
+        .ok_or_else(|| TraderError::config("GCP2 aggregates: a row lacks end_epoch/value"))?;
+    if readings.is_empty() {
+        return Err(TraderError::config("GCP2 aggregates: empty list"));
+    }
+    readings.sort_by_key(|r| r.end_s);
+    readings.dedup_by_key(|r| r.end_s);
+    Ok(readings)
+}
+
+/// What the trader reads from GCP2 live at a cycle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Gcp2Live {
+    /// The newest minute, in the live colour zones.
+    pub latest: Gcp2View,
+    /// The newest minute at least 20 minutes before `latest` (`None` without one).
+    pub earlier: Option<Gcp2View>,
+    /// The last 24 h of minute readings, oldest first (ends with `latest`).
+    pub minutes: Vec<Gcp2Reading>,
+    /// The colour zones read with it.
+    pub zones: ColorZones,
+}
+
+impl Gcp2Live {
+    /// From parsed minutes (oldest first, see [`parse_aggregates`]) and the live zones.
+    pub fn new(minutes: Vec<Gcp2Reading>, zones: ColorZones) -> Result<Self> {
+        let last = *minutes
+            .last()
+            .ok_or_else(|| TraderError::config("GCP2 aggregates: empty list"))?;
+        let earlier = minutes
+            .iter()
+            .rev()
+            .find(|r| r.end_s <= last.end_s - EARLIER_SECONDS)
+            .map(|r| Gcp2View::from_reading(*r, &zones));
+        Ok(Self {
+            latest: Gcp2View::from_reading(last, &zones),
+            earlier,
+            minutes,
+            zones,
+        })
+    }
+
+    /// Lowest and highest minute value of the last 24 h.
+    pub fn range_24h(&self) -> (f64, f64) {
+        let (low, high) = self
+            .minutes
+            .iter()
+            .fold((u64::MAX, 0), |(lo, hi), r| (lo.min(r.units), hi.max(r.units)));
+        (
+            low as f64 / UNITS_PER_ONE as f64,
+            high as f64 / UNITS_PER_ONE as f64,
+        )
+    }
+}
+
+fn utc_second(end_s: i64) -> String {
+    chrono::DateTime::from_timestamp(end_s, 0).map_or_else(
+        || end_s.to_string(),
+        |t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+}
+
+/// The cycle's GCP2 input: a live reading, or why there is none.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Gcp2Now {
+    Live(Box<Gcp2Live>),
+    /// Any failed read: the cycle runs with "GCP2 unavailable" (no mood switch, no YOLO).
+    Unavailable(String),
+}
+
+impl Gcp2Now {
+    pub fn live(&self) -> Option<&Gcp2Live> {
+        match self {
+            Self::Live(live) => Some(live),
+            Self::Unavailable(_) => None,
+        }
+    }
+
+    /// The cycle-context form (the 24 h minutes as their range, not every value).
+    pub fn payload(&self) -> Value {
+        match self {
+            Self::Live(live) => {
+                let (low, high) = live.range_24h();
+                let latest = &live.latest;
+                json!({
+                    "status": "live",
+                    "minute_end": utc_second(latest.end_s),
+                    "value": latest.value(),
+                    "zone": latest.zone_label,
+                    "zone_index": latest.zone,
+                    "zone_count": latest.zone_count,
+                    "dice": latest.dice,
+                    "earlier": live.earlier.as_ref().map(|e| json!({
+                        "minute_end": utc_second(e.end_s),
+                        "value": e.value(),
+                        "zone": e.zone_label,
+                    })),
+                    "range_24h": {"low": low, "high": high, "minutes": live.minutes.len()},
+                    "zones_fetched_at": live.zones.fetched_at,
+                })
+            }
+            Self::Unavailable(error) => json!({"status": "unavailable", "error": error}),
+        }
+    }
+}
+
 /// Cached GCP2 history plus its colour zones, for point-in-time views.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gcp2Feed {
@@ -442,7 +576,8 @@ impl Gcp2Feed {
     }
 }
 
-/// Reads GCP2's public download form and colour zones.
+/// Reads GCP2's public download form and live API.
+#[derive(Debug)]
 pub struct Gcp2Client {
     http: reqwest::Client,
     base: String,
@@ -450,9 +585,14 @@ pub struct Gcp2Client {
 
 impl Gcp2Client {
     pub fn new(base: impl Into<String>) -> Result<Self> {
+        Self::with_timeout(base, HTTP_TIMEOUT)
+    }
+
+    /// A client whose every request gives up after `timeout`.
+    pub fn with_timeout(base: impl Into<String>, timeout: Duration) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .timeout(HTTP_TIMEOUT)
-            .user_agent("binance-bot gcp2-history (read-only research)")
+            .timeout(timeout)
+            .user_agent("binance-bot gcp2 (read-only)")
             .build()
             .map_err(|e| http_error("client", e))?;
         Ok(Self {
@@ -526,22 +666,104 @@ impl Gcp2Client {
         parse_bearer(&script).ok_or_else(|| TraderError::config("GCP2 token script has no bearer"))
     }
 
-    /// The colour zones with `bearer` (from [`Self::bearer`]).
-    pub async fn color_zones(&self, bearer: &str, fetched_at: String) -> Result<ColorZones> {
-        let body: Value = self
+    /// GET a public API path with `bearer`; `Ok(None)` when the token is refused (401/403).
+    async fn api_json(&self, api: &str, bearer: &str) -> Result<Option<Value>> {
+        let response = self
             .http
-            .get(format!("{}{COLOR_ZONES_API}", self.base))
+            .get(format!("{}{api}", self.base))
             .header(reqwest::header::AUTHORIZATION, bearer)
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
-            .map_err(|e| http_error("colour zones", e))?
+            .map_err(|e| http_error(api, e))?;
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Ok(None);
+        }
+        let body = response
             .error_for_status()
-            .map_err(|e| http_error("colour zones", e))?
+            .map_err(|e| http_error(api, e))?
             .json()
             .await
-            .map_err(|e| http_error("colour zones", e))?;
+            .map_err(|e| http_error(api, e))?;
+        Ok(Some(body))
+    }
+
+    /// The colour zones with `bearer` (from [`Self::bearer`]).
+    pub async fn color_zones(&self, bearer: &str, fetched_at: String) -> Result<ColorZones> {
+        let body = self
+            .api_json(COLOR_ZONES_API, bearer)
+            .await?
+            .ok_or_else(|| http_error(COLOR_ZONES_API, "token refused"))?;
         parse_color_zones(&body, fetched_at)
+    }
+}
+
+/// The trader's live GCP2 reader: one per runtime, so the published token is cached
+/// across cycles and fetched again only when the API refuses it.
+#[derive(Debug)]
+pub struct Gcp2LiveReader {
+    /// The HTTP client, or why it could not be built (every read then fails).
+    client: std::result::Result<Gcp2Client, String>,
+    bearer: tokio::sync::Mutex<Option<String>>,
+}
+
+impl Gcp2LiveReader {
+    pub fn new(base: &str, timeout: Duration) -> Self {
+        Self {
+            client: Gcp2Client::with_timeout(base, timeout).map_err(|e| e.to_string()),
+            bearer: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    /// GET `api` with the cached token; on 401/403 fetch the token again and retry once.
+    async fn api(&self, client: &Gcp2Client, api: &str) -> Result<Value> {
+        let mut slot = self.bearer.lock().await;
+        let cached = slot.clone();
+        let fresh = cached.is_none();
+        let bearer = match cached {
+            Some(bearer) => bearer,
+            None => client.bearer().await?,
+        };
+        *slot = Some(bearer.clone());
+        if let Some(body) = client.api_json(api, &bearer).await? {
+            return Ok(body);
+        }
+        *slot = None;
+        if fresh {
+            return Err(http_error(api, "the freshly published token was refused"));
+        }
+        let bearer = client.bearer().await?;
+        *slot = Some(bearer.clone());
+        if let Some(body) = client.api_json(api, &bearer).await? {
+            return Ok(body);
+        }
+        *slot = None;
+        Err(http_error(api, "token refused after a refresh"))
+    }
+
+    /// The last 24 h of minutes and the live colour zones.
+    pub async fn read(&self, fetched_at: String) -> Result<Gcp2Live> {
+        let client = self
+            .client
+            .as_ref()
+            .map_err(|e| http_error("client", e))?;
+        let minutes = parse_aggregates(&self.api(client, AGGREGATE_24H_API).await?)?;
+        let zones = parse_color_zones(&self.api(client, COLOR_ZONES_API).await?, fetched_at)?;
+        Gcp2Live::new(minutes, zones)
+    }
+
+    /// [`Self::read`] for a cycle: any failure becomes [`Gcp2Now::Unavailable`].
+    pub async fn now(&self, fetched_at: String) -> Gcp2Now {
+        match self.read(fetched_at).await {
+            Ok(live) => Gcp2Now::Live(Box::new(live)),
+            Err(error) => {
+                tracing::warn!(%error, "GCP2 unavailable this cycle");
+                Gcp2Now::Unavailable(error.to_string())
+            }
+        }
     }
 }
 
@@ -922,6 +1144,189 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("bad GCP2 row 2")
+        );
+    }
+
+    /// `getNetVarAggregate24H` minutes ending at `T0_S + 59 + 60 i` with the given values,
+    /// listed newest first (the parser must sort them).
+    fn aggregates(values: &[&str]) -> Value {
+        let rows: Vec<Value> = values
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(i, v)| json!({"end_epoch": T0_S + 59 + 60 * i as i64, "netvar_aggregate": v}))
+            .collect();
+        json!({ "aggregates": rows })
+    }
+
+    fn zones_json() -> Value {
+        json!({"colorzones": [
+            {"label": "Normal", "range_start": 0, "range_end": 140},
+            {"label": "Elevated", "range_start": 140, "range_end": 166},
+            {"label": "High", "range_start": 166, "range_end": 219},
+            {"label": "Very High", "range_start": 219, "range_end": 279},
+            {"label": "Extreme", "range_start": 279, "range_end": 10000}
+        ]})
+    }
+
+    async fn mount_token(server: &MockServer, bearer: &str, times: Option<u64>) {
+        let mock = Mock::given(method("GET")).and(path(TOKEN_SCRIPT)).respond_with(
+            ResponseTemplate::new(200).set_body_string(format!("const bearer = '{bearer}';")),
+        );
+        match times {
+            Some(n) => mock.up_to_n_times(n).mount(server).await,
+            None => mock.mount(server).await,
+        }
+    }
+
+    async fn mount_api(server: &MockServer, bearer: &str, api: &str, body: Value) {
+        Mock::given(method("GET"))
+            .and(path(api))
+            .and(header("authorization", bearer))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    async fn token_fetches(server: &MockServer) -> usize {
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| r.url.path() == TOKEN_SCRIPT)
+            .count()
+    }
+
+    #[tokio::test]
+    async fn live_reader_gives_the_latest_minute_its_zone_the_earlier_zone_and_the_range() {
+        let server = MockServer::start().await;
+        mount_token(&server, "Bearer 5|a", None).await;
+        // 22 minutes: 150 (Elevated) for the first two, then 200 (High), the newest 230.5.
+        let mut values = vec!["150.0000", "150.0000"];
+        values.extend(std::iter::repeat_n("200.0000", 19));
+        values.push("230.5000");
+        mount_api(&server, "Bearer 5|a", AGGREGATE_24H_API, aggregates(&values)).await;
+        mount_api(&server, "Bearer 5|a", COLOR_ZONES_API, zones_json()).await;
+
+        let reader = Gcp2LiveReader::new(&server.uri(), LIVE_TIMEOUT);
+        let live = reader.read("2026-10-20T10:00:00Z".into()).await.unwrap();
+        assert_eq!(live.minutes.len(), 22);
+        assert_eq!(live.latest.end_s, T0_S + 59 + 60 * 21);
+        assert_eq!(live.latest.units, 2_305_000);
+        assert_eq!(live.latest.zone_label, "Very High");
+        assert_eq!(live.latest.zone_count, 5);
+        assert_eq!(live.latest.dice, dice(2_305_000));
+        // 20 minutes before the newest minute is the second one (Elevated).
+        let earlier = live.earlier.as_ref().unwrap();
+        assert_eq!(earlier.end_s, T0_S + 59 + 60);
+        assert_eq!(earlier.zone_label, "Elevated");
+        assert_eq!(live.range_24h(), (150.0, 230.5));
+        let payload = Gcp2Now::Live(Box::new(live)).payload();
+        assert_eq!(payload["status"], "live");
+        assert_eq!(payload["zone"], "Very High");
+        assert_eq!(payload["earlier"]["zone"], "Elevated");
+        assert_eq!(payload["dice"], json!(dice(2_305_000)));
+        assert_eq!(payload["range_24h"]["high"], json!(230.5));
+
+        // The token is cached across reads.
+        reader.read("t".into()).await.unwrap();
+        assert_eq!(token_fetches(&server).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_refused_cached_token_is_fetched_again_once() {
+        let server = MockServer::start().await;
+        // The site publishes "old" first, then rotates to "new".
+        mount_token(&server, "Bearer old", Some(1)).await;
+        mount_token(&server, "Bearer new", None).await;
+        // "old" works for the first read only, then the API refuses it.
+        for api in [AGGREGATE_24H_API, COLOR_ZONES_API] {
+            let body = if api == COLOR_ZONES_API {
+                zones_json()
+            } else {
+                aggregates(&["100.0000"])
+            };
+            Mock::given(method("GET"))
+                .and(path(api))
+                .and(header("authorization", "Bearer old"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body.clone()))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(api))
+                .and(header("authorization", "Bearer old"))
+                .respond_with(ResponseTemplate::new(401))
+                .mount(&server)
+                .await;
+        }
+        mount_api(&server, "Bearer new", AGGREGATE_24H_API, aggregates(&["120.0000"])).await;
+        mount_api(&server, "Bearer new", COLOR_ZONES_API, zones_json()).await;
+
+        let reader = Gcp2LiveReader::new(&server.uri(), LIVE_TIMEOUT);
+        let first = reader.read("t".into()).await.unwrap();
+        assert_eq!(first.latest.units, 1_000_000);
+        let second = reader.read("t".into()).await.unwrap();
+        assert_eq!(second.latest.units, 1_200_000);
+        assert_eq!(second.latest.zone_label, "Normal");
+        // One fetch at start, one refresh on the 401; the new token then stays cached.
+        assert_eq!(token_fetches(&server).await, 2);
+        reader.read("t".into()).await.unwrap();
+        assert_eq!(token_fetches(&server).await, 2);
+    }
+
+    #[tokio::test]
+    async fn a_refused_fresh_token_a_timeout_or_bad_data_leave_gcp2_unavailable() {
+        // A token the API refuses right after it was published: no retry loop.
+        let server = MockServer::start().await;
+        mount_token(&server, "Bearer x", None).await;
+        Mock::given(method("GET"))
+            .and(path(AGGREGATE_24H_API))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        let reader = Gcp2LiveReader::new(&server.uri(), LIVE_TIMEOUT);
+        let now = reader.now("t".into()).await;
+        let Gcp2Now::Unavailable(error) = &now else {
+            panic!("{now:?}")
+        };
+        assert!(error.contains("refused"), "{error}");
+        assert_eq!(token_fetches(&server).await, 1);
+        assert_eq!(now.payload()["status"], "unavailable");
+        assert!(now.live().is_none());
+
+        // An API slower than the timeout.
+        let slow = MockServer::start().await;
+        mount_token(&slow, "Bearer s", None).await;
+        Mock::given(method("GET"))
+            .and(path(AGGREGATE_24H_API))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(aggregates(&["100.0000"]))
+                    .set_delay(Duration::from_secs(5)),
+            )
+            .mount(&slow)
+            .await;
+        let reader = Gcp2LiveReader::new(&slow.uri(), Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        assert!(reader.now("t".into()).await.live().is_none());
+        assert!(started.elapsed() < Duration::from_secs(4));
+
+        // Unparseable or empty aggregates.
+        assert!(parse_aggregates(&json!({"aggregates": []})).is_err());
+        assert!(parse_aggregates(&json!({"aggregates": [{"end_epoch": 1}]})).is_err());
+        assert!(parse_aggregates(&json!({"other": 1})).is_err());
+        assert_eq!(
+            parse_aggregates(&json!({"aggregates": [
+                {"end_epoch": "120", "netvar_aggregate": 90.362},
+                {"end_epoch": 60, "netvar_aggregate": "81.8725"}
+            ]}))
+            .unwrap(),
+            vec![
+                Gcp2Reading { end_s: 60, units: 818_725 },
+                Gcp2Reading { end_s: 120, units: 903_620 },
+            ]
         );
     }
 }
