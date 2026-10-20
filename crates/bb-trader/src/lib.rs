@@ -18,6 +18,8 @@
 //! - [`exit_plan`]: the Phase 45 sell-plan menu. [`exit_replay`]: its historical replay.
 //!   [`exit_book`]: plans set by `set_exit_plan`. [`exit_watch`]: the paper watcher.
 //!   [`exit_guard`]: live exit plans inside the trader daemon.
+//! - [`persona_backtest`]: Phase 48 offline backtest of deterministic rule personas
+//!   (research only, no network, no order path).
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
 //!   `bot-spot-exit-replay`, `bot-spot-exit-watch`.
 
@@ -42,6 +44,7 @@ pub mod exit_watch;
 pub mod journal;
 pub mod market_mood;
 pub mod memory;
+pub mod persona_backtest;
 pub mod scope;
 pub mod tools;
 pub mod trades;
