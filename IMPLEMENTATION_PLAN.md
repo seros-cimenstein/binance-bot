@@ -1242,7 +1242,7 @@ Step 2, schizoid personas:
   and sells strength (B1).
 - [x] `detached`: no breadth, no exit plans and no liquid filter; trades on the
   raw 1h/15m price action of all 32 cached coins (B2).
-- [ ] `high_variance`: up to 3 positions, sized 25–100% of equity by the move,
+- [x] `high_variance`: up to 3 positions, sized 25–100% of equity by the move,
   with exit plan `atr=6:1h,deadline=1440` (B3).
 - [ ] `rotation`: each day switches to the base persona with the best
   trailing-72h shadow return (B4).

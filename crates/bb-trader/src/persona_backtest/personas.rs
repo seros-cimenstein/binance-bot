@@ -245,6 +245,69 @@ impl Persona for Detached {
     }
 }
 
+/// The `high_variance` exit plan: a wide ATR trail and a 24h cap.
+pub const HIGH_VARIANCE_EXIT_PLAN: &str = "atr=6:1h,deadline=1440";
+/// Minimum 1h move (percent) for a `high_variance` entry.
+pub const HIGH_VARIANCE_MIN_1H_PCT: f64 = 0.5;
+/// Most positions `high_variance` holds at once.
+pub const HIGH_VARIANCE_MAX_POSITIONS: usize = 3;
+
+/// `high_variance`: more trades, wider stops, swinging size.
+///
+/// - Candidates: the liquid top 10.
+/// - Buy at every step, whatever the breadth: each candidate not held whose 1h return is at
+///   least +0.5%, strongest 1h first, up to 3 positions at once.
+/// - Size: `clamp(|1h return| / 2%, 0.25, 1.0)` of the step's equity, capped by cash.
+/// - Exit: plan `atr=6:1h,deadline=1440` only; never sells at a step.
+#[derive(Debug, Clone)]
+pub struct HighVariance {
+    plan: ExitPlan,
+}
+
+impl HighVariance {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            plan: plan(HIGH_VARIANCE_EXIT_PLAN)?,
+        })
+    }
+
+    /// Share of equity for a coin that moved `ret_1h` percent over the last hour.
+    pub fn size(ret_1h: f64) -> f64 {
+        (ret_1h.abs() / 2.0).clamp(0.25, 1.0)
+    }
+}
+
+impl Persona for HighVariance {
+    fn name(&self) -> &str {
+        "high_variance"
+    }
+
+    fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        let room = HIGH_VARIANCE_MAX_POSITIONS.saturating_sub(book.holdings.len());
+        let mut movers: Vec<(&String, f64)> = snap
+            .liquid_top
+            .iter()
+            .filter(|asset| !book.holdings.contains_key(*asset))
+            .filter_map(|asset| Some((asset, snap.coin(asset)?.ret_1h?)))
+            .filter(|(_, r1h)| *r1h >= HIGH_VARIANCE_MIN_1H_PCT)
+            .collect();
+        // Strongest first; the stable sort keeps the liquid-top order on ties.
+        movers.sort_by(|a, b| b.1.total_cmp(&a.1));
+        movers
+            .into_iter()
+            .take(room)
+            .map(|(asset, r1h)| Intent::Buy {
+                asset: asset.clone(),
+                equity_fraction: Self::size(r1h),
+            })
+            .collect()
+    }
+
+    fn exit_plan(&self) -> Option<ExitPlan> {
+        Some(self.plan)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::BTreeMap;
@@ -551,5 +614,87 @@ pub(crate) mod tests {
         assert_eq!(r.trades[0].asset, "SOL");
         assert!(r.trades[0].open_at_end);
         assert_eq!(r.skipped_orders, 0);
+    }
+
+    fn fractions(intents: &[Intent]) -> Vec<(&str, f64)> {
+        intents
+            .iter()
+            .filter_map(|i| match i {
+                Intent::Buy {
+                    asset,
+                    equity_fraction,
+                } => Some((asset.as_str(), *equity_fraction)),
+                Intent::Sell { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn high_variance_sizes_by_the_move_and_ignores_breadth() {
+        let rows = [
+            ("BTC", 0.0, 0.49, 0.0, 3e8),
+            ("ETH", 0.0, 0.5, 0.0, 2e8),
+            ("SOL", 0.0, 1.0, 0.0, 1e8),
+            ("XRP", 0.0, 2.0, 0.0, 9e7),
+            ("ZEC", 0.0, 3.5, 0.0, 8e7),
+        ];
+        let mut hv = HighVariance::new().unwrap();
+        let mut all = holding(&[]);
+        all.cash = 1000.0;
+        let intents = hv.decide(&snap(-100.0, -5.0, &rows), &all);
+        // Up to 3 at once, strongest first: ZEC (capped at 1.0), XRP (1.0), SOL (0.5).
+        assert_eq!(
+            fractions(&intents),
+            vec![("ZEC", 1.0), ("XRP", 1.0), ("SOL", 0.5)]
+        );
+        assert_eq!(intents, hv.decide(&snap(100.0, 5.0, &rows), &all));
+        assert!((HighVariance::size(0.5) - 0.25).abs() < 1e-12);
+        assert!((HighVariance::size(2.0) - 1.0).abs() < 1e-12);
+        // BTC at +0.49% never qualifies, even with room.
+        let intents = hv.decide(&snap(0.0, 0.0, &rows[..2]), &all);
+        assert_eq!(fractions(&intents), vec![("ETH", 0.25)]);
+    }
+
+    #[test]
+    fn high_variance_refuses_a_fourth_position() {
+        let rows = [("SOL", 0.0, 1.0, 0.0, 1e8), ("XRP", 0.0, 2.0, 0.0, 9e7)];
+        let mut hv = HighVariance::new().unwrap();
+        assert!(
+            hv.decide(&snap(0.0, 0.0, &rows), &holding(&["BTC", "ETH", "ZEC"]))
+                .is_empty()
+        );
+        // With two held, only the strongest new mover fits; held coins are not bought again.
+        let intents = hv.decide(&snap(0.0, 0.0, &rows), &holding(&["BTC", "ETH"]));
+        assert_eq!(bought(&intents), vec!["XRP"]);
+        assert!(
+            hv.decide(&snap(0.0, 0.0, &rows), &holding(&["SOL", "XRP"]))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_atr_6_trail_rides_out_a_drop_that_atr_3_5_sells() {
+        // SOL rises 0.01 per minute to 100 at minute 1500 (1h ATR = 0.6, 1h return ≈ +0.6%),
+        // is bought there, then sits 4.75 ATR lower: below the ATR-3.5 line, above ATR-6.
+        let market = Market::from_series([coin("SOL", 1800, |m| {
+            if m <= 1500 {
+                100.0 + 0.01 * (m - 1500) as f64
+            } else {
+                100.05 - 4.75 * 0.6
+            }
+        })]);
+        let c = cfg(1500, 1800, 20);
+        let wide = run(&market, &c, Box::new(HighVariance::new().unwrap())).unwrap();
+        assert_eq!(wide.trades.len(), 1);
+        assert!(wide.trades[0].open_at_end, "{:?}", wide.trades[0]);
+        // The 1h return at the step compares the closes of minutes 1499 and 1439.
+        let ret_1h = (99.99 / 99.39 - 1.0) * 100.0;
+        assert!((wide.trades[0].cost_usdt - 1000.0 * HighVariance::size(ret_1h)).abs() < 1e-6);
+        let tight = HighVariance {
+            plan: plan("atr=3.5:1h,deadline=1440").unwrap(),
+        };
+        let narrow = run(&market, &c, Box::new(tight)).unwrap();
+        assert_eq!(narrow.trades[0].reason, "follow_peak");
+        assert!(!narrow.trades[0].open_at_end);
     }
 }

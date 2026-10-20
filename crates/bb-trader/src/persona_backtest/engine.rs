@@ -252,8 +252,10 @@ pub struct RunResult {
     pub sharpe: f64,
     pub fees_usdt: f64,
     pub steps: usize,
-    /// Intents that could not fill (no bar, under min notional, missing ATR, …).
+    /// Intents that could not fill, in total and by reason (`no_cash`, `under_min_notional`,
+    /// `exit_plan_unavailable`, `buy_no_bar`, `sell_no_bar`, `unknown_asset`).
     pub skipped_orders: usize,
+    pub skip_reasons: BTreeMap<&'static str, usize>,
     pub trades: Vec<Trade>,
 }
 
@@ -284,7 +286,7 @@ pub struct Account {
     peak_equity: f64,
     max_drawdown_pct: f64,
     steps: usize,
-    skipped: usize,
+    skips: BTreeMap<&'static str, usize>,
 }
 
 fn decimal(value: f64) -> Option<Decimal> {
@@ -314,7 +316,7 @@ impl Account {
             peak_equity: cfg.starting_balance,
             max_drawdown_pct: 0.0,
             steps: 0,
-            skipped: 0,
+            skips: BTreeMap::new(),
         }
     }
 
@@ -397,7 +399,7 @@ impl Account {
             return;
         }
         let Some(bar) = Self::fill_bar(market, asset, t) else {
-            self.skipped += 1;
+            self.skip("sell_no_bar");
             return;
         };
         let price = bar.open;
@@ -414,15 +416,19 @@ impl Account {
         }
         let notional = wanted.min(self.cash);
         let Some(series) = market.get(asset) else {
-            self.skipped += 1;
+            self.skip("unknown_asset");
             return;
         };
         let Some(bar) = Self::fill_bar(market, asset, t) else {
-            self.skipped += 1;
+            self.skip("buy_no_bar");
             return;
         };
-        if !(notional >= self.cfg.min_notional && notional > 0.0) {
-            self.skipped += 1;
+        if notional <= 0.0 {
+            self.skip("no_cash");
+            return;
+        }
+        if notional < self.cfg.min_notional {
+            self.skip("under_min_notional");
             return;
         }
         let fill = bar.open * (1.0 + self.cfg.slippage);
@@ -431,7 +437,7 @@ impl Account {
             Some(plan) => match Self::watch(series, &plan, fill, t, self.cfg.fee_rate) {
                 Some(watch) => Some(watch),
                 None => {
-                    self.skipped += 1;
+                    self.skip("exit_plan_unavailable");
                     return;
                 }
             },
@@ -457,6 +463,10 @@ impl Account {
                 watch,
             },
         );
+    }
+
+    fn skip(&mut self, reason: &'static str) {
+        *self.skips.entry(reason).or_default() += 1;
     }
 
     /// The exit watch for a buy at `entry_ms`: ATR from the closed bars of the plan's
@@ -656,7 +666,8 @@ impl Account {
             sharpe: sharpe(&equities, self.cfg.step_minutes),
             fees_usdt: trades.iter().map(|t| t.fees_usdt).sum(),
             steps: self.steps,
-            skipped_orders: self.skipped,
+            skipped_orders: self.skips.values().sum(),
+            skip_reasons: self.skips,
             trades,
         }
     }
@@ -843,8 +854,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn small_buys_and_missing_atr_are_skipped() {
-        let market = Market::from_series([coin("SOL", 200, |_| 100.0)]);
+    fn small_buys_missing_atr_and_spent_cash_are_skipped_by_reason() {
+        let market = Market::from_series([coin("SOL", 200, |_| 100.0), coin("ETH", 200, |_| 10.0)]);
         let c = cfg(60, 100, 20);
         let tiny = Script {
             plan: None,
@@ -852,6 +863,7 @@ pub(crate) mod tests {
         };
         let r = run(&market, &c, Box::new(tiny)).unwrap();
         assert_eq!((r.trades.len(), r.skipped_orders), (0, 1));
+        assert_eq!(r.skip_reasons.get("under_min_notional"), Some(&1));
         // An hourly ATR needs closed 1h bars; a flat price has a zero range.
         let atr = Script {
             plan: Some(ExitPlan::parse_spec("atr=3.5:1h").unwrap()),
@@ -859,7 +871,16 @@ pub(crate) mod tests {
         };
         let r = run(&market, &c, Box::new(atr)).unwrap();
         assert_eq!((r.trades.len(), r.skipped_orders), (0, 1));
+        assert_eq!(r.skip_reasons.get("exit_plan_unavailable"), Some(&1));
         assert!(near(r.final_equity, 1000.0, 1e-12));
+        // The first buy spends all cash, so the second one in the same step has none.
+        let all_in = Script {
+            plan: None,
+            script: vec![(c.start_ms, vec![buy("ETH", 1.0), buy("SOL", 1.0)])],
+        };
+        let r = run(&market, &c, Box::new(all_in)).unwrap();
+        assert_eq!(r.trades.len(), 1);
+        assert_eq!(r.skip_reasons.get("no_cash"), Some(&1));
     }
 
     #[test]
