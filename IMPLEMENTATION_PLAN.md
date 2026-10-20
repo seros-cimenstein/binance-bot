@@ -1234,7 +1234,7 @@ Step 1, backtest foundation:
   - mark-to-market equity;
   - metrics and a trade list;
   - look-ahead tests.
-- [ ] Add the `v13` rule proxy persona (A5).
+- [x] Add the `v13` rule proxy persona (A5).
 
 Step 2, schizoid personas:
 
