@@ -5,6 +5,57 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-20: Phase 48 ("schizoid" strategy personas, backtest only;
+  `LOOP_SCHIZOID.md`; operator: "each time it got shittier … make it more
+  schizoid", wants backtests only and will judge them). Nothing is deployed;
+  the live `bot-spot` and the Pi were only read.
+  - New `bb bot-spot-persona-backtest` (`crates/bb-trader/src/persona_backtest/`:
+    `data`, `engine`, `personas`, `report`) runs deterministic rule personas
+    offline on `data/entry-study-cache`: no network, no order path.
+    `market_mood::breadth_score_at` adds point-in-time breadth; `mood()` is
+    unchanged.
+  - Report `reports/schizoid_backtest_2026-10-18.md`, `.csv` and
+    `_trades.csv`, covering 2026-08-19T10:43Z → 2026-10-18T10:43Z with
+    1000 USDT per variant, 20-minute steps and 25 bps per round trip:
+
+    | Variant | Net USDT | Net % | Max DD % | Trips | Win % | Sharpe | Fees USDT |
+    |---|---:|---:|---:|---:|---:|---:|---:|
+    | v13 | −183.99 | −18.40 | 39.36 | 100 | 40.0 | −0.865 | 161.52 |
+    | contrarian | −638.01 | −63.80 | 65.17 | 499 | 57.9 | −8.873 | 511.34 |
+    | detached | −918.29 | −91.83 | 95.80 | 1552 | 34.9 | −6.655 | 775.60 |
+    | high_variance | +193.82 | +19.38 | 35.59 | 174 | 50.0 | 1.517 | 124.51 |
+    | rotation | −159.82 | −15.98 | 55.95 | 436 | 42.7 | −0.163 | 547.39 |
+    | ensemble | −832.86 | −83.29 | 86.20 | 623 | 34.8 | −9.860 | 544.38 |
+
+  - Caveats, all stated in the report:
+    - `v13` is a rule proxy of the v13/v14 guidance; the LLM cannot be
+      replayed (≈ $580 notional, quota caps, live-only tools).
+    - Survivorship: the universe is the top 20 as of 2026-10-18.
+    - Costs are 25 bps per round trip, against the measured 14.8.
+    - The window ends before the Phase 47 deploy.
+    - There is no out-of-sample split: the rules were fixed in the ledger
+      before any real-cache run and not tuned.
+  - Operator decisions (via the loop manager):
+    - the 5 USDT minimum applies to buys only;
+    - a buy whose exit watch cannot start is skipped and counted;
+    - marks carry no exit costs;
+    - breadth at a 15m boundary uses the bucket holding the last closed
+      minute;
+    - `rotation` switches at the first step of each UTC day (00:03);
+    - a switch step only sells, and the new persona trades from the next
+      step.
+  - Checks:
+    - The C2 run (`unshare -rn cargo run --release -p bb-cli --bin bb --
+      bot-spot-persona-backtest --cache-dir data/entry-study-cache --end
+      2026-10-18T10:43:00Z --days 60 --persona all`) exits 0 with no
+      `ERROR`, and a rerun gives identical SHA-256 for all three files.
+    - C3 recomputed net, trips, wins and fees from `_trades.csv` in Python:
+      the largest difference is 1.4e-8 USDT and every count is exact.
+    - Last full run: `cargo test --workspace` 1047 passed, 0 failed; clippy
+      `-D warnings`, `scripts/smoke.sh`, `scripts/pool_replay.sh` and
+      `git diff --check` all exit 0.
+  - Next: the operator reviews the report. Any live use of a persona would
+    need a new, separately approved phase (`CODEX.md`).
 - 2026-10-19 (19:15 UTC): `LOOP_BOT_HEALTH.md` done (10 items: 10 done, 0
   invalid, 0 blocked). Since the 16:15 entry:
   - A3 (operator: "replace it real totals"): prompt `bot-spot-v14-agentic`.

@@ -1257,7 +1257,7 @@ Step 3, runner, report and docs:
   The runs must be deterministic, with identical `sha256sum` on a re-run (C2).
 - [x] Cross-check the report against the trade list (C3).
 - [x] Document the command in `README.md` and `OPERATIONS.md` (D1).
-- [ ] Hand off in `PROGRESS.md` and `AGENTS.md` (D2).
+- [x] Hand off in `PROGRESS.md` and `AGENTS.md` (D2).
 
 ## Post-Implementation Handoff
 
