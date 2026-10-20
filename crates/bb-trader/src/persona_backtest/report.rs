@@ -259,7 +259,7 @@ fn rules(name: &str) -> String {
             "the four base personas vote on its own book; buys the coin with ≥ 2 buy votes (most votes, then 24h volume), all cash; sells on ≥ 2 sell votes or when `{V13_EXIT_PLAN}` fires"
         ),
         "schizo" => format!(
-            "Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only while the GCP2 zone stays the same between steps (inverted: a zone change keeps it); in GCP2's two highest zones YOLO sells everything and goes all-in on the best 1h liquid coin until the zone drops below the third-highest; otherwise the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it (`{V13_EXIT_PLAN}` for YOLO); no stop-loss"
+            "Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only when the GCP2 zone changes between steps (the mood follows GCP2: an unchanged zone keeps it); in GCP2's two highest zones YOLO sells everything and goes all-in on the best 1h liquid coin until the zone drops below the third-highest; otherwise the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it (`{V13_EXIT_PLAN}` for YOLO); no stop-loss"
         ),
         other => other.to_string(),
     }
@@ -944,7 +944,7 @@ mod tests {
                 "initial"
             } else if prev_to.is_empty() {
                 "no reading"
-            } else if row[2] == row[3] {
+            } else if row[2] != row[3] {
                 "switched"
             } else {
                 "held"

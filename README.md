@@ -84,17 +84,19 @@ The bot trades the Spot wallet through omp (the oh-my-pi coding agent, npm
   ignored, with one warning listing them. There are no stop-loss or
   take-profit levels either: theses record why, expected move and horizon,
   and the prompt tells the bot not to set invalidation prices or exit triggers.
-- **Schizo trader (Phase 49, prompt `bot-spot-v15-schizo`, operator
-  decision 2026-10-20).** The LLM stays the trader but is told it has four
+- **Schizo trader (Phase 49, prompt `bot-spot-v16-schizo`, operator
+  decisions 2026-10-20).** The LLM stays the trader but is told it has four
   personalities (`v13`, `contrarian`, `detached`, `high_variance`, the Phase
   48 personas) and acts out the one in charge. Each cycle the trader reads
   GCP2 (gcp2.net, Global Consciousness Project 2.0 network coherence, public
   and read-only) and works out the schizo state that opens the cycle message
   (`## Your schizo state`):
-  - **Mood ring, inverted to GCP2:** when GCP2's colour zone is the same as at
-    the previous cycle the mood switches to another personality picked by the
-    GCP2 dice (a hash of the GCP2 value, no seed); when the zone changed, or a
-    reading is missing, the mood holds. No timer.
+  - **Mood ring, following GCP2:** when GCP2's colour zone changed (up or
+    down) since the previous cycle the mood switches to another personality
+    picked by the GCP2 dice (a hash of the GCP2 value, no seed); while the
+    zone stays the same, or a reading is missing, the mood holds. No timer.
+    The first deploy (`bot-spot-v15-schizo`) ran it inverted: it switched
+    while the zone stayed the same.
   - **Voices:** the four personalities' rule votes on the live wallet, the
     mood in charge counting double.
   - **Bets:** one coin with all cash. Each mood has its own exit plan.

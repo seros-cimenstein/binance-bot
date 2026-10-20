@@ -1271,7 +1271,7 @@ Scope:
 - GCP2 history and live reads.
 - A `schizo` persona backtest.
 - The live LLM trader made schizo:
-  - mood inverted to GCP2 zones;
+  - mood bound to GCP2 zones (first inverted, then following GCP2, step 5);
   - GCP2 dice;
   - persona votes;
   - YOLO at Very High or Extreme;
@@ -1310,6 +1310,15 @@ Step 4, docs and handoff:
 
 - [x] Update `README.md`, `OPERATIONS.md` and `.env.example` (D1).
 - [x] Hand off in `PROGRESS.md` and `AGENTS.md` (D2).
+
+Step 5, mood follows GCP2 (operator decision 2026-10-20, after the first
+live cycles: "reverse mood change meaning if gcp is normal he is normal aight
+inverse of what it is rn"):
+
+- [x] Flip the mood rule in `next_mood` (backtest and live): switch on a zone
+  change, hold while the zone stays the same; prompt tag `bot-spot-v16-schizo`.
+- [x] Rerun the 60-day backtest and commit the regenerated `schizo` row.
+- [ ] Deploy to the Pi and verify the first v16 cycles.
 
 ## Post-Implementation Handoff
 

@@ -3,11 +3,11 @@
 //! Each cycle runs the backtest `schizo` persona's rules on live inputs, as information for
 //! the LLM trader (it still decides and acts only through the host tools):
 //!
-//! - **Mood ring, inverted to GCP2** ([`next_mood`]): the active mood is one of the four
-//!   base personas. When GCP2's zone is the same as at the previous cycle the mood switches
-//!   to another one picked by the GCP2 dice; when the zone changed, or a reading is missing
-//!   now or at the previous cycle, the mood is kept. The first reading picks the mood with
-//!   the dice. No timer, no seed.
+//! - **Mood ring, following GCP2** ([`next_mood`]): the active mood is one of the four
+//!   base personas. When GCP2's zone changed (up or down) since the previous cycle the mood
+//!   switches to another one picked by the GCP2 dice; when the zone is the same, or a
+//!   reading is missing now or at the previous cycle, the mood is kept. The first reading
+//!   picks the mood with the dice. No timer, no seed.
 //! - **Dice:** the GCP2 dice of the latest minute ([`crate::gcp2::dice`]).
 //! - **YOLO** ([`yolo_next`]): on in GCP2's two highest zones, kept while the zone stays at
 //!   or above the third-highest. The target is the liquid-top coin with the highest 1h
@@ -199,12 +199,12 @@ fn reason(
             format!("first GCP2 reading ({zone}): the GCP2 dice {dice} picked {mood}")
         }
         MoodStep::Switched => format!(
-            "GCP2 stayed {zone} since the last cycle, so the mood flips (inverted): the GCP2 dice {dice} turned {} into {mood}",
+            "GCP2 moved {} -> {zone} since the last cycle, so the mood switches: the GCP2 dice {dice} turned {} into {mood}",
+            memory.zone_label.as_deref().unwrap_or("?"),
             previous.unwrap_or("none")
         ),
         MoodStep::Held => format!(
-            "GCP2 moved {} -> {zone} since the last cycle, so the mood holds (inverted): still {mood}",
-            memory.zone_label.as_deref().unwrap_or("?")
+            "GCP2 stayed {zone} since the last cycle, so the mood holds: still {mood}"
         ),
         MoodStep::NoReading if gcp2.is_none() => {
             format!("GCP2 unavailable this cycle: no mood switch, no YOLO; still {mood}")
@@ -379,50 +379,30 @@ mod tests {
     }
 
     #[test]
-    fn a_held_zone_switches_the_mood_to_the_dice_pick() {
-        let now = view(180.0, 100); // High, as remembered
-        let state = step(&remembered("v13", 170.0), Some(&now), &flat());
-        assert_eq!(state.mood_step, "switched");
+    fn a_zone_change_up_or_down_switches_the_mood_to_the_dice_pick() {
         let others = ["contrarian", "detached", "high_variance"];
-        assert_eq!(state.mood.as_deref(), Some(others[(now.dice % 3) as usize]));
-        assert_eq!(state.previous_mood.as_deref(), Some("v13"));
-        assert!(
-            state.mood_reason.contains("stayed High"),
-            "{}",
-            state.mood_reason
-        );
-        // Every cycle in the same zone switches again, away from the current mood.
-        let mood = state.mood.clone().unwrap();
-        let again = step(&state.memory, Some(&view(181.0, 160)), &flat());
-        assert_eq!(again.mood_step, "switched");
-        assert_ne!(again.mood.as_deref(), Some(mood.as_str()));
+        for (now, label) in [(view(230.0, 100), "High -> Very High"), (view(100.0, 100), "High -> Normal")] {
+            let state = step(&remembered("v13", 170.0), Some(&now), &flat());
+            assert_eq!(state.mood_step, "switched");
+            assert_eq!(state.mood.as_deref(), Some(others[(now.dice % 3) as usize]));
+            assert_eq!(state.previous_mood.as_deref(), Some("v13"));
+            assert!(state.mood_reason.contains(label), "{}", state.mood_reason);
+        }
     }
 
     #[test]
-    fn a_zone_change_up_or_down_or_a_missing_reading_keeps_the_mood() {
-        let up = step(
-            &remembered("contrarian", 170.0),
-            Some(&view(230.0, 100)),
-            &flat(),
-        );
-        assert_eq!(
-            (up.mood_step, up.mood.as_deref()),
-            ("held", Some("contrarian"))
-        );
-        assert!(
-            up.mood_reason.contains("High -> Very High"),
-            "{}",
-            up.mood_reason
-        );
-        let down = step(
-            &remembered("detached", 170.0),
-            Some(&view(100.0, 100)),
-            &flat(),
-        );
-        assert_eq!(
-            (down.mood_step, down.mood.as_deref()),
-            ("held", Some("detached"))
-        );
+    fn a_held_zone_or_a_missing_reading_keeps_the_mood() {
+        // GCP2 stays High (as remembered) for cycle after cycle: the mood never moves.
+        let mut memory = remembered("contrarian", 170.0);
+        for (value, minute) in [(180.0, 100), (181.0, 160), (175.5, 220)] {
+            let state = step(&memory, Some(&view(value, minute)), &flat());
+            assert_eq!(
+                (state.mood_step, state.mood.as_deref()),
+                ("held", Some("contrarian"))
+            );
+            assert!(state.mood_reason.contains("stayed High"), "{}", state.mood_reason);
+            memory = state.memory;
+        }
 
         // GCP2 unavailable: kept, no dice, no YOLO, and the next cycle has nothing to compare.
         let mut yolo = remembered("high_variance", 230.0);
@@ -438,7 +418,7 @@ mod tests {
         );
         assert!(missing.mood_reason.contains("GCP2 unavailable"));
         assert_eq!(missing.memory.zone, None);
-        let after = step(&missing.memory, Some(&view(230.0, 100)), &flat());
+        let after = step(&missing.memory, Some(&view(100.0, 100)), &flat());
         assert_eq!(
             (after.mood_step, after.mood.as_deref()),
             ("no reading", Some("high_variance"))
@@ -476,13 +456,13 @@ mod tests {
         // v13 buys ETH (best 4h with 1h > 0) in this bullish market; high_variance buys SOL.
         let v13 = step(
             &remembered("high_variance", 100.0),
-            Some(&view(170.0, 100)),
+            Some(&view(120.0, 100)),
             &flat(),
         );
         assert_eq!(
             v13.mood.as_deref(),
             Some("high_variance"),
-            "zone changed: held"
+            "zone unchanged: held"
         );
         let votes = v13.votes.as_ref().unwrap();
         let weight = |p: &str| {
@@ -500,7 +480,7 @@ mod tests {
         bear.score = Some(-40.0);
         let state = SchizoState::next(
             &remembered("v13", 100.0),
-            Some(&view(170.0, 100)),
+            Some(&view(120.0, 100)),
             Some(&bear),
             &holding("BTC"),
             "n".into(),
@@ -535,7 +515,7 @@ mod tests {
         let after_restart = step(&restored, Some(&next), &flat());
         let without = step(&first.memory, Some(&next), &flat());
         assert_eq!(after_restart, without);
-        assert_eq!(after_restart.mood_step, "switched");
+        assert_eq!(after_restart.mood_step, "held");
         assert_eq!(after_restart.previous_mood, first.mood);
         std::fs::write(&path, "{oops").unwrap();
         assert!(SchizoMemory::load(&path).is_err());
@@ -545,7 +525,8 @@ mod tests {
     fn the_audit_object_carries_mood_reason_gcp2_dice_votes_and_yolo() {
         let state = step(&remembered("v13", 170.0), Some(&view(230.5, 100)), &flat());
         let json = serde_json::to_value(&state).unwrap();
-        assert_eq!(json["mood"], "v13");
+        assert_eq!(json["mood"], serde_json::json!(state.mood));
+        assert_ne!(state.mood.as_deref(), Some("v13"), "High -> Very High switches");
         assert_eq!(json["mood_reason"], state.mood_reason);
         assert_eq!(json["gcp2"]["value"], 230.5);
         assert_eq!(json["gcp2"]["zone"], "Very High");

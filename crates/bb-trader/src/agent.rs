@@ -108,9 +108,9 @@ its 15m and 1h both turn red, and rotates into a coin leading it by more than {D
 it keeps the default plan and sells by hand when its rule says so.\n  \
 - high_variance, the gambler: jumps on any liquid leader up {HIGH_VARIANCE_MIN_1H_PCT:.1}% or more in 1h, whatever the breadth, and \
 rides it on a wide trail. Its exit plan: {HIGH_VARIANCE_EXIT_PLAN}.\n\
-- The mood ring is GCP2 (Global Consciousness Project 2.0 network coherence), inverted: while GCP2 stays in the same zone between \
-cycles your mood flips to the personality its dice pick; when the zone changes the mood holds. GCP2 has no shown link to prices; it \
-is your mood, not a forecast.\n\
+- The mood ring is GCP2 (Global Consciousness Project 2.0 network coherence), and your mood follows it: while GCP2 stays in the same \
+zone between cycles your mood holds; when the zone changes, up or down, your mood flips to the personality its dice pick. GCP2 has no \
+shown link to prices; it is your mood, not a forecast.\n\
 - The four personalities' votes are the voices arguing in your head; the mood in charge counts double. Hear them out, then make the call.\n\
 - Bet big: one coin at a time with all your cash, no half positions. Give a new position its mood's exit plan with set_exit_plan; \
 every position without one runs the default plan, which clear does not remove (clear only removes a plan you set).\n\
@@ -216,7 +216,7 @@ fn schizo_section(context: &DecisionContext) -> String {
         return String::new();
     };
     let mut out =
-        String::from("\n## Your schizo state (act out the mood in charge; GCP2 is your mood ring, inverted)\n");
+        String::from("\n## Your schizo state (act out the mood in charge; GCP2 is your mood ring)\n");
     let Some(state) = &context.schizo else {
         out.push_str("- the schizo state is unavailable this cycle (its state file could not be read): trade on your own judgement\n");
         return out;
@@ -2212,9 +2212,9 @@ mod tests {
     }
 
     #[test]
-    fn the_v15_system_prompt_is_schizo_and_keeps_the_safety_and_tool_text() {
+    fn the_v16_system_prompt_is_schizo_and_keeps_the_safety_and_tool_text() {
         let on = config(&[]);
-        assert_eq!(on.prompt_version, "bot-spot-v15-schizo");
+        assert_eq!(on.prompt_version, "bot-spot-v16-schizo");
         assert!(on.gcp2_enabled);
         let off = config(&[("BOT_SPOT_GCP2_ENABLED", "false")]);
         let (schizo, plain) = (system_prompt(&on), system_prompt(&off));
@@ -2223,6 +2223,7 @@ mod tests {
             "contrarian, fades the crowd",
             "high_variance, the gambler",
             "votes are the voices arguing in your head",
+            "while GCP2 stays in the same zone between cycles your mood holds",
             "one coin at a time with all your cash",
             "YOLO: when the message says YOLO, obey it",
             "Name your mood",
@@ -2241,16 +2242,16 @@ mod tests {
     #[test]
     fn the_cycle_message_hands_the_bot_its_mood_voices_and_dice() {
         let config = config(&[]);
-        // GCP2 stays High: the mood flips away from v13.
-        let context = schizo_context(&config, Some(180.0), &remembered("v13", 2, "High"));
+        // GCP2 moves Elevated -> High: the mood flips away from v13.
+        let context = schizo_context(&config, Some(180.0), &remembered("v13", 1, "Elevated"));
         let state = context.schizo.clone().unwrap();
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 3, "c3", &context, None, &[]);
         let section = &prompt[prompt.find("## Your schizo state").unwrap()..prompt.find("## Wallet").unwrap()];
         let mood = state.mood.as_deref().unwrap();
         assert_ne!(mood, "v13");
         assert!(section.contains(&format!("- mood in charge: {mood} (before: v13; switched)")), "{section}");
-        assert!(section.contains("GCP2 stayed High since the last cycle"), "{section}");
-        assert!(section.contains("- GCP2: 180.00 in zone High (last cycle: High); last 24h 150.00 to 180.00"), "{section}");
+        assert!(section.contains("GCP2 moved Elevated -> High since the last cycle, so the mood switches"), "{section}");
+        assert!(section.contains("- GCP2: 180.00 in zone High (last cycle: Elevated); last 24h 150.00 to 180.00"), "{section}");
         assert!(section.contains(&format!("- GCP2 dice roll: {}", state.dice.unwrap())), "{section}");
         assert!(section.contains(&format!("  - {mood} x2:")), "{section}");
         assert!(section.contains("  - v13 x1: buy SOL"), "{section}");
@@ -2266,7 +2267,7 @@ mod tests {
     #[test]
     fn very_high_gcp2_orders_yolo_on_the_hottest_coin() {
         let config = config(&[]);
-        let context = schizo_context(&config, Some(230.0), &remembered("detached", 2, "High"));
+        let context = schizo_context(&config, Some(230.0), &remembered("detached", 3, "Very High"));
         let prompt = cycle_prompt(&config, CycleMode::Live, 4, "c4", &context, None, &[]);
         assert!(
             prompt.contains("- YOLO (GCP2 Very High): go all-in on SOL now. Sell every other holding into it and hold it until GCP2 drops below High."),

@@ -179,24 +179,30 @@ driven project.
     we are going to be gcp bound in mood switches"): no timer, no fixed
     switch probability, no fixed seed. The zone bounds come from GCP2's own
     `getcolorzones`, and the dice come from GCP2 readings.
-  - The mood runs inverted to GCP2 ("mood is inverted not yolo"): the bot
-    switches mood when the GCP2 zone stays the same between cycles and keeps
-    it when the zone changes. YOLO is not inverted: while the zone is Very High
-    or Extreme the bot is told to sell other holdings and go all-in on the
-    hottest liquid coin, until the zone drops below High. A failed GCP2 read
-    means no mood switch and no YOLO for that cycle.
+  - The mood follows GCP2 (operator decision 2026-10-20, after the first
+    inverted deploy: "reverse mood change meaning if gcp is normal he is
+    normal aight inverse of what it is rn"): the bot switches mood when the
+    GCP2 zone changed between cycles (up or down) and keeps it while the zone
+    stays the same. The first deploy ran it inverted ("mood is inverted not
+    yolo": switch on the same zone, keep on a change). YOLO was never
+    inverted: while the zone is Very High or Extreme the bot is told to sell
+    other holdings and go all-in on the hottest liquid coin, until the zone
+    drops below High. A failed GCP2 read means no mood switch and no YOLO for
+    that cycle.
   - There is no panic sell ("no panic sell"). The 2026-10-14 no-stop-loss rule
     above stays in force, and exit plans keep the existing menu and default.
   - Go-live is not gated on the backtest ("go live no tiny shit whatever we
     said earlier will be live"): the schizo trader runs on the full wallet with
     no size cap.
   - Every Bot Spot hard-safety item below stays unchanged.
-  - Tag `bot-spot-v15-schizo` (`BOT_SPOT_GCP2_ENABLED=true`, the default) is
-    this trader: the system prompt replaces the v13 regime/swing bullets with
-    the four personalities, the inverted GCP2 mood ring, the voices (votes), the
-    one-coin all-cash bet and the YOLO order, and the cycle message opens with
-    `## Your schizo state`. Its no-stop-loss, exit-plan, hard-safety and tool
-    text is the v14 text. `BOT_SPOT_GCP2_ENABLED=false` gives the v14 prompts.
+  - Tag `bot-spot-v15-schizo` (`BOT_SPOT_GCP2_ENABLED=true`, the default) was
+    the first schizo trader: the system prompt replaces the v13 regime/swing
+    bullets with the four personalities, the inverted GCP2 mood ring, the
+    voices (votes), the one-coin all-cash bet and the YOLO order, and the
+    cycle message opens with `## Your schizo state`. Its no-stop-loss,
+    exit-plan, hard-safety and tool text is the v14 text. Tag
+    `bot-spot-v16-schizo` changes only the mood ring: the mood follows GCP2.
+    `BOT_SPOT_GCP2_ENABLED=false` gives the v14 prompts.
 - Bot Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

@@ -577,7 +577,7 @@ impl Persona for Ensemble {
 }
 
 /// How one step treated the mood: the first GCP2 reading picked it (`Initial`), switched
-/// (GCP2 zone unchanged), held (zone changed), or held because a GCP2 reading was missing
+/// (GCP2 zone changed), held (zone unchanged), or held because a GCP2 reading was missing
 /// now or at the previous step (`NoReading`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MoodStep {
@@ -642,15 +642,15 @@ impl MoodRecord {
     }
 }
 
-/// The mood after one step of the inverted GCP2 mood ring.
+/// The mood after one step of the GCP2 mood ring (the mood follows GCP2).
 ///
 /// - `active`: index into `moods` (`None` until the first GCP2 reading).
 /// - `zone`, `prev_zone`: this step's and the previous step's GCP2 zone.
 /// - `dice`: this step's GCP2 dice.
 ///
 /// The first reading picks a mood with `dice % moods`. After that the mood switches, to
-/// the other mood `dice % (moods − 1)` in the fixed order, only when the zone is the same as
-/// at the previous step; a zone change or a missing reading keeps it.
+/// the other mood `dice % (moods − 1)` in the fixed order, only when the zone changed (up or
+/// down) since the previous step; an unchanged zone or a missing reading keeps it.
 pub fn next_mood(
     active: Option<usize>,
     moods: usize,
@@ -666,7 +666,7 @@ pub fn next_mood(
         return (Some(first), MoodStep::Initial);
     };
     match prev_zone {
-        Some(prev) if prev == zone => {
+        Some(prev) if prev != zone => {
             let others: Vec<usize> = (0..moods).filter(|m| *m != current).collect();
             let pick = usize::try_from(dice % others.len() as u64).unwrap_or(0);
             (Some(others[pick]), MoodStep::Switched)
@@ -780,10 +780,10 @@ impl Votes {
 ///
 /// - **Dice:** the GCP2 dice of the minute ending before the step. No seed; without a
 ///   reading nothing random happens.
-/// - **Inverted mood ring:** the active mood is one of `v13`, `contrarian`, `detached`,
-///   `high_variance`. The first reading picks it with the dice. Then, when the GCP2 zone is
-///   the same as at the previous step, the mood switches to another one picked by the dice;
-///   when the zone changed, or a reading is missing, it is kept.
+/// - **Mood ring, following GCP2:** the active mood is one of `v13`, `contrarian`,
+///   `detached`, `high_variance`. The first reading picks it with the dice. Then, when the
+///   GCP2 zone changed (up or down) since the previous step, the mood switches to another one
+///   picked by the dice; when the zone is the same, or a reading is missing, it is kept.
 /// - **YOLO:** when the zone reaches one of GCP2's two highest zones, sell every other
 ///   holding and put all cash into the liquid coin with the highest 1h return. Hold it
 ///   until the zone drops below the third-highest zone (or its exit plan sells it); then the
@@ -1619,26 +1619,25 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_mood_switches_only_while_gcp2_is_stable() {
+    fn the_mood_switches_only_when_the_gcp2_zone_changes() {
         // First reading: the dice pick the mood, recorded as the initial pick, not a switch.
         assert_eq!(
             next_mood(None, 4, Some(0), None, Some(6)),
             (Some(2), MoodStep::Initial)
         );
-        // Same zone: switch to another mood picked by the dice; never the same one.
+        // Zone changed, up or down: switch to another mood picked by the dice; never the
+        // same one.
         for dice in 0..300 {
-            let (next, step) = next_mood(Some(1), 4, Some(2), Some(2), Some(dice));
-            assert_eq!(step, MoodStep::Switched);
             let others = [0, 2, 3];
-            assert_eq!(next, Some(others[(dice % 3) as usize]));
+            for (zone, prev) in [(3, 2), (1, 2)] {
+                let (next, step) = next_mood(Some(1), 4, Some(zone), Some(prev), Some(dice));
+                assert_eq!(step, MoodStep::Switched);
+                assert_eq!(next, Some(others[(dice % 3) as usize]));
+            }
         }
-        // Zone changed (up or down): keep.
+        // Same zone: keep.
         assert_eq!(
-            next_mood(Some(1), 4, Some(3), Some(2), Some(7)),
-            (Some(1), MoodStep::Held)
-        );
-        assert_eq!(
-            next_mood(Some(1), 4, Some(1), Some(2), Some(7)),
+            next_mood(Some(1), 4, Some(2), Some(2), Some(7)),
             (Some(1), MoodStep::Held)
         );
         // A missing reading now or at the previous step: keep.
@@ -1650,14 +1649,13 @@ pub(crate) mod tests {
             next_mood(Some(1), 4, Some(2), None, Some(7)),
             (Some(1), MoodStep::NoReading)
         );
-        // A stable zone switches at every one of 10,000 steps; nothing else does.
-        let mut active = Some(0);
+        // A stable zone keeps the mood for 10,000 steps, whatever the dice.
         for step in 0..10_000_u64 {
             let dice = crate::gcp2::dice(step);
-            let (next, result) = next_mood(active, 4, Some(0), Some(0), Some(dice));
-            assert_eq!(result, MoodStep::Switched);
-            assert_ne!(next, active);
-            active = next;
+            assert_eq!(
+                next_mood(Some(0), 4, Some(0), Some(0), Some(dice)),
+                (Some(0), MoodStep::Held)
+            );
         }
     }
 
@@ -1666,14 +1664,14 @@ pub(crate) mod tests {
         let zones = gcp2_zones();
         let mut shifted = gcp2_zones();
         shifted.zones[1].start = 150.0;
-        // 130 then 145: Normal → Elevated with GCP2's bounds (held), Normal → Normal when
-        // Elevated starts at 150 (switched).
+        // 130 then 145: Normal → Elevated with GCP2's bounds (switched), Normal → Normal
+        // when Elevated starts at 150 (held).
         let step = |z: &ColorZones| {
             let (a, b) = (view(130.0, z), view(145.0, z));
             next_mood(Some(0), 4, Some(b.zone), Some(a.zone), Some(b.dice)).1
         };
-        assert_eq!(step(&zones), MoodStep::Held);
-        assert_eq!(step(&shifted), MoodStep::Switched);
+        assert_eq!(step(&zones), MoodStep::Switched);
+        assert_eq!(step(&shifted), MoodStep::Held);
         // YOLO thresholds follow the published zone list, not labels in code.
         assert!(yolo_enters(3, 5) && yolo_enters(4, 5) && !yolo_enters(2, 5));
         assert!(yolo_stays(2, 5) && !yolo_stays(1, 5));

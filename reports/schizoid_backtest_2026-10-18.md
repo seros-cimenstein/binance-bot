@@ -19,7 +19,7 @@ Research only: `bb bot-spot-persona-backtest`, offline on `data/entry-study-cach
 | high_variance | 193.82 | 19.38 | 35.59 | 174 | 50.0 | 1.517 | 124.51 | 354 |
 | rotation | -159.82 | -15.98 | 55.95 | 436 | 42.7 | -0.163 | 547.39 | 787 |
 | ensemble | -832.86 | -83.29 | 86.20 | 623 | 34.8 | -9.860 | 544.38 | 0 |
-| schizo | -967.06 | -96.71 | 96.98 | 1347 | 36.8 | -15.653 | 541.42 | 0 |
+| schizo | -940.31 | -94.03 | 95.10 | 1207 | 37.8 | -13.977 | 745.30 | 0 |
 
 Net = ending equity − starting balance after every fee and slippage; positions still open at the end are marked at their last close. Win rate counts closed round trips with a positive net. Sharpe = mean / population std of step-equity returns × √(525600 / step minutes). Full numbers: the `.csv`; every trade: `_trades.csv`.
 
@@ -31,7 +31,7 @@ Net = ending equity − starting balance after every fee and slippage; positions
 - `high_variance`: liquid top 10; every step buys each coin not held that is up ≥ +0.5% over 1h, strongest first, up to 3 positions, sized clamp(|1h| / 2%, 0.25, 1.0) of equity capped by cash; exit `atr=6:1h,deadline=1440` only.
 - `rotation`: shadow-runs the four base personas; at the first step of each UTC day follows the one with the best trailing-72h shadow return (v13 on ties and before 72h exist).
 - `ensemble`: the four base personas vote on its own book; buys the coin with ≥ 2 buy votes (most votes, then 24h volume), all cash; sells on ≥ 2 sell votes or when `atr=3.5:1h,deadline=360` fires.
-- `schizo`: Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only while the GCP2 zone stays the same between steps (inverted: a zone change keeps it); in GCP2's two highest zones YOLO sells everything and goes all-in on the best 1h liquid coin until the zone drops below the third-highest; otherwise the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it (`atr=3.5:1h,deadline=360` for YOLO); no stop-loss.
+- `schizo`: Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only when the GCP2 zone changes between steps (the mood follows GCP2: an unchanged zone keeps it); in GCP2's two highest zones YOLO sells everything and goes all-in on the best 1h liquid coin until the zone drops below the third-highest; otherwise the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it (`atr=3.5:1h,deadline=360` for YOLO); no stop-loss.
 
 ## Per-variant details
 
@@ -101,39 +101,39 @@ Net = ending equity − starting balance after every fee and slippage; positions
 
 ### `schizo`
 
-- Ending equity 32.94 USDT; 1347 closed round trips (496 wins), 1 still open at the end.
-- Exit reasons: open_at_end 1, stretch 197, vote 1144, yolo 6.
+- Ending equity 59.69 USDT; 1207 closed round trips (456 wins), 1 still open at the end.
+- Exit reasons: follow_peak 2, open_at_end 1, stretch 189, vote 1010, yolo 6.
 - Skipped orders: none.
-- mood steps: 1 initial, 3643 switched, 676 held, 0 without a GCP2 reading
-- active steps: contrarian 1100, detached 1095, high_variance 1018, v13 1107
-- YOLO steps: 52, YOLO buys: 29
-- zone Elevated -> Elevated: switched 29
-- zone Elevated -> High: held 33
-- zone Elevated -> Normal: held 153
-- zone Elevated -> Very High: held 9
-- zone Extreme -> Elevated: held 1
-- zone Extreme -> Normal: held 1
-- zone Extreme -> Very High: held 3
-- zone High -> Elevated: held 35
-- zone High -> Extreme: held 3
-- zone High -> High: switched 35
-- zone High -> Normal: held 114
-- zone High -> Very High: held 5
-- zone Normal -> Elevated: held 154
-- zone Normal -> High: held 114
-- zone Normal -> Normal: switched 3576
-- zone Normal -> Very High: held 17
-- zone Very High -> Elevated: held 5
-- zone Very High -> Extreme: held 2
-- zone Very High -> High: held 10
-- zone Very High -> Normal: held 17
-- zone Very High -> Very High: switched 3
+- mood steps: 1 initial, 676 switched, 3643 held, 0 without a GCP2 reading
+- active steps: contrarian 832, detached 939, high_variance 1249, v13 1300
+- YOLO steps: 52, YOLO buys: 27
+- zone Elevated -> Elevated: held 29
+- zone Elevated -> High: switched 33
+- zone Elevated -> Normal: switched 153
+- zone Elevated -> Very High: switched 9
+- zone Extreme -> Elevated: switched 1
+- zone Extreme -> Normal: switched 1
+- zone Extreme -> Very High: switched 3
+- zone High -> Elevated: switched 35
+- zone High -> Extreme: switched 3
+- zone High -> High: held 35
+- zone High -> Normal: switched 114
+- zone High -> Very High: switched 5
+- zone Normal -> Elevated: switched 154
+- zone Normal -> High: switched 114
+- zone Normal -> Normal: held 3576
+- zone Normal -> Very High: switched 17
+- zone Very High -> Elevated: switched 5
+- zone Very High -> Extreme: switched 2
+- zone Very High -> High: switched 10
+- zone Very High -> Normal: switched 17
+- zone Very High -> Very High: held 3
 - Per-step trace: `schizoid_backtest_2026-10-18_schizo_trace.csv` (4320 rows, one per step: `time,gcp2_value,from_zone,to_zone,dice,result,mood_before,mood_after,yolo`).
 
 ## GCP2
 
 - Zone minutes over the window (each minute's reading is the hour ending at the second before it): Normal 77515 (89.7%), Elevated 4325 (5.0%), High 3779 (4.4%), Very High 679 (0.8%), Extreme 102 (0.1%); unavailable 0 (0.0%).
-- `schizo` YOLO entries: 29, net -26.66 USDT (8 wins, 0 still open at the end); its mood switches by zone change (from → to) are in its per-variant details and per-step trace.
+- `schizo` YOLO entries: 27, net -29.75 USDT (9 wins, 0 still open at the end); its mood switches by zone change (from → to) are in its per-variant details and per-step trace.
 
 ## Assumptions
 

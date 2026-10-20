@@ -26,7 +26,9 @@ use crate::scope::ScopeConfig;
 /// default) the system prompt makes the bot act out a GCP2-driven mood among the four
 /// personas, hear their votes, bet one coin with all cash and obey YOLO, and the cycle
 /// message opens with `## Your schizo state`. With GCP2 off both prompts are the v14 text.
-pub const PROMPT_VERSION: &str = "bot-spot-v15-schizo";
+/// v16 (2026-10-20, operator decision): the mood follows GCP2 instead of running inverted
+/// (it switches when the GCP2 zone changes and holds while it stays the same).
+pub const PROMPT_VERSION: &str = "bot-spot-v16-schizo";
 /// The only accepted value of `BOT_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 

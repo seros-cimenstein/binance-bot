@@ -525,7 +525,8 @@ and sell fees at the trip's fee rate), so it cannot sell a fee-negative
 
 ### Schizo trader (Phase 49)
 
-Prompt `bot-spot-v15-schizo` (deployed 2026-10-20, operator decisions in
+Prompt `bot-spot-v16-schizo` (deployed 2026-10-20, after `bot-spot-v15-schizo`
+earlier that day; operator decisions in
 `LOOP_SCHIZO_LIVE.md` and `CODEX.md`). The LLM stays the trader and acts only
 through the host tools; the hard safety above and the default exit plan
 `atr=3.5:1h,deadline=360` are unchanged, and there is no panic sell. It runs
@@ -547,10 +548,11 @@ true); `BOT_SPOT_GCP2_BASE_URL` (default `https://gcp2.net`).
   recur is not known yet; watch for repeated warnings.
 - **Schizo state.** Each cycle it applies the backtest `schizo` rules
   (`persona_backtest::personas`) to live inputs:
-  - the mood (one of `v13`, `contrarian`, `detached`, `high_variance`) runs
-    inverted to GCP2: it switches to the personality picked by the GCP2 dice
-    when the zone is the same as at the previous cycle, and holds when the
-    zone changed or a reading is missing; the first reading picks it;
+  - the mood (one of `v13`, `contrarian`, `detached`, `high_variance`)
+    follows GCP2: it switches to the personality picked by the GCP2 dice when
+    the zone changed (up or down) since the previous cycle, and holds while
+    the zone stays the same or a reading is missing; the first reading picks
+    it (v15 ran this inverted: switch on the same zone, hold on a change);
   - the dice are the SplitMix64 finalizer of the latest minute's 4-decimal
     value (no seed);
   - the four personalities vote on the live wallet (the breadth candles and
@@ -586,9 +588,10 @@ tail -n 50 docker-data/bot-spot-decisions.jsonl | python3 -c 'import json,sys; [
   and `BOT_SPOT_PROMPT_VERSION=bot-spot-v14-agentic` in `.env.docker` (back
   it up first) and recreate `bot-spot`: no GCP2 reads, no schizo state or
   audit field, and the v14 system and cycle prompt text. The code stays the
-  v15 build.
-- **Roll back to v14 (image and env).** The v14 image is tagged
-  `binance-bot:pre-c4-20261020` and the env before the deploy is
+  v16 build.
+- **Roll back (image and env).** The v15 image (inverted mood) is tagged
+  `binance-bot:pre-v16-20261020`; the v14 image is tagged
+  `binance-bot:pre-c4-20261020` and the env before the first schizo deploy is
   `.env.docker.bak-20261020T100630Z-c4`; the first v15 image (before the
   `detached` wording fix) is `binance-bot:pre-c4b-20261020`. Follow the
   Bot Spot recreate rules: recreate only right after a `cycle_summary` row
@@ -741,14 +744,15 @@ Personas:
   less than 72h of history). A switch step only sells.
 - `ensemble` buys the coin with at least 2 of 4 base-persona buy votes. It
   sells on 2 sell votes or the `v13` exit plan.
-- `schizo` (Phase 49, the live `bot-spot-v15-schizo` rules) runs the four
+- `schizo` (Phase 49, the live `bot-spot-v16-schizo` rules) runs the four
   base personas in one head ruled by GCP2: the mood switches by the GCP2 dice
-  while the GCP2 zone stays the same between steps and holds when it changes;
+  when the GCP2 zone changes between steps and holds while it stays the same;
   in the two highest zones YOLO sells everything for the best 1h liquid coin
   until the zone drops below the third-highest; otherwise the personas vote
   (the mood counts twice, buy or sell at 2), one coin with all cash, and a
   position keeps the exit plan of the mood that bought it. On the 60 days to
-  2026-10-18 it lost 96.71% (`reports/schizoid_backtest_2026-10-18.md`).
+  2026-10-18 it lost 94.03% (`reports/schizoid_backtest_2026-10-18.md`); the
+  inverted v15 rule lost 96.71% on the same window.
 
 Cost model: fills happen at the next 1m open, with the fee plus slippage
 charged on each side (25 bps per round trip by default, against the measured
