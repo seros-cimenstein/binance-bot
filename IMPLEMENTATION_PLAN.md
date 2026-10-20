@@ -1251,7 +1251,7 @@ Step 2, schizoid personas:
 
 Step 3, runner, report and docs:
 
-- [ ] Add the `bb bot-spot-persona-backtest` subcommand: offline only, failing
+- [x] Add the `bb bot-spot-persona-backtest` subcommand: offline only, failing
   on a missing cache (C1).
 - [ ] Run the 60-day backtest for all six variants and commit the report files.
   The runs must be deterministic, with identical `sha256sum` on a re-run (C2).

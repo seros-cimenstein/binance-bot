@@ -21,7 +21,7 @@
 //! - [`persona_backtest`]: Phase 48 offline backtest of deterministic rule personas
 //!   (research only, no network, no order path).
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
-//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`.
+//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `bot-spot-persona-backtest`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
