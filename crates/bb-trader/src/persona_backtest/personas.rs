@@ -600,14 +600,304 @@ impl Persona for Ensemble {
     }
 }
 
+/// How one step treated the mood: switched (GCP2 zone unchanged), held (zone changed) or
+/// held because a GCP2 reading was missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MoodStep {
+    Switched,
+    Held,
+    NoReading,
+}
+
+impl MoodStep {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Switched => "switched",
+            Self::Held => "held",
+            Self::NoReading => "no reading",
+        }
+    }
+}
+
+/// The mood after one step of the inverted GCP2 mood ring.
+///
+/// - `active`: index into `moods` (`None` until the first GCP2 reading).
+/// - `zone`, `prev_zone`: this step's and the previous step's GCP2 zone.
+/// - `dice`: this step's GCP2 dice.
+///
+/// The first reading picks a mood with `dice % moods`. After that the mood switches, to
+/// the other mood `dice % (moods − 1)` in the fixed order, only when the zone is the same as
+/// at the previous step; a zone change or a missing reading keeps it.
+pub fn next_mood(
+    active: Option<usize>,
+    moods: usize,
+    zone: Option<usize>,
+    prev_zone: Option<usize>,
+    dice: Option<u64>,
+) -> (Option<usize>, MoodStep) {
+    let (Some(zone), Some(dice)) = (zone, dice) else {
+        return (active, MoodStep::NoReading);
+    };
+    let Some(current) = active else {
+        let first = usize::try_from(dice % moods as u64).unwrap_or(0);
+        return (Some(first), MoodStep::Switched);
+    };
+    match prev_zone {
+        Some(prev) if prev == zone => {
+            let others: Vec<usize> = (0..moods).filter(|m| *m != current).collect();
+            let pick = usize::try_from(dice % others.len() as u64).unwrap_or(0);
+            (Some(others[pick]), MoodStep::Switched)
+        }
+        Some(_) => (Some(current), MoodStep::Held),
+        None => (Some(current), MoodStep::NoReading),
+    }
+}
+
+/// Whether a GCP2 zone triggers YOLO: one of the two highest zones GCP2 publishes.
+pub fn yolo_enters(zone: usize, zone_count: usize) -> bool {
+    zone + 2 >= zone_count
+}
+
+/// Whether YOLO keeps going: the zone is still at or above the third-highest.
+pub fn yolo_stays(zone: usize, zone_count: usize) -> bool {
+    zone + 3 >= zone_count
+}
+
+/// `schizo` (Phase 49): the four base personas in one head, ruled by GCP2.
+///
+/// - **Dice:** the GCP2 dice of the minute ending before the step. No seed; without a
+///   reading nothing random happens.
+/// - **Inverted mood ring:** the active mood is one of `v13`, `contrarian`, `detached`,
+///   `high_variance`. The first reading picks it with the dice. Then, when the GCP2 zone is
+///   the same as at the previous step, the mood switches to another one picked by the dice;
+///   when the zone changed, or a reading is missing, it is kept.
+/// - **YOLO:** when the zone reaches one of GCP2's two highest zones, sell every other
+///   holding and put all cash into the liquid coin with the highest 1h return. Hold it
+///   until the zone drops below the third-highest zone (or its exit plan sells it); then the
+///   normal rules take over.
+/// - **Argues with itself:** outside YOLO all four personas decide on the schizo's book.
+///   The active mood's vote counts 2, the others 1. Flat: buy the coin with the most votes
+///   if it reaches 2 (ties: higher 24h volume, then name). Holding: sell on 2 or more sell
+///   votes.
+/// - **Extreme bets:** one coin, all cash.
+/// - **Exits:** a position runs the exit plan of the mood that bought it (`v13`'s for a
+///   YOLO buy); no added stop-loss.
+pub struct Schizo {
+    voters: Vec<Box<dyn Persona>>,
+    yolo_plan: ExitPlan,
+    active: Option<usize>,
+    prev_zone: Option<(usize, String)>,
+    yolo: bool,
+    yolo_asset: Option<String>,
+    next_plan: Option<ExitPlan>,
+    steps_by_result: BTreeMap<MoodStep, usize>,
+    zone_moves: BTreeMap<(String, String, MoodStep), usize>,
+    active_steps: BTreeMap<String, usize>,
+    yolo_steps: usize,
+    yolo_buys: Vec<(i64, String)>,
+}
+
+impl Schizo {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            voters: base_personas()?,
+            yolo_plan: plan(V13_EXIT_PLAN)?,
+            active: None,
+            prev_zone: None,
+            yolo: false,
+            yolo_asset: None,
+            next_plan: None,
+            steps_by_result: BTreeMap::new(),
+            zone_moves: BTreeMap::new(),
+            active_steps: BTreeMap::new(),
+            yolo_steps: 0,
+            yolo_buys: Vec::new(),
+        })
+    }
+
+    /// The active mood's name (`None` before the first GCP2 reading).
+    pub fn mood(&self) -> Option<&str> {
+        self.active.map(|i| self.voters[i].name())
+    }
+
+    /// Times and coins of every YOLO buy.
+    pub fn yolo_buys(&self) -> &[(i64, String)] {
+        &self.yolo_buys
+    }
+
+    fn update_mood(&mut self, snap: &Snapshot) {
+        let view = snap.gcp2.as_ref();
+        let (active, result) = next_mood(
+            self.active,
+            self.voters.len(),
+            view.map(|v| v.zone),
+            self.prev_zone.as_ref().map(|(z, _)| *z),
+            view.map(|v| v.dice),
+        );
+        if let (Some(view), Some((_, prev_label))) = (view, &self.prev_zone) {
+            *self
+                .zone_moves
+                .entry((prev_label.clone(), view.zone_label.clone(), result))
+                .or_default() += 1;
+        }
+        *self.steps_by_result.entry(result).or_default() += 1;
+        self.active = active;
+        self.prev_zone = view.map(|v| (v.zone, v.zone_label.clone()));
+    }
+
+    fn update_yolo(&mut self, snap: &Snapshot) {
+        let zone = snap.gcp2.as_ref().map(|v| (v.zone, v.zone_count));
+        self.yolo = match zone {
+            Some((z, n)) if self.yolo => yolo_stays(z, n),
+            Some((z, n)) => yolo_enters(z, n),
+            None => false,
+        };
+        if !self.yolo {
+            self.yolo_asset = None;
+        }
+    }
+
+    fn yolo_intents(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        self.yolo_steps += 1;
+        if self
+            .yolo_asset
+            .as_ref()
+            .is_some_and(|a| book.holdings.contains_key(a))
+        {
+            return Vec::new();
+        }
+        let Some(target) = best_by(snap.liquid_top.iter(), |a| snap.coin(a)?.ret_1h).cloned()
+        else {
+            return Vec::new();
+        };
+        let mut intents: Vec<Intent> = book
+            .holdings
+            .keys()
+            .filter(|a| **a != target)
+            .map(|a| Intent::Sell {
+                asset: a.clone(),
+                reason: "yolo",
+            })
+            .collect();
+        if !book.holdings.contains_key(&target) {
+            intents.push(Intent::Buy {
+                asset: target.clone(),
+                equity_fraction: 1.0,
+            });
+            self.next_plan = Some(self.yolo_plan);
+            self.yolo_buys.push((snap.t, target.clone()));
+        }
+        self.yolo_asset = Some(target);
+        intents
+    }
+
+    fn vote_intents(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        let mut buy_votes: BTreeMap<String, usize> = BTreeMap::new();
+        let mut sell_votes: BTreeMap<String, usize> = BTreeMap::new();
+        for (i, voter) in self.voters.iter_mut().enumerate() {
+            let weight = if Some(i) == self.active { 2 } else { 1 };
+            let mut bought = BTreeSet::new();
+            let mut sold = BTreeSet::new();
+            for intent in voter.decide(snap, book) {
+                match intent {
+                    Intent::Buy { asset, .. } if bought.insert(asset.clone()) => {
+                        *buy_votes.entry(asset).or_default() += weight;
+                    }
+                    Intent::Sell { asset, .. } if sold.insert(asset.clone()) => {
+                        *sell_votes.entry(asset).or_default() += weight;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !book.is_flat() {
+            return book
+                .holdings
+                .keys()
+                .filter(|a| sell_votes.get(*a).is_some_and(|n| *n >= ENSEMBLE_MIN_VOTES))
+                .map(|a| Intent::Sell {
+                    asset: a.clone(),
+                    reason: "vote",
+                })
+                .collect();
+        }
+        let Some(asset) = ensemble_pick(&buy_votes, snap) else {
+            return Vec::new();
+        };
+        self.next_plan = self.active.and_then(|i| self.voters[i].exit_plan());
+        vec![Intent::Buy {
+            asset: asset.clone(),
+            equity_fraction: 1.0,
+        }]
+    }
+}
+
+impl Persona for Schizo {
+    fn name(&self) -> &str {
+        "schizo"
+    }
+
+    fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        self.update_mood(snap);
+        self.update_yolo(snap);
+        if let Some(name) = self.mood() {
+            *self.active_steps.entry(name.to_string()).or_default() += 1;
+        }
+        self.next_plan = None;
+        if self.yolo {
+            self.yolo_intents(snap, book)
+        } else {
+            self.vote_intents(snap, book)
+        }
+    }
+
+    fn exit_plan(&self) -> Option<ExitPlan> {
+        self.next_plan
+    }
+
+    fn notes(&self) -> Vec<String> {
+        let count = |r: MoodStep| self.steps_by_result.get(&r).copied().unwrap_or(0);
+        let mut notes = vec![
+            format!(
+                "mood steps: {} switched, {} held, {} without a GCP2 reading",
+                count(MoodStep::Switched),
+                count(MoodStep::Held),
+                count(MoodStep::NoReading)
+            ),
+            format!(
+                "active steps: {}",
+                self.active_steps
+                    .iter()
+                    .map(|(m, n)| format!("{m} {n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            format!(
+                "YOLO steps: {}, YOLO buys: {}",
+                self.yolo_steps,
+                self.yolo_buys.len()
+            ),
+        ];
+        notes.extend(
+            self.zone_moves
+                .iter()
+                .map(|((from, to, r), n)| format!("zone {from} -> {to}: {} {n}", r.as_str())),
+        );
+        notes
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::gcp2::{ColorZones, Gcp2Reading, Gcp2View};
     use crate::market_mood::HorizonBreadth;
     use crate::persona_backtest::data::{MINUTE_MS, Market};
-    use crate::persona_backtest::engine::tests::{T0, cfg, coin, truncated, wavy_market};
+    use crate::persona_backtest::engine::tests::{
+        T0, cfg, coin, gcp2_feed, gcp2_wave, gcp2_zones, truncated, wavy_market,
+    };
     use crate::persona_backtest::engine::{CoinView, Holding, run};
 
     /// `(asset, 15m, 1h, 4h, 24h quote volume)`.
@@ -1193,5 +1483,170 @@ pub(crate) mod tests {
             "{:?}",
             r.notes
         );
+    }
+
+    fn view(value: f64, zones: &ColorZones) -> Gcp2View {
+        let reading = Gcp2Reading {
+            end_s: 1,
+            units: (value * 10_000.0).round() as u64,
+        };
+        Gcp2View::from_reading(reading, zones)
+    }
+
+    #[test]
+    fn the_mood_switches_only_while_gcp2_is_stable() {
+        // First reading: the dice pick the mood.
+        assert_eq!(
+            next_mood(None, 4, Some(0), None, Some(6)),
+            (Some(2), MoodStep::Switched)
+        );
+        // Same zone: switch to another mood picked by the dice; never the same one.
+        for dice in 0..300 {
+            let (next, step) = next_mood(Some(1), 4, Some(2), Some(2), Some(dice));
+            assert_eq!(step, MoodStep::Switched);
+            let others = [0, 2, 3];
+            assert_eq!(next, Some(others[(dice % 3) as usize]));
+        }
+        // Zone changed (up or down): keep.
+        assert_eq!(
+            next_mood(Some(1), 4, Some(3), Some(2), Some(7)),
+            (Some(1), MoodStep::Held)
+        );
+        assert_eq!(
+            next_mood(Some(1), 4, Some(1), Some(2), Some(7)),
+            (Some(1), MoodStep::Held)
+        );
+        // A missing reading now or at the previous step: keep.
+        assert_eq!(
+            next_mood(Some(1), 4, None, Some(2), None),
+            (Some(1), MoodStep::NoReading)
+        );
+        assert_eq!(
+            next_mood(Some(1), 4, Some(2), None, Some(7)),
+            (Some(1), MoodStep::NoReading)
+        );
+        // A stable zone switches at every one of 10,000 steps; nothing else does.
+        let mut active = Some(0);
+        for step in 0..10_000_u64 {
+            let dice = crate::gcp2::dice(step);
+            let (next, result) = next_mood(active, 4, Some(0), Some(0), Some(dice));
+            assert_eq!(result, MoodStep::Switched);
+            assert_ne!(next, active);
+            active = next;
+        }
+    }
+
+    #[test]
+    fn published_zone_bounds_decide_which_steps_switch() {
+        let zones = gcp2_zones();
+        let mut shifted = gcp2_zones();
+        shifted.zones[1].start = 150.0;
+        // 130 then 145: Normal → Elevated with GCP2's bounds (held), Normal → Normal when
+        // Elevated starts at 150 (switched).
+        let step = |z: &ColorZones| {
+            let (a, b) = (view(130.0, z), view(145.0, z));
+            next_mood(Some(0), 4, Some(b.zone), Some(a.zone), Some(b.dice)).1
+        };
+        assert_eq!(step(&zones), MoodStep::Held);
+        assert_eq!(step(&shifted), MoodStep::Switched);
+        // YOLO thresholds follow the published zone list, not labels in code.
+        assert!(yolo_enters(3, 5) && yolo_enters(4, 5) && !yolo_enters(2, 5));
+        assert!(yolo_stays(2, 5) && !yolo_stays(1, 5));
+        assert!(yolo_enters(4, 6) && !yolo_enters(3, 6));
+    }
+
+    #[test]
+    fn yolo_goes_all_in_on_the_hottest_coin_and_holds_it() {
+        let zones = gcp2_zones();
+        let rows = [
+            ("BTC", 0.0, 0.2, 0.0, 3e8),
+            ("SOL", 0.0, 1.4, 0.0, 1e8),
+            ("ETH", 0.0, 0.9, 0.0, 2e8),
+        ];
+        let mut s = Schizo::new().unwrap();
+        let mut very_high = snap(0.0, 0.0, &rows);
+        very_high.gcp2 = Some(view(230.0, &zones));
+        assert_eq!(very_high.gcp2.as_ref().unwrap().zone_label, "Very High");
+        let intents = s.decide(&very_high, &holding(&["BTC"]));
+        assert_eq!(sold(&intents), vec!["BTC"]);
+        assert_eq!(
+            intents.last(),
+            Some(&Intent::Buy {
+                asset: "SOL".into(),
+                equity_fraction: 1.0
+            })
+        );
+        assert_eq!(s.exit_plan(), Some(plan(V13_EXIT_PLAN).unwrap()));
+        assert_eq!(s.yolo_buys().len(), 1);
+        // Still High (third-highest): YOLO holds SOL, nothing else happens.
+        let mut high = snap(0.0, 0.0, &rows);
+        high.gcp2 = Some(view(170.0, &zones));
+        assert!(s.decide(&high, &holding(&["SOL"])).is_empty());
+        // Back to Normal: YOLO is over and the votes decide again.
+        let mut normal = snap(0.0, 0.0, &rows);
+        normal.gcp2 = Some(view(50.0, &zones));
+        s.decide(&normal, &holding(&["SOL"]));
+        assert!(!s.yolo);
+    }
+
+    #[test]
+    fn the_active_mood_votes_twice() {
+        // Neutral breadth, no GCP2 reading (the mood stays as set): SOL at 1h +0.4% with a
+        // rising 15m gets one vote, from `detached`.
+        let rows = [("BTC", 0.1, 0.1, 0.0, 3e8), ("SOL", 0.2, 0.4, 0.0, 1e8)];
+        let mut as_v13 = Schizo::new().unwrap();
+        as_v13.active = Some(0);
+        assert!(
+            as_v13
+                .decide(&snap(0.0, 0.0, &rows), &flat_book())
+                .is_empty()
+        );
+        let mut as_detached = Schizo::new().unwrap();
+        as_detached.active = Some(2);
+        assert_eq!(
+            bought(&as_detached.decide(&snap(0.0, 0.0, &rows), &flat_book())),
+            vec!["SOL"]
+        );
+        // `detached` has no exit plan, so the buy carries none.
+        assert_eq!(as_detached.exit_plan(), None);
+        // Selling: the active mood's sell vote alone is enough (2), another's is not (1).
+        let turn = [("SOL", -0.1, -0.2, -1.0, 1e8)];
+        let intents = as_detached.decide(&snap(0.0, 0.0, &turn), &holding(&["SOL"]));
+        assert_eq!(sold(&intents), vec!["SOL"]);
+        let intents = as_v13.decide(&snap(0.0, 0.0, &turn), &holding(&["SOL"]));
+        assert!(intents.is_empty());
+    }
+
+    #[test]
+    fn schizo_decisions_up_to_a_step_do_not_change_when_later_data_is_removed() {
+        let market = wavy_market(5 * 1440).with_gcp2(Some(gcp2_feed(5 * 1440, gcp2_wave)));
+        let c = cfg(1440 + 30, 5 * 1440, 20);
+        let intents = |market: &Market| -> (Vec<(i64, Vec<Intent>)>, Vec<String>) {
+            let mut account = Account::new(Box::new(Schizo::new().unwrap()), c);
+            let mut seen = Vec::new();
+            let mut m = c.start_ms;
+            while m < c.end_ms {
+                if (m - c.start_ms) % (c.step_minutes * MINUTE_MS) == 0 {
+                    let snap = Snapshot::at(market, m);
+                    seen.push((m, account.step(market, &snap)));
+                }
+                account.minute(market, m);
+                m += MINUTE_MS;
+            }
+            (seen, account.finish(c.end_ms).notes)
+        };
+        let cut = T0 + (3 * 1440 + 200) * MINUTE_MS;
+        let (full, notes) = intents(&market);
+        let (short, _) = intents(&truncated(&market, cut));
+        let upto = |s: &[(i64, Vec<Intent>)]| -> Vec<(i64, Vec<Intent>)> {
+            s.iter().filter(|(t, _)| *t <= cut).cloned().collect()
+        };
+        assert!(upto(&full).iter().any(|(_, i)| !i.is_empty()));
+        assert_eq!(upto(&full), upto(&short));
+        // The wave produces both kinds of mood steps and at least one YOLO buy.
+        let steps = &notes[0];
+        assert!(!steps.starts_with("mood steps: 0 switched"), "{notes:?}");
+        assert!(!steps.contains(" 0 held"), "{notes:?}");
+        assert!(!notes[2].ends_with("YOLO buys: 0"), "{notes:?}");
     }
 }

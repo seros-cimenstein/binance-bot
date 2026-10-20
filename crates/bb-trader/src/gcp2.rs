@@ -378,6 +378,8 @@ pub struct Gcp2View {
     /// Index into the colour zones, lowest first.
     pub zone: usize,
     pub zone_label: String,
+    /// How many zones GCP2 publishes (so "the top two zones" needs no label in code).
+    pub zone_count: usize,
     pub dice: u64,
 }
 
@@ -389,6 +391,7 @@ impl Gcp2View {
             units: reading.units,
             zone,
             zone_label: zones.label(zone).to_string(),
+            zone_count: zones.zones.len(),
             dice: reading.dice(),
         }
     }
