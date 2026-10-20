@@ -175,6 +175,76 @@ impl Persona for Contrarian {
     }
 }
 
+/// Minimum 1h move (percent) for a `detached` entry: one modeled round trip (25 bps).
+pub const DETACHED_MIN_1H_PCT: f64 = 0.25;
+/// 1h lead (percent) another coin needs over the held one to make `detached` rotate.
+pub const DETACHED_ROTATE_GAP_PCT: f64 = 0.5;
+
+/// `detached`: raw price action only: no breadth, no 24h volume, no liquid filter and no
+/// exit plan.
+///
+/// - Universe: every cached coin with a bar at the step.
+/// - Buy when flat: the coin with the highest 1h return, if that return is above +0.25%
+///   (one modeled round trip) and its 15m return is positive, with all cash.
+/// - Sell at a step when the held coin's 15m and 1h returns are both negative.
+/// - Rotate: sell the held coin and buy the best 1h coin when that coin's 1h return beats
+///   the held coin's by more than 0.5 percentage points.
+#[derive(Debug, Clone, Default)]
+pub struct Detached;
+
+impl Detached {
+    /// The coin with the highest 1h return, ties to the first by name.
+    fn leader(snap: &Snapshot) -> Option<(&String, f64)> {
+        let leader = best_by(snap.coins.keys(), |asset| snap.coin(asset)?.ret_1h)?;
+        Some((leader, snap.coin(leader)?.ret_1h?))
+    }
+}
+
+impl Persona for Detached {
+    fn name(&self) -> &str {
+        "detached"
+    }
+
+    fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        let buy = |asset: &String| Intent::Buy {
+            asset: asset.clone(),
+            equity_fraction: 1.0,
+        };
+        let Some(held) = book.holdings.keys().next() else {
+            let entry = Self::leader(snap).filter(|(asset, r1h)| {
+                *r1h > DETACHED_MIN_1H_PCT
+                    && snap
+                        .coin(asset)
+                        .and_then(|c| c.ret_15m)
+                        .is_some_and(|r| r > 0.0)
+            });
+            return entry.map(|(asset, _)| vec![buy(asset)]).unwrap_or_default();
+        };
+        let Some(coin) = snap.coin(held) else {
+            return Vec::new();
+        };
+        let (Some(r15), Some(r1h)) = (coin.ret_15m, coin.ret_1h) else {
+            return Vec::new();
+        };
+        if r15 < 0.0 && r1h < 0.0 {
+            return vec![Intent::Sell {
+                asset: held.clone(),
+                reason: "price_turn",
+            }];
+        }
+        match Self::leader(snap) {
+            Some((leader, lead)) if leader != held && lead - r1h > DETACHED_ROTATE_GAP_PCT => vec![
+                Intent::Sell {
+                    asset: held.clone(),
+                    reason: "rotate",
+                },
+                buy(leader),
+            ],
+            _ => Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::BTreeMap;
@@ -406,6 +476,80 @@ pub(crate) mod tests {
         assert_eq!(first.reason, "deadline");
         assert_eq!(first.exit_ms - first.entry_ms, 360 * MINUTE_MS);
         assert!(first.net_pnl_usdt < 0.0);
+        assert_eq!(r.skipped_orders, 0);
+    }
+
+    #[test]
+    fn detached_ignores_breadth_volume_and_the_liquid_filter() {
+        let rows = [
+            ("BTC", 0.1, 0.3, 1.0, 3e8),
+            ("INJ", 0.2, 0.9, -1.0, 1.0),
+            ("SOL", -0.1, 1.2, 2.0, 1e8),
+        ];
+        let mut d = Detached;
+        let mut bear = snap(-100.0, -5.0, &rows);
+        // INJ is not a liquid candidate and has almost no volume: it can still be picked.
+        bear.liquid_top = vec!["BTC".into(), "SOL".into()];
+        let mut bull = bear.clone();
+        bull.score = Some(100.0);
+        bull.horizons[2].median_return_pct = Some(5.0);
+        let a = d.decide(&bear, &flat_book());
+        let b = d.decide(&bull, &flat_book());
+        // SOL leads on 1h but its 15m is negative, so no entry; INJ is not the leader.
+        assert!(a.is_empty());
+        assert_eq!(a, b);
+        let rows = [("BTC", 0.1, 0.3, 1.0, 3e8), ("INJ", 0.2, 0.9, -1.0, 1.0)];
+        let mut s = snap(-100.0, -5.0, &rows);
+        s.liquid_top = vec!["BTC".into()];
+        assert_eq!(bought(&d.decide(&s, &flat_book())), vec!["INJ"]);
+        s.score = Some(100.0);
+        assert_eq!(bought(&d.decide(&s, &flat_book())), vec!["INJ"]);
+        // At or under +0.25% 1h nobody qualifies.
+        let weak = snap(0.0, 0.0, &[("BTC", 0.1, 0.25, 1.0, 3e8)]);
+        assert!(d.decide(&weak, &flat_book()).is_empty());
+    }
+
+    #[test]
+    fn detached_rotates_on_a_lead_over_half_a_point_and_sells_a_turn() {
+        let mut d = Detached;
+        let gap = |other: f64| {
+            snap(
+                0.0,
+                0.0,
+                &[("BTC", 0.1, 1.0, 0.0, 3e8), ("ETH", 0.1, other, 0.0, 2e8)],
+            )
+        };
+        assert!(d.decide(&gap(1.49), &holding(&["BTC"])).is_empty());
+        let intents = d.decide(&gap(1.51), &holding(&["BTC"]));
+        assert_eq!(sold(&intents), vec!["BTC"]);
+        assert_eq!(bought(&intents), vec!["ETH"]);
+        // 15m and 1h both negative: sell, whatever the others do.
+        let turn = snap(
+            0.0,
+            0.0,
+            &[("BTC", -0.1, -0.2, 0.0, 3e8), ("ETH", 0.1, 0.1, 0.0, 2e8)],
+        );
+        let intents = d.decide(&turn, &holding(&["BTC"]));
+        assert_eq!((sold(&intents), bought(&intents)), (vec!["BTC"], vec![]));
+        // Only one of them negative: hold.
+        let mixed = snap(
+            0.0,
+            0.0,
+            &[("BTC", -0.1, 0.2, 0.0, 3e8), ("ETH", 0.1, 0.1, 0.0, 2e8)],
+        );
+        assert!(d.decide(&mixed, &holding(&["BTC"])).is_empty());
+    }
+
+    #[test]
+    fn detached_trades_without_an_exit_plan_in_the_engine() {
+        let market = rising_market(2 * 1440);
+        let c = cfg(1500, 2880, 20);
+        let r = run(&market, &c, Box::new(Detached)).unwrap();
+        assert!(Detached.exit_plan().is_none());
+        // Rising market: it buys the fastest coin (SOL) and never has a reason to sell.
+        assert_eq!(r.trades.len(), 1);
+        assert_eq!(r.trades[0].asset, "SOL");
+        assert!(r.trades[0].open_at_end);
         assert_eq!(r.skipped_orders, 0);
     }
 }
