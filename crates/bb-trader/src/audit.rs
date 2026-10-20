@@ -212,6 +212,9 @@ pub struct AuditRow {
     /// ([`TraderConfig::run_config`]), so each cycle says what setup produced it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_config: Option<Value>,
+    /// Cycle summaries (Phase 49): the cycle's schizo state ([`crate::schizo::SchizoState`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schizo: Option<Value>,
 }
 
 impl AuditRow {
@@ -245,6 +248,7 @@ impl AuditRow {
             agent: None,
             operator_review: None,
             run_config: None,
+            schizo: None,
         }
     }
 }

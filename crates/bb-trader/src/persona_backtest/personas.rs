@@ -529,35 +529,11 @@ impl Persona for Ensemble {
     }
 
     fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
-        let mut buy_votes: BTreeMap<String, usize> = BTreeMap::new();
-        let mut sell_votes: BTreeMap<String, usize> = BTreeMap::new();
-        for voter in &mut self.voters {
-            let mut bought = BTreeSet::new();
-            let mut sold = BTreeSet::new();
-            for intent in voter.decide(snap, book) {
-                match intent {
-                    Intent::Buy { asset, .. } => {
-                        if bought.insert(asset.clone()) {
-                            *buy_votes.entry(asset).or_default() += 1;
-                        }
-                    }
-                    Intent::Sell { asset, .. } => {
-                        if sold.insert(asset.clone()) {
-                            *sell_votes.entry(asset).or_default() += 1;
-                        }
-                    }
-                }
-            }
-        }
+        let votes = Votes::cast(&mut self.voters, None, snap, book);
         if !book.is_flat() {
-            let sells: Vec<Intent> = book
-                .holdings
-                .keys()
-                .filter(|asset| {
-                    sell_votes
-                        .get(*asset)
-                        .is_some_and(|n| *n >= ENSEMBLE_MIN_VOTES)
-                })
+            let sells: Vec<Intent> = votes
+                .sells(book)
+                .into_iter()
                 .map(|asset| Intent::Sell {
                     asset: asset.clone(),
                     reason: "vote",
@@ -566,10 +542,10 @@ impl Persona for Ensemble {
             self.vote_sells += sells.len();
             return sells;
         }
-        let Some(asset) = ensemble_pick(&buy_votes, snap) else {
+        let Some(asset) = votes.pick(snap) else {
             return Vec::new();
         };
-        *self.buys_by_votes.entry(buy_votes[asset]).or_default() += 1;
+        *self.buys_by_votes.entry(votes.buy[asset]).or_default() += 1;
         vec![Intent::Buy {
             asset: asset.clone(),
             equity_fraction: 1.0,
@@ -710,6 +686,96 @@ pub fn yolo_stays(zone: usize, zone_count: usize) -> bool {
     zone + 3 >= zone_count
 }
 
+/// YOLO after a step: `zone` is `(zone index, zone count)` of this step's GCP2 reading.
+/// Entering needs one of the two highest zones, staying the third-highest or above; without
+/// a reading there is no YOLO.
+pub fn yolo_next(was_yolo: bool, zone: Option<(usize, usize)>) -> bool {
+    match zone {
+        Some((z, n)) if was_yolo => yolo_stays(z, n),
+        Some((z, n)) => yolo_enters(z, n),
+        None => false,
+    }
+}
+
+/// The YOLO coin: the liquid-top coin with the highest 1h return (ties: liquid-top order).
+pub fn yolo_target(snap: &Snapshot) -> Option<&String> {
+    best_by(snap.liquid_top.iter(), |a| snap.coin(a)?.ret_1h)
+}
+
+/// One persona's votes at a step.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PersonaVote {
+    pub persona: String,
+    /// 2 for the active mood, 1 otherwise.
+    pub weight: usize,
+    pub buy: Vec<String>,
+    pub sell: Vec<String>,
+}
+
+/// The base personas arguing over one book: each gives at most one buy and one sell vote
+/// per coin, weighted by [`PersonaVote::weight`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Votes {
+    pub by_persona: Vec<PersonaVote>,
+    /// Weighted buy votes per coin.
+    pub buy: BTreeMap<String, usize>,
+    /// Weighted sell votes per coin.
+    pub sell: BTreeMap<String, usize>,
+}
+
+impl Votes {
+    /// Every voter decides on `book`; `active` (index into `voters`) counts double.
+    pub fn cast(
+        voters: &mut [Box<dyn Persona>],
+        active: Option<usize>,
+        snap: &Snapshot,
+        book: &Book,
+    ) -> Self {
+        let mut votes = Self::default();
+        for (i, voter) in voters.iter_mut().enumerate() {
+            let weight = if Some(i) == active { 2 } else { 1 };
+            let mut bought = BTreeSet::new();
+            let mut sold = BTreeSet::new();
+            for intent in voter.decide(snap, book) {
+                match intent {
+                    Intent::Buy { asset, .. } => {
+                        bought.insert(asset);
+                    }
+                    Intent::Sell { asset, .. } => {
+                        sold.insert(asset);
+                    }
+                }
+            }
+            for asset in &bought {
+                *votes.buy.entry(asset.clone()).or_default() += weight;
+            }
+            for asset in &sold {
+                *votes.sell.entry(asset.clone()).or_default() += weight;
+            }
+            votes.by_persona.push(PersonaVote {
+                persona: voter.name().to_string(),
+                weight,
+                buy: bought.into_iter().collect(),
+                sell: sold.into_iter().collect(),
+            });
+        }
+        votes
+    }
+
+    /// Held coins with at least [`ENSEMBLE_MIN_VOTES`] weighted sell votes.
+    pub fn sells<'a>(&self, book: &'a Book) -> Vec<&'a String> {
+        book.holdings
+            .keys()
+            .filter(|a| self.sell.get(*a).is_some_and(|n| *n >= ENSEMBLE_MIN_VOTES))
+            .collect()
+    }
+
+    /// The coin a flat book buys (see [`ensemble_pick`]).
+    pub fn pick(&self, snap: &Snapshot) -> Option<&String> {
+        ensemble_pick(&self.buy, snap)
+    }
+}
+
 /// `schizo` (Phase 49): the four base personas in one head, ruled by GCP2.
 ///
 /// - **Dice:** the GCP2 dice of the minute ending before the step. No seed; without a
@@ -806,11 +872,7 @@ impl Schizo {
 
     fn update_yolo(&mut self, snap: &Snapshot) {
         let zone = snap.gcp2.as_ref().map(|v| (v.zone, v.zone_count));
-        self.yolo = match zone {
-            Some((z, n)) if self.yolo => yolo_stays(z, n),
-            Some((z, n)) => yolo_enters(z, n),
-            None => false,
-        };
+        self.yolo = yolo_next(self.yolo, zone);
         if !self.yolo {
             self.yolo_asset = None;
         }
@@ -825,8 +887,7 @@ impl Schizo {
         {
             return Vec::new();
         }
-        let Some(target) = best_by(snap.liquid_top.iter(), |a| snap.coin(a)?.ret_1h).cloned()
-        else {
+        let Some(target) = yolo_target(snap).cloned() else {
             return Vec::new();
         };
         let mut intents: Vec<Intent> = book
@@ -852,42 +913,24 @@ impl Schizo {
     }
 
     fn vote_intents(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
-        let mut buy_votes: BTreeMap<String, usize> = BTreeMap::new();
-        let mut sell_votes: BTreeMap<String, usize> = BTreeMap::new();
-        for (i, voter) in self.voters.iter_mut().enumerate() {
-            let weight = if Some(i) == self.active { 2 } else { 1 };
-            let mut bought = BTreeSet::new();
-            let mut sold = BTreeSet::new();
-            for intent in voter.decide(snap, book) {
-                match intent {
-                    Intent::Buy { asset, .. } if bought.insert(asset.clone()) => {
-                        *buy_votes.entry(asset).or_default() += weight;
-                    }
-                    Intent::Sell { asset, .. } if sold.insert(asset.clone()) => {
-                        *sell_votes.entry(asset).or_default() += weight;
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let votes = Votes::cast(&mut self.voters, self.active, snap, book);
         if !book.is_flat() {
-            return book
-                .holdings
-                .keys()
-                .filter(|a| sell_votes.get(*a).is_some_and(|n| *n >= ENSEMBLE_MIN_VOTES))
+            return votes
+                .sells(book)
+                .into_iter()
                 .map(|a| Intent::Sell {
                     asset: a.clone(),
                     reason: "vote",
                 })
                 .collect();
         }
-        let Some(asset) = ensemble_pick(&buy_votes, snap) else {
+        let Some(asset) = votes.pick(snap).cloned() else {
             return Vec::new();
         };
         self.next_plan = self.active.and_then(|i| self.voters[i].exit_plan());
         self.next_tag = Some("vote");
         vec![Intent::Buy {
-            asset: asset.clone(),
+            asset,
             equity_fraction: 1.0,
         }]
     }
@@ -1044,8 +1087,6 @@ pub(crate) mod tests {
                 .map(|a| {
                     let h = Holding {
                         qty: 1.0,
-                        entry_price: 100.0,
-                        entry_ms: T0 - 60 * MINUTE_MS,
                         value: 1000.0 / assets.len() as f64,
                     };
                     (a.to_string(), h)

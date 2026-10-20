@@ -1883,6 +1883,7 @@ mod tests {
             trade_record: None,
             market_mood: None,
             gcp2: None,
+            schizo: None,
         };
         let last = LastCycle {
             cycle_id: "c0".into(),
@@ -1955,6 +1956,7 @@ mod tests {
             trade_record: None,
             market_mood: None,
             gcp2: None,
+            schizo: None,
         };
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
         for i in 0..8 {
@@ -2023,10 +2025,12 @@ mod tests {
                 crate::market_mood::CoinMove {
                     asset: "INJ".into(),
                     returns_pct: vec![Some(0.4), Some(1.1), Some(4.25), Some(8.0)],
+                    quote_volume_24h: None,
                 },
                 crate::market_mood::CoinMove {
                     asset: "STX".into(),
                     returns_pct: vec![Some(-0.2), Some(-0.5), Some(-1.10), Some(-2.0)],
+                    quote_volume_24h: None,
                 },
             ],
             flat_band_pct: 0.1,
@@ -2050,6 +2054,7 @@ mod tests {
             trade_record: Some(record),
             market_mood: Some(mood),
             gcp2: None,
+            schizo: None,
         };
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
         assert!(prompt.contains("- by hold time (all time): <30m: 11 trips, 2 wins (18%), net -0.594 USDT | 30-60m: 9 trips, 3 wins (33%), net 0.017 USDT | >=60m: 10 trips, 7 wins (70%), net 0.692 USDT"));

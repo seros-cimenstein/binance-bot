@@ -21,6 +21,8 @@
 //! - [`persona_backtest`]: Phase 48 offline backtest of deterministic rule personas
 //!   (research only, no network, no order path).
 //! - [`gcp2`]: GCP2 (gcp2.net) public network coherence, read-only (Phase 49).
+//! - [`schizo`]: the live trader's per-cycle schizo state (GCP2 mood ring, dice, the
+//!   personas' votes, YOLO), persisted next to the agent state (Phase 49).
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
 //!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `bot-spot-persona-backtest`,
 //!   `gcp2-history`.
@@ -48,6 +50,7 @@ pub mod journal;
 pub mod market_mood;
 pub mod memory;
 pub mod persona_backtest;
+pub mod schizo;
 pub mod scope;
 pub mod tools;
 pub mod trades;

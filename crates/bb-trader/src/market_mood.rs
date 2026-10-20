@@ -78,6 +78,9 @@ pub struct HorizonBreadth {
 pub struct CoinMove {
     pub asset: String,
     pub returns_pct: Vec<Option<f64>>,
+    /// 24h quote volume from the `ticker/24hr` read that ranked the basket (`None` when
+    /// built from candles alone).
+    pub quote_volume_24h: Option<f64>,
 }
 
 /// The score at one 15m bar close (the newest bar is still forming).
@@ -303,6 +306,7 @@ pub fn mood(series: &[(String, Vec<Kline>)], fetched_at: String) -> MarketView {
                 .iter()
                 .map(|&(_, bars, _)| percent_change(*c.get(&now)?, *c.get(&(now - bars * BAR_MS))?))
                 .collect(),
+            quote_volume_24h: None,
         })
         .collect();
     let score = score(&horizons);
@@ -363,6 +367,13 @@ pub async fn fetch(client: Option<&BinanceClient>) -> MarketView {
     }
     let mut view = mood(&series, bb_core::time::now().to_rfc3339());
     view.missing = missing;
+    for coin in &mut view.coins {
+        let symbol = format!("{}{QUOTE}", coin.asset);
+        coin.quote_volume_24h = tickers
+            .iter()
+            .find(|t| t.symbol == symbol)
+            .map(|t| float(t.quote_volume));
+    }
     view
 }
 

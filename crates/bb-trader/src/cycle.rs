@@ -201,7 +201,8 @@ impl Runtime {
         Some(record)
     }
 
-    /// Catalog, balances, candidate routes, evidence, social evidence, trade memory and GCP2.
+    /// Catalog, balances, candidate routes, evidence, social evidence, trade memory, GCP2
+    /// and the schizo state.
     pub async fn build_snapshot(&self) -> Result<Snapshot> {
         let balances = self.balances().await?;
         let view = self.load_view().await?;
@@ -209,7 +210,7 @@ impl Runtime {
         let trade_memory = self.trade_memory(&balances, &view, self.config.trade_memory_limit);
         let trade_record = self.trade_record(&balances, &view).await;
         self.evidence.clear().await;
-        let market_mood = if self.config.market_evidence_enabled {
+        let breadth = if self.config.market_evidence_enabled {
             for candidate in &mut candidates {
                 let source = self
                     .evidence
@@ -225,8 +226,7 @@ impl Runtime {
                     destination,
                 ));
             }
-            let mood = crate::market_mood::fetch(Some(&self.client)).await;
-            mood.score.is_some().then_some(mood)
+            Some(crate::market_mood::fetch(Some(&self.client)).await)
         } else {
             None
         };
@@ -249,11 +249,17 @@ impl Runtime {
             Some(reader) => Some(reader.now(crate::audit::utc_timestamp()).await),
             None => None,
         };
+        let portfolio_value_usdt = balances.free_value_usdt(&view);
+        let schizo = match &gcp2 {
+            Some(now) => self.schizo_state(now, breadth.as_ref(), &balances, &view, portfolio_value_usdt),
+            None => None,
+        };
+        let market_mood = breadth.filter(|mood| mood.score.is_some());
         let context = DecisionContext {
             timestamp: crate::audit::utc_timestamp(),
             prompt_version: self.config.prompt_version.clone(),
             market_pick_mode: self.config.market_pick_mode.as_str(),
-            portfolio_value_usdt: balances.free_value_usdt(&view),
+            portfolio_value_usdt,
             balances: balances.clone(),
             candidate_routes: candidates,
             execution_invariants: execution_invariants(&self.config),
@@ -262,12 +268,58 @@ impl Runtime {
             trade_record,
             market_mood,
             gcp2,
+            schizo,
         };
         Ok(Snapshot {
             context,
             view,
             balances,
         })
+    }
+
+    /// The schizo state for this cycle (saved by [`Self::finish_cycle`]); `None`, with an
+    /// error log, when the persisted memory cannot be read.
+    fn schizo_state(
+        &self,
+        gcp2: &crate::gcp2::Gcp2Now,
+        breadth: Option<&crate::market_mood::MarketView>,
+        balances: &Balances,
+        view: &MarketView,
+        equity: Decimal,
+    ) -> Option<crate::schizo::SchizoState> {
+        let path = crate::schizo::state_path(&self.config.state_path);
+        let memory = match crate::schizo::SchizoMemory::load(&path) {
+            Ok(memory) => memory,
+            Err(error) => {
+                tracing::error!(%error, path = %path.display(), "schizo memory unreadable; no schizo state this cycle");
+                return None;
+            }
+        };
+        let t = bb_core::time::now_ms();
+        let latest = gcp2.live().map(|live| live.latest.clone());
+        let snap = breadth.and_then(|mood| {
+            crate::persona_backtest::engine::Snapshot::from_breadth(t, mood, latest.clone())
+        });
+        let book = crate::schizo::live_book(
+            t,
+            balances,
+            equity,
+            |asset, amount| view.usdt_value(asset, amount),
+            |asset| view.markets.get(&format!("{asset}/USDT")).map(|m| m.min_notional),
+        );
+        match crate::schizo::SchizoState::next(
+            &memory,
+            latest.as_ref(),
+            snap.as_ref(),
+            &book,
+            crate::audit::utc_timestamp(),
+        ) {
+            Ok(state) => Some(state),
+            Err(error) => {
+                tracing::error!(%error, "schizo state failed; none this cycle");
+                None
+            }
+        }
     }
 
     /// Install the snapshot as the active cycle.
@@ -352,10 +404,21 @@ impl Runtime {
         });
         row.telegram_sent_routes = Some(state.telegram_sent_routes.clone());
         row.run_config = self.run_config.get().cloned();
+        row.schizo = match &state.context.schizo {
+            Some(schizo) => Some(serde_json::to_value(schizo)?),
+            None => None,
+        };
         let route_alerts = state.executions.len();
         row.telegram_sent = route_alerts > 0 && state.telegram_sent_routes.len() == route_alerts;
         // Durable first; the cycle's own alert (only when no route alerted) follows the write.
         self.audit.append(&row)?;
+        // The mood the audit row records is the one the next cycle starts from.
+        if let Some(schizo) = &state.context.schizo {
+            let path = crate::schizo::state_path(&self.config.state_path);
+            if let Err(error) = schizo.memory.save(&path) {
+                tracing::error!(%error, path = %path.display(), "schizo memory not saved; the next cycle starts from the previous one");
+            }
+        }
         if route_alerts == 0 || report.error.is_some() {
             let sent = self.alerter.send(&row).await;
             row.telegram_sent = sent && (route_alerts == 0 || row.telegram_sent);
@@ -1158,6 +1221,7 @@ mod tests {
             trade_record: None,
             market_mood: None,
             gcp2: None,
+            schizo: None,
         };
         runtime
             .begin_cycle(
@@ -1808,6 +1872,60 @@ mod tests {
         let skipped = rows[1]["agent"].as_object().unwrap();
         assert_eq!(skipped["model"], "anthropic/claude-haiku-5-5");
         assert!(!skipped.contains_key("attempts") && !skipped.contains_key("fallback_active"));
+    }
+
+    #[tokio::test]
+    async fn cycle_summary_records_the_schizo_state_and_saves_its_memory() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
+        let zones = crate::gcp2::parse_color_zones(
+            &json!({"colorzones": [
+                {"label": "Normal", "range_start": 0, "range_end": 140},
+                {"label": "High", "range_start": 140, "range_end": 10000}
+            ]}),
+            "t".into(),
+        )
+        .unwrap();
+        let view = crate::gcp2::Gcp2View::from_reading(
+            crate::gcp2::Gcp2Reading {
+                end_s: 1_792_487_579,
+                units: 1_691_705,
+            },
+            &zones,
+        );
+        let book = crate::persona_backtest::engine::Book {
+            t: 0,
+            cash: 100.0,
+            equity: 100.0,
+            holdings: Default::default(),
+        };
+        let state = crate::schizo::SchizoState::next(
+            &Default::default(),
+            Some(&view),
+            None,
+            &book,
+            "now".into(),
+        )
+        .unwrap();
+        runtime.cycle.lock().await.as_mut().unwrap().context.schizo = Some(state.clone());
+        runtime.finish_cycle(&TurnReport::default()).await.unwrap();
+        runtime
+            .record_skipped("cycle-2", RowStatus::Held, "halt", "")
+            .await
+            .unwrap();
+        let rows = audit_rows(dir.path());
+        let schizo = &rows[0]["schizo"];
+        assert_eq!(schizo["mood"], json!(state.mood));
+        assert_eq!(schizo["mood_step"], "initial");
+        assert_eq!(schizo["gcp2"]["value"], 169.1705);
+        assert_eq!(schizo["gcp2"]["zone"], "High");
+        assert_eq!(schizo["dice"], json!(view.dice));
+        assert_eq!(schizo["yolo"], true, "High is one of the two highest of 2 zones");
+        assert!(rows[1].get("schizo").is_none());
+        let saved = crate::schizo::SchizoMemory::load(&dir.path().join(crate::schizo::STATE_FILE))
+            .unwrap();
+        assert_eq!(saved, state.memory);
     }
 
     #[test]

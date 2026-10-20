@@ -181,6 +181,8 @@ pub struct DecisionContext {
     /// Phase 49 live GCP2 reading (`None` when the reader is off; failures are
     /// `Gcp2Now::Unavailable`).
     pub gcp2: Option<crate::gcp2::Gcp2Now>,
+    /// Phase 49 schizo state (`None` unless the GCP2 reader is on).
+    pub schizo: Option<crate::schizo::SchizoState>,
 }
 
 impl DecisionContext {
@@ -200,6 +202,7 @@ impl DecisionContext {
             "trade_record": self.trade_record,
             "market_mood": self.market_mood,
             "gcp2": self.gcp2.as_ref().map(crate::gcp2::Gcp2Now::payload),
+            "schizo": self.schizo,
         })
     }
 
