@@ -211,6 +211,10 @@ pub trait Persona {
     fn before_step(&mut self, _market: &Market, _snap: &Snapshot) {}
     /// Called after the account has processed minute `m` (multi-persona shadows advance).
     fn after_minute(&mut self, _market: &Market, _m: i64) {}
+    /// Lines for the report about how the persona behaved (e.g. multi-persona switches).
+    fn notes(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// One round trip (or a position still open at the window end).
@@ -257,6 +261,8 @@ pub struct RunResult {
     pub skipped_orders: usize,
     pub skip_reasons: BTreeMap<&'static str, usize>,
     pub trades: Vec<Trade>,
+    /// [`Persona::notes`] at the end of the run.
+    pub notes: Vec<String>,
 }
 
 struct Position {
@@ -669,6 +675,7 @@ impl Account {
             skipped_orders: self.skips.values().sum(),
             skip_reasons: self.skips,
             trades,
+            notes: self.persona.notes(),
         }
     }
 }
@@ -957,7 +964,7 @@ pub(crate) mod tests {
         ])
     }
 
-    fn truncated(market: &Market, t: i64) -> Market {
+    pub fn truncated(market: &Market, t: i64) -> Market {
         Market::from_series(
             market
                 .iter()

@@ -3,7 +3,8 @@
 //! Every persona reads only the step's [`Snapshot`] and its own [`Book`]. Exit plans use
 //! the Phase 45 menu (`ExitPlan::parse_spec`).
 
-use super::engine::{Book, Intent, Persona, Snapshot};
+use super::data::Market;
+use super::engine::{Account, Book, Config, Intent, Persona, Snapshot};
 use crate::error::{Result, TraderError};
 use crate::exit_plan::ExitPlan;
 use crate::market_mood::LEAN_SCORE;
@@ -308,6 +309,162 @@ impl Persona for HighVariance {
     }
 }
 
+/// The four base personas, `v13` first.
+pub fn base_personas() -> Result<Vec<Box<dyn Persona>>> {
+    Ok(vec![
+        Box::new(V13::new()?),
+        Box::new(Contrarian::new()?),
+        Box::new(Detached),
+        Box::new(HighVariance::new()?),
+    ])
+}
+
+/// Trailing window `rotation` scores its shadows over.
+pub const ROTATION_LOOKBACK_MS: i64 = 72 * 3_600_000;
+const DAY_MS: i64 = 86_400_000;
+
+/// Index of the shadow with the best net return over the `lookback_ms` before `t`, from
+/// each shadow's step equities (time order, nothing after `t` used). Index 0 wins ties and
+/// keeps the job while there is not yet a step at or before `t - lookback_ms`.
+pub fn best_trailing(step_equities: &[&[(i64, f64)]], t: i64, lookback_ms: i64) -> usize {
+    let trailing = |equity: &[(i64, f64)]| -> Option<f64> {
+        let upto = &equity[..equity.partition_point(|(ts, _)| *ts <= t)];
+        let now = upto.last()?.1;
+        let then_index = upto.partition_point(|(ts, _)| *ts <= t - lookback_ms);
+        let then = upto[..then_index].last()?.1;
+        (then > 0.0).then(|| now / then - 1.0)
+    };
+    let mut best = 0;
+    let mut best_return = step_equities.first().and_then(|e| trailing(e));
+    for (i, equity) in step_equities.iter().enumerate().skip(1) {
+        if let Some(r) = trailing(equity)
+            && best_return.is_some_and(|b| r > b)
+        {
+            best = i;
+            best_return = Some(r);
+        }
+    }
+    best
+}
+
+/// `rotation`: the "rotate" half of the multi-persona mode.
+///
+/// - Shadow-runs every base persona (`v13`, `contrarian`, `detached`, `high_variance`) on
+///   its own simulated account, fed the same steps and minutes, so only shadow equity up to
+///   the step is ever read.
+/// - At the first step of each UTC day (steps rarely land on 00:00 exactly), it makes
+///   active the base persona whose shadow made the best net return over the trailing 72h.
+///   Ties, and every day before 72h of shadow history exist, go to `v13`.
+/// - On a switch it sells every holding at that step (both fees); the new persona trades
+///   from the next step on a flat book. Otherwise it follows the active persona's intents
+///   and exit plan.
+pub struct Rotation {
+    deciders: Vec<Box<dyn Persona>>,
+    shadows: Vec<Account>,
+    active: usize,
+    day: Option<i64>,
+    switching: bool,
+    switches: Vec<(i64, usize, usize)>,
+    active_steps: Vec<usize>,
+}
+
+impl Rotation {
+    pub fn new(cfg: Config) -> Result<Self> {
+        Self::with(cfg, base_personas)
+    }
+
+    /// A rotation over the personas `make` builds (called twice: deciders and shadows).
+    pub fn with(cfg: Config, make: impl Fn() -> Result<Vec<Box<dyn Persona>>>) -> Result<Self> {
+        let deciders = make()?;
+        if deciders.is_empty() {
+            return Err(TraderError::config("rotation needs at least one persona"));
+        }
+        let shadows = make()?
+            .into_iter()
+            .map(|persona| Account::new(persona, cfg))
+            .collect();
+        Ok(Self {
+            active_steps: vec![0; deciders.len()],
+            deciders,
+            shadows,
+            active: 0,
+            day: None,
+            switching: false,
+            switches: Vec::new(),
+        })
+    }
+
+    fn decider_name(&self, i: usize) -> &str {
+        self.deciders[i].name()
+    }
+}
+
+impl Persona for Rotation {
+    fn name(&self) -> &str {
+        "rotation"
+    }
+
+    fn before_step(&mut self, market: &Market, snap: &Snapshot) {
+        for shadow in &mut self.shadows {
+            shadow.step(market, snap);
+        }
+        let day = snap.t.div_euclid(DAY_MS);
+        let new_day = self.day.is_some_and(|d| d != day);
+        self.day = Some(day);
+        if !new_day {
+            return;
+        }
+        let equities: Vec<&[(i64, f64)]> = self.shadows.iter().map(Account::step_equity).collect();
+        let best = best_trailing(&equities, snap.t, ROTATION_LOOKBACK_MS);
+        if best != self.active {
+            self.switches.push((snap.t, self.active, best));
+            self.active = best;
+            self.switching = true;
+        }
+    }
+
+    fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        self.active_steps[self.active] += 1;
+        if std::mem::take(&mut self.switching) {
+            return sell_all(book, "switch");
+        }
+        self.deciders[self.active].decide(snap, book)
+    }
+
+    fn exit_plan(&self) -> Option<ExitPlan> {
+        self.deciders[self.active].exit_plan()
+    }
+
+    fn after_minute(&mut self, market: &Market, m: i64) {
+        for shadow in &mut self.shadows {
+            shadow.minute(market, m);
+        }
+    }
+
+    fn notes(&self) -> Vec<String> {
+        let time = |t: i64| {
+            chrono::DateTime::from_timestamp_millis(t)
+                .map_or_else(|| t.to_string(), |d| d.format("%Y-%m-%d %H:%M").to_string())
+        };
+        let steps: Vec<String> = (0..self.deciders.len())
+            .map(|i| format!("{} {}", self.decider_name(i), self.active_steps[i]))
+            .collect();
+        let mut notes = vec![
+            format!("switches: {}", self.switches.len()),
+            format!("active steps: {}", steps.join(", ")),
+        ];
+        notes.extend(self.switches.iter().map(|(t, from, to)| {
+            format!(
+                "{} UTC: {} -> {}",
+                time(*t),
+                self.decider_name(*from),
+                self.decider_name(*to)
+            )
+        }));
+        notes
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::BTreeMap;
@@ -315,7 +472,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::market_mood::HorizonBreadth;
     use crate::persona_backtest::data::{MINUTE_MS, Market};
-    use crate::persona_backtest::engine::tests::{T0, cfg, coin};
+    use crate::persona_backtest::engine::tests::{T0, cfg, coin, truncated, wavy_market};
     use crate::persona_backtest::engine::{CoinView, Holding, run};
 
     /// `(asset, 15m, 1h, 4h, 24h quote volume)`.
@@ -696,5 +853,108 @@ pub(crate) mod tests {
         let narrow = run(&market, &c, Box::new(tight)).unwrap();
         assert_eq!(narrow.trades[0].reason, "follow_peak");
         assert!(!narrow.trades[0].open_at_end);
+    }
+
+    #[test]
+    fn rotation_picks_the_best_trailing_72h_shadow_with_v13_on_ties() {
+        let h = 3_600_000;
+        let t = 100 * h;
+        // Index 2 gained 10% since 72h ago (its old peak 30h earlier does not count).
+        let a = [(0, 100.0), (t - 72 * h, 100.0), (t, 104.0)];
+        let b = [(0, 100.0), (t - 72 * h, 100.0), (t, 101.0)];
+        let c = [(0, 200.0), (t - 72 * h, 100.0), (t, 110.0)];
+        assert_eq!(best_trailing(&[&a, &b, &c], t, 72 * h), 2);
+        // Data after t is ignored.
+        let late = [(0, 100.0), (t - 72 * h, 100.0), (t, 100.0), (t + h, 999.0)];
+        assert_eq!(best_trailing(&[&a, &late], t, 72 * h), 0);
+        // A tie stays with index 0 (v13).
+        assert_eq!(best_trailing(&[&a, &a.clone()], t, 72 * h), 0);
+        // Without a step 72h back, nobody can be scored: v13 keeps the job.
+        let young = [(t - 10 * h, 100.0), (t, 150.0)];
+        assert_eq!(best_trailing(&[&young, &young.clone()], t, 72 * h), 0);
+    }
+
+    /// Buys one coin with all cash whenever flat.
+    struct Buyer(&'static str, &'static str);
+
+    impl Persona for Buyer {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn decide(&mut self, _snap: &Snapshot, book: &Book) -> Vec<Intent> {
+            if book.is_flat() {
+                vec![Intent::Buy {
+                    asset: self.1.into(),
+                    equity_fraction: 1.0,
+                }]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    #[test]
+    fn a_rotation_switch_sells_the_old_book_with_fees_then_follows_the_winner() {
+        // SOL is flat, ETH climbs: the ETH buyer's shadow wins once 72h of history exist.
+        let market = Market::from_series([
+            coin("SOL", 5600, |_| 100.0),
+            coin("ETH", 5600, |m| 10.0 + 0.001 * m as f64),
+        ]);
+        let c = cfg(0, 5600, 20);
+        let make = || -> Result<Vec<Box<dyn Persona>>> {
+            Ok(vec![
+                Box::new(Buyer("sol_buyer", "SOL")),
+                Box::new(Buyer("eth_buyer", "ETH")),
+            ])
+        };
+        let r = run(&market, &c, Box::new(Rotation::with(c, make).unwrap())).unwrap();
+        // T0 is 2026-07-19T08:00Z; day starts at minutes 960, 2400, 3840 and 5280. Only the
+        // last one has a step 72h back (minute 960).
+        let switch_ms = T0 + 5280 * MINUTE_MS;
+        let sol = &r.trades[0];
+        assert_eq!((sol.asset.as_str(), sol.entry_ms), ("SOL", c.start_ms));
+        assert_eq!((sol.reason.as_str(), sol.exit_ms), ("switch", switch_ms));
+        // Flat price: the round trip loses exactly both fees and both slippages.
+        let qty = 1000.0 / (100.0 * 1.0005 * 1.00075);
+        let fees = qty * 100.0 * 1.0005 * 0.00075 + qty * 100.0 * 0.9995 * 0.00075;
+        assert!((sol.fees_usdt - fees).abs() < 1e-9);
+        assert!((sol.net_pnl_usdt - (qty * 100.0 * 0.9995 * 0.99925 - 1000.0)).abs() < 1e-9);
+        let eth = &r.trades[1];
+        assert_eq!(
+            (eth.asset.as_str(), eth.entry_ms),
+            ("ETH", switch_ms + 20 * MINUTE_MS)
+        );
+        assert_eq!(r.trades.len(), 2);
+        assert_eq!(r.notes[0], "switches: 1");
+        assert_eq!(r.notes[2], "2026-07-23 00:00 UTC: sol_buyer -> eth_buyer");
+    }
+
+    #[test]
+    fn rotation_decisions_up_to_a_step_do_not_change_when_later_bars_are_removed() {
+        let market = wavy_market(5 * 1440);
+        let c = cfg(1440 + 30, 5 * 1440, 20);
+        let intents = |market: &Market| -> Vec<(i64, Vec<Intent>)> {
+            let mut account = Account::new(Box::new(Rotation::new(c).unwrap()), c);
+            let mut seen = Vec::new();
+            let mut m = c.start_ms;
+            while m < c.end_ms {
+                if (m - c.start_ms) % (c.step_minutes * MINUTE_MS) == 0 {
+                    let snap = Snapshot::at(market, m);
+                    seen.push((m, account.step(market, &snap)));
+                }
+                account.minute(market, m);
+                m += MINUTE_MS;
+            }
+            seen
+        };
+        // Cut after the 4th day start, so a scored switch decision falls before the cut.
+        let cut = T0 + (4 * 1440 + 960 + 200) * MINUTE_MS;
+        let full = intents(&market);
+        let short = intents(&truncated(&market, cut));
+        let upto = |s: &[(i64, Vec<Intent>)]| -> Vec<(i64, Vec<Intent>)> {
+            s.iter().filter(|(t, _)| *t <= cut).cloned().collect()
+        };
+        assert!(upto(&full).iter().any(|(_, i)| !i.is_empty()));
+        assert_eq!(upto(&full), upto(&short));
     }
 }

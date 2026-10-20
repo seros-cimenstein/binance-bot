@@ -1244,7 +1244,7 @@ Step 2, schizoid personas:
   raw 1h/15m price action of all 32 cached coins (B2).
 - [x] `high_variance`: up to 3 positions, sized 25–100% of equity by the move,
   with exit plan `atr=6:1h,deadline=1440` (B3).
-- [ ] `rotation`: each day switches to the base persona with the best
+- [x] `rotation`: each day switches to the base persona with the best
   trailing-72h shadow return (B4).
 - [ ] `ensemble`: votes 2 of 4 among the base personas, with the `v13` exit plan
   as the backstop (B5).
