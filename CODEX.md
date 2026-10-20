@@ -191,6 +191,12 @@ driven project.
     said earlier will be live"): the schizo trader runs on the full wallet with
     no size cap.
   - Every Bot Spot hard-safety item below stays unchanged.
+  - Tag `bot-spot-v15-schizo` (`BOT_SPOT_GCP2_ENABLED=true`, the default) is
+    this trader: the system prompt replaces the v13 regime/swing bullets with
+    the four personalities, the inverted GCP2 mood ring, the voices (votes), the
+    one-coin all-cash bet and the YOLO order, and the cycle message opens with
+    `## Your schizo state`. Its no-stop-loss, exit-plan, hard-safety and tool
+    text is the v14 text. `BOT_SPOT_GCP2_ENABLED=false` gives the v14 prompts.
 - Bot Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

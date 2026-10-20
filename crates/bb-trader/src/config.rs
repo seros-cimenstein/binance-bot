@@ -21,8 +21,12 @@ use crate::scope::ScopeConfig;
 /// +4h entry timing in "Your record", liquid-leader candidate filtering, and asymmetric
 /// regime/swing guidance in the system prompt. v14 (2026-10-19, operator decision): live, the
 /// exit-plan section ends with the real results of the positions a plan sold instead of
-/// "plan vs your own exits" (in live mode only trigger price vs fill).
-pub const PROMPT_VERSION: &str = "bot-spot-v14-agentic";
+/// "plan vs your own exits" (in live mode only trigger price vs fill). v15 (2026-10-20,
+/// Phase 49, operator decision): the schizo trader. With `BOT_SPOT_GCP2_ENABLED` (on by
+/// default) the system prompt makes the bot act out a GCP2-driven mood among the four
+/// personas, hear their votes, bet one coin with all cash and obey YOLO, and the cycle
+/// message opens with `## Your schizo state`. With GCP2 off both prompts are the v14 text.
+pub const PROMPT_VERSION: &str = "bot-spot-v15-schizo";
 /// The only accepted value of `BOT_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 
@@ -218,7 +222,7 @@ pub struct TraderConfig {
     pub market_evidence_lookback_hours: u32,
     pub market_evidence_max_symbols: usize,
     pub trade_memory_limit: usize,
-    /// Phase 49: read GCP2 live once per cycle (information for the schizo state).
+    /// Phase 49: read GCP2 live once per cycle and run the schizo state and voice (v15).
     pub gcp2_enabled: bool,
     pub gcp2_base_url: String,
     // operator scope
@@ -366,7 +370,7 @@ impl TraderConfig {
             market_evidence_max_symbols: env
                 .integer("BOT_SPOT_MARKET_EVIDENCE_MAX_SYMBOLS", 12)?,
             trade_memory_limit: env.integer("BOT_SPOT_TRADE_MEMORY_LIMIT", 8)?,
-            gcp2_enabled: env.boolean("BOT_SPOT_GCP2_ENABLED", false)?,
+            gcp2_enabled: env.boolean("BOT_SPOT_GCP2_ENABLED", true)?,
             gcp2_base_url: env.string("BOT_SPOT_GCP2_BASE_URL", crate::gcp2::DEFAULT_BASE_URL),
             scope,
         };
