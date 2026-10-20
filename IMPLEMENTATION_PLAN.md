@@ -1246,7 +1246,7 @@ Step 2, schizoid personas:
   with exit plan `atr=6:1h,deadline=1440` (B3).
 - [x] `rotation`: each day switches to the base persona with the best
   trailing-72h shadow return (B4).
-- [ ] `ensemble`: votes 2 of 4 among the base personas, with the `v13` exit plan
+- [x] `ensemble`: votes 2 of 4 among the base personas, with the `v13` exit plan
   as the backstop (B5).
 
 Step 3, runner, report and docs:

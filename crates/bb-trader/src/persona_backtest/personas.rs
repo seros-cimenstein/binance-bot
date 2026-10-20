@@ -3,6 +3,8 @@
 //! Every persona reads only the step's [`Snapshot`] and its own [`Book`]. Exit plans use
 //! the Phase 45 menu (`ExitPlan::parse_spec`).
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::data::Market;
 use super::engine::{Account, Book, Config, Intent, Persona, Snapshot};
 use crate::error::{Result, TraderError};
@@ -462,6 +464,139 @@ impl Persona for Rotation {
             )
         }));
         notes
+    }
+}
+
+/// Votes `ensemble` needs to buy a coin or to sell the held one.
+pub const ENSEMBLE_MIN_VOTES: usize = 2;
+
+/// The coin to buy from `(asset, votes)`: at least [`ENSEMBLE_MIN_VOTES`], most votes first,
+/// then the highest 24h quote volume at the step, then the first by name.
+pub fn ensemble_pick<'a>(
+    votes: &'a BTreeMap<String, usize>,
+    snap: &Snapshot,
+) -> Option<&'a String> {
+    let volume = |asset: &str| snap.coin(asset).map_or(0.0, |c| c.quote_volume_24h);
+    votes
+        .iter()
+        .filter(|(_, n)| **n >= ENSEMBLE_MIN_VOTES)
+        .fold(
+            None,
+            |best: Option<(&String, usize)>, (asset, n)| match best {
+                Some((b, bn)) if bn > *n || (bn == *n && volume(b) >= volume(asset)) => {
+                    Some((b, bn))
+                }
+                _ => Some((asset, *n)),
+            },
+        )
+        .map(|(asset, _)| asset)
+}
+
+/// `ensemble`: the "vote" half of the multi-persona mode. One position, all cash.
+///
+/// - At each step every base persona (`v13`, `contrarian`, `detached`, `high_variance`)
+///   decides on the ensemble's own book; each persona gives at most one buy and one sell
+///   vote per coin.
+/// - Flat: buy the coin with at least 2 buy votes; most votes first, then the highest 24h
+///   quote volume.
+/// - Holding: sell when at least 2 personas vote to sell the held coin, or when the `v13`
+///   exit plan (`atr=3.5:1h,deadline=360`) fires. Buy votes while holding are ignored.
+pub struct Ensemble {
+    voters: Vec<Box<dyn Persona>>,
+    plan: ExitPlan,
+    buys_by_votes: BTreeMap<usize, usize>,
+    vote_sells: usize,
+}
+
+impl Ensemble {
+    pub fn new() -> Result<Self> {
+        Self::with(base_personas()?)
+    }
+
+    pub fn with(voters: Vec<Box<dyn Persona>>) -> Result<Self> {
+        Ok(Self {
+            voters,
+            plan: plan(V13_EXIT_PLAN)?,
+            buys_by_votes: BTreeMap::new(),
+            vote_sells: 0,
+        })
+    }
+}
+
+impl Persona for Ensemble {
+    fn name(&self) -> &str {
+        "ensemble"
+    }
+
+    fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        let mut buy_votes: BTreeMap<String, usize> = BTreeMap::new();
+        let mut sell_votes: BTreeMap<String, usize> = BTreeMap::new();
+        for voter in &mut self.voters {
+            let mut bought = BTreeSet::new();
+            let mut sold = BTreeSet::new();
+            for intent in voter.decide(snap, book) {
+                match intent {
+                    Intent::Buy { asset, .. } => {
+                        if bought.insert(asset.clone()) {
+                            *buy_votes.entry(asset).or_default() += 1;
+                        }
+                    }
+                    Intent::Sell { asset, .. } => {
+                        if sold.insert(asset.clone()) {
+                            *sell_votes.entry(asset).or_default() += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if !book.is_flat() {
+            let sells: Vec<Intent> = book
+                .holdings
+                .keys()
+                .filter(|asset| {
+                    sell_votes
+                        .get(*asset)
+                        .is_some_and(|n| *n >= ENSEMBLE_MIN_VOTES)
+                })
+                .map(|asset| Intent::Sell {
+                    asset: asset.clone(),
+                    reason: "vote",
+                })
+                .collect();
+            self.vote_sells += sells.len();
+            return sells;
+        }
+        let Some(asset) = ensemble_pick(&buy_votes, snap) else {
+            return Vec::new();
+        };
+        *self.buys_by_votes.entry(buy_votes[asset]).or_default() += 1;
+        vec![Intent::Buy {
+            asset: asset.clone(),
+            equity_fraction: 1.0,
+        }]
+    }
+
+    fn exit_plan(&self) -> Option<ExitPlan> {
+        Some(self.plan)
+    }
+
+    fn notes(&self) -> Vec<String> {
+        let buys: Vec<String> = self
+            .buys_by_votes
+            .iter()
+            .map(|(votes, n)| format!("{n} with {votes} votes"))
+            .collect();
+        vec![
+            format!(
+                "buy intents: {}",
+                if buys.is_empty() {
+                    "none".to_string()
+                } else {
+                    buys.join(", ")
+                }
+            ),
+            format!("vote sells: {}", self.vote_sells),
+        ]
     }
 }
 
@@ -956,5 +1091,106 @@ pub(crate) mod tests {
         };
         assert!(upto(&full).iter().any(|(_, i)| !i.is_empty()));
         assert_eq!(upto(&full), upto(&short));
+    }
+
+    #[test]
+    fn ensemble_pick_needs_two_votes_then_most_votes_then_volume() {
+        let rows = [
+            ("BTC", 0.0, 0.0, 0.0, 3e8),
+            ("ETH", 0.0, 0.0, 0.0, 2e8),
+            ("SOL", 0.0, 0.0, 0.0, 1e8),
+        ];
+        let s = snap(0.0, 0.0, &rows);
+        let votes = |v: &[(&str, usize)]| -> BTreeMap<String, usize> {
+            v.iter().map(|(a, n)| (a.to_string(), *n)).collect()
+        };
+        assert_eq!(ensemble_pick(&votes(&[("BTC", 1), ("SOL", 1)]), &s), None);
+        assert_eq!(
+            ensemble_pick(&votes(&[("BTC", 1), ("SOL", 2)]), &s).map(String::as_str),
+            Some("SOL")
+        );
+        // Equal votes: the higher 24h quote volume wins (BTC over ETH over SOL).
+        assert_eq!(
+            ensemble_pick(&votes(&[("ETH", 2), ("SOL", 2)]), &s).map(String::as_str),
+            Some("ETH")
+        );
+        assert_eq!(
+            ensemble_pick(&votes(&[("SOL", 2), ("BTC", 2)]), &s).map(String::as_str),
+            Some("BTC")
+        );
+        // More votes beat more volume.
+        assert_eq!(
+            ensemble_pick(&votes(&[("BTC", 2), ("SOL", 3)]), &s).map(String::as_str),
+            Some("SOL")
+        );
+    }
+
+    #[test]
+    fn ensemble_buys_on_two_real_votes_but_not_one() {
+        let mut e = Ensemble::new().unwrap();
+        // Neutral breadth: v13 and contrarian abstain. SOL leads on 1h with a rising 15m:
+        // at +0.4% only `detached` votes (high_variance needs +0.5%).
+        let one = [("BTC", 0.1, 0.1, 0.0, 3e8), ("SOL", 0.2, 0.4, 0.0, 1e8)];
+        assert!(e.decide(&snap(0.0, 0.0, &one), &flat_book()).is_empty());
+        // At +0.6% `detached` and `high_variance` both vote for SOL.
+        let two = [("BTC", 0.1, 0.1, 0.0, 3e8), ("SOL", 0.2, 0.6, 0.0, 1e8)];
+        let intents = e.decide(&snap(0.0, 0.0, &two), &flat_book());
+        assert_eq!(
+            intents,
+            vec![Intent::Buy {
+                asset: "SOL".into(),
+                equity_fraction: 1.0
+            }]
+        );
+        assert_eq!(e.notes()[0], "buy intents: 1 with 2 votes");
+    }
+
+    #[test]
+    fn ensemble_sells_on_two_sell_votes_but_not_one() {
+        let mut e = Ensemble::new().unwrap();
+        // Score −15: v13 votes to sell. SOL's 15m is up, so `detached` holds: one vote.
+        let one = [("SOL", 0.1, -0.2, -1.0, 1e8)];
+        assert!(
+            e.decide(&snap(-15.0, -1.0, &one), &holding(&["SOL"]))
+                .is_empty()
+        );
+        // 15m and 1h both down: `detached` joins v13.
+        let two = [("SOL", -0.1, -0.2, -1.0, 1e8)];
+        let intents = e.decide(&snap(-15.0, -1.0, &two), &holding(&["SOL"]));
+        assert_eq!(
+            intents,
+            vec![Intent::Sell {
+                asset: "SOL".into(),
+                reason: "vote"
+            }]
+        );
+        assert_eq!(e.notes()[1], "vote sells: 1");
+    }
+
+    #[test]
+    fn ensemble_exit_plan_sells_with_no_sell_votes() {
+        // SOL climbs while six liquid coins stay flat: breadth ≈ +14 (neither +15 nor −15),
+        // so nobody votes to sell; `detached` and `high_variance` vote SOL in, and the
+        // `v13` exit plan's 6h deadline sells it.
+        let mut coins: Vec<_> = ["BTC", "ETH", "ZEC", "XRP", "BNB", "DOGE"]
+            .iter()
+            .map(|a| coin(a, 2880, |_| 50.0))
+            .collect();
+        coins.push(coin("SOL", 2880, |m| 100.0 * (1.0 + 0.0001 * m as f64)));
+        let market = Market::from_series(coins);
+        let c = cfg(1500, 2880, 20);
+        let first_snap = Snapshot::at(&market, c.start_ms);
+        let score = first_snap.score.unwrap();
+        assert!(score > 0.0 && score < 15.0, "{score}");
+        let r = run(&market, &c, Box::new(Ensemble::new().unwrap())).unwrap();
+        let first = &r.trades[0];
+        assert_eq!((first.asset.as_str(), first.entry_ms), ("SOL", c.start_ms));
+        assert_eq!(first.reason, "deadline");
+        assert_eq!(first.exit_ms - first.entry_ms, 360 * MINUTE_MS);
+        assert!(
+            r.notes.contains(&"vote sells: 0".to_string()),
+            "{:?}",
+            r.notes
+        );
     }
 }
