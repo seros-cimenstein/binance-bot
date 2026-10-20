@@ -1194,6 +1194,71 @@ before live deploy per `CODEX.md`):
   --all-targets -- -D warnings`, `scripts/smoke.sh`, an isolated `--plan-only`
   smoke cycle on the Pi, and safe between-cycle deployment.
 
+## 48. Schizoid Strategy Personas — Backtest Only (operator request 2026-10-20)
+
+Why: by the operator's account, every live change so far (Phases 45–47, prompt
+v7 → v14) made Bot Spot worse, so the operator asked for a "schizoid" bot: a
+contrarian mode, a detached mode, a multi-persona mode (vote or rotate) and a
+high-variance mode. The operator wants backtests only and will review the
+results themselves. Loop ledger: `LOOP_SCHIZOID.md`.
+
+Scope:
+- Deterministic rule personas plus a `v13` rule proxy of the live guidance.
+  The live trader is an LLM and cannot be replayed: a 60-day replay is about
+  \$580 notional, beyond the subscription caps, and its tools read live data
+  with no historical clock.
+- An offline 60-day backtest over `data/entry-study-cache`
+  (2026-08-19T10:43Z → 2026-10-18T10:43Z) in
+  `crates/bb-trader/src/persona_backtest/`.
+- The report goes to `reports/schizoid_backtest_<date>.{md,csv}` plus
+  `_trades.csv`, with net PnL after fees, max drawdown, round trips, win rate,
+  Sharpe and fees.
+
+Non-goals:
+- No live persona switch: personas can be selected only in the backtest
+  command.
+- No paper run, no deploy, and no change to the live `bot-spot` path or the
+  Pi.
+
+Step 1, backtest foundation:
+
+- [x] Add a Phase 48 section to the roadmap (this section; ledger A1).
+- [ ] Add an offline loader for the 1m entry-study cache, with 15m/1h
+  aggregation, trailing 24h quote volume and window returns (A2).
+- [ ] Add a public point-in-time breadth score in `market_mood.rs`. This is an
+  additive change; `mood()` stays unchanged (A3).
+- [ ] Add a portfolio engine with these parts (A4):
+  - a step clock and a `Persona` trait;
+  - next-1m-open fills with fee and slippage;
+  - `ExitWatch` exit plans;
+  - mark-to-market equity;
+  - metrics and a trade list;
+  - look-ahead tests.
+- [ ] Add the `v13` rule proxy persona (A5).
+
+Step 2, schizoid personas:
+
+- [ ] `contrarian`: fades breadth; buys the 4h laggard under bearish breadth
+  and sells strength (B1).
+- [ ] `detached`: no breadth, no exit plans and no liquid filter; trades on the
+  raw 1h/15m price action of all 32 cached coins (B2).
+- [ ] `high_variance`: up to 3 positions, sized 25–100% of equity by the move,
+  with exit plan `atr=6:1h,deadline=1440` (B3).
+- [ ] `rotation`: each day switches to the base persona with the best
+  trailing-72h shadow return (B4).
+- [ ] `ensemble`: votes 2 of 4 among the base personas, with the `v13` exit plan
+  as the backstop (B5).
+
+Step 3, runner, report and docs:
+
+- [ ] Add the `bb bot-spot-persona-backtest` subcommand: offline only, failing
+  on a missing cache (C1).
+- [ ] Run the 60-day backtest for all six variants and commit the report files.
+  The runs must be deterministic, with identical `sha256sum` on a re-run (C2).
+- [ ] Cross-check the report against the trade list (C3).
+- [ ] Document the command in `README.md` and `OPERATIONS.md` (D1).
+- [ ] Hand off in `PROGRESS.md` and `AGENTS.md` (D2).
+
 ## Post-Implementation Handoff
 
 Roadmap phases 1 through 11 are implemented and locally verified. Future
