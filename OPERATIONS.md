@@ -612,6 +612,13 @@ docker logs bot-spot 2>&1 | grep -E 'keeping the cycle cadence|live exit plans e
   The next cycle rows then carry `bot-spot-v14-agentic` and no `schizo`.
   `bot-spot-schizo-state.json` stays on disk unused.
 
+  Back to v15 only (the inverted mood): the same recreate rules, then
+  `docker tag binance-bot:pre-v16-20261020 binance-bot:latest`, restore
+  `.env.docker.bak-20261020T142041Z-v16` (it has
+  `BOT_SPOT_PROMPT_VERSION=bot-spot-v15-schizo`) and
+  `docker compose up -d --force-recreate bot-spot`. The schizo state file is
+  shared by both rules and needs no change.
+
 ### omp authentication
 
 omp needs model credentials once per data directory: either set

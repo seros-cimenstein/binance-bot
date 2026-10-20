@@ -1318,7 +1318,7 @@ inverse of what it is rn"):
 - [x] Flip the mood rule in `next_mood` (backtest and live): switch on a zone
   change, hold while the zone stays the same; prompt tag `bot-spot-v16-schizo`.
 - [x] Rerun the 60-day backtest and commit the regenerated `schizo` row.
-- [ ] Deploy to the Pi and verify the first v16 cycles.
+- [x] Deploy to the Pi and verify the first v16 cycles.
 
 ## Post-Implementation Handoff
 

@@ -5,6 +5,36 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-20 (14:45 UTC): Phase 49 step 5, the mood follows GCP2 (operator:
+  "reverse mood change meaning if gcp is normal he is normal aight inverse of
+  what it is rn"). `next_mood` (`persona_backtest/personas.rs`, used by the
+  backtest and the live `schizo.rs`) now switches the mood by the GCP2 dice
+  when the zone changed (up or down) since the previous cycle and holds it
+  while the zone stays the same; a missing reading still holds and YOLO is
+  unchanged. Prompt tag `bot-spot-v16-schizo` (system prompt mood-ring line,
+  `## Your schizo state` heading, mood reasons). Commit `66f56f5`.
+  - Why: under v15 the mood flipped at almost every live cycle because GCP2
+    sits in Normal ~90% of minutes (WLD sold 12:51, bought back 13:13, sold
+    13:35, each by a new mood).
+  - Backtest rerun (same command as B3): `schizo` −940.31 USDT (−94.03%),
+    max DD 95.10%, 1207 trips, win 37.8%, Sharpe −13.977, fees 745.30;
+    mood steps 1 initial, 676 switched, 3643 held; YOLO 27 entries, net
+    −29.75. The six other rows are byte-identical; a second run gave the same
+    SHA-256 for all four files. Fewer mood switches did not fix the
+    churn: 1010 of 1207 exits are still vote sells.
+  - Checks: `cargo test --workspace` 1081 passed, 0 failed; clippy
+    `-D warnings`, `scripts/smoke.sh`, `scripts/pool_replay.sh`,
+    `git diff --check` exit 0; isolated `--evidence-only` run on the Pi with
+    the new image: exit 0, `prompt_version` `bot-spot-v16-schizo`, live GCP2
+    Normal.
+  - Deploy: rollback tag `binance-bot:pre-v16-20261020` (v15), env backup
+    `.env.docker.bak-20261020T142041Z-v16`, `.env.docker`
+    `BOT_SPOT_PROMPT_VERSION=bot-spot-v16-schizo`; recreated 14:20:42 UTC
+    right after the 14:20:30 cycle, flat (cash only). Startup lines present,
+    47 `BOT_SPOT_` vars, no WARN. First v16 cycle 14:41:30: Normal → Normal,
+    `held`, still `contrarian`, hold.
+  - Next: watch the v16 cycles. Expect long stretches in one mood while GCP2
+    stays Normal; `contrarian` and `v13` may sit in cash through rallies.
 - 2026-10-20 (12:35 UTC): Phase 49, the schizo live trader (`LOOP_SCHIZO_LIVE.md`;
   operator: "ai needs to be schizoified or become schizo thats it", GCP2 as
   "Mood ring" and "YOLO button", "go live no tiny shit"). Prompt
