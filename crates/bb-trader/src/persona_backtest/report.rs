@@ -17,6 +17,7 @@ use super::personas::{
     Rotation, V13, V13_EXIT_PLAN,
 };
 use crate::error::{Result, TraderError};
+use crate::gcp2::Gcp2Feed;
 
 /// Every variant, in report order.
 pub const ALL_PERSONAS: [&str; 6] = [
@@ -69,6 +70,10 @@ pub struct PersonaBacktestArgs {
     /// Where the three report files go.
     #[arg(long, default_value = "reports")]
     pub output_dir: PathBuf,
+    /// `bb gcp2-history` cache (monthly CSVs and `colorzones.json`); a missing directory
+    /// runs without GCP2.
+    #[arg(long, default_value = "data/gcp2-cache")]
+    pub gcp2_cache_dir: PathBuf,
 }
 
 /// Expand `all`, drop repeats (first mention wins) and reject unknown names.
@@ -183,6 +188,8 @@ pub struct ReportContext {
     pub slippage_bps: f64,
     pub cache_dir: String,
     pub coins: usize,
+    /// One line describing the GCP2 history the run used (or that it had none).
+    pub gcp2: String,
 }
 
 /// Run the selected personas; one result per persona, in the order given.
@@ -297,10 +304,11 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
     );
     let _ = writeln!(
         out,
-        "- Liquid universe ({} coins): {}.\n",
+        "- Liquid universe ({} coins): {}.",
         LIQUID.len(),
         LIQUID.join(", ")
     );
+    let _ = writeln!(out, "- GCP2: {}.\n", ctx.gcp2);
     let _ = writeln!(out, "## Results\n");
     let _ = writeln!(
         out,
@@ -434,7 +442,9 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, [Path
         min_notional: MIN_NOTIONAL_USDT,
     };
     cfg.validate()?;
-    let market = Market::load_dir(&args.cache_dir)?;
+    let gcp2 = load_gcp2(&args.gcp2_cache_dir)?;
+    let gcp2_line = gcp2_summary(gcp2.as_ref(), &args.gcp2_cache_dir);
+    let market = Market::load_dir(&args.cache_dir)?.with_gcp2(gcp2);
     check_coverage(&market, start_ms, end_ms)?;
     let results = run_personas(&market, &cfg, &names)?;
     let ctx = ReportContext {
@@ -443,6 +453,7 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, [Path
         slippage_bps: args.slippage_bps,
         cache_dir: args.cache_dir.display().to_string(),
         coins: market.len(),
+        gcp2: gcp2_line,
     };
     std::fs::create_dir_all(&args.output_dir)?;
     let stem = file_stem(end_ms);
@@ -455,6 +466,37 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, [Path
     write(&paths[1], &summary_csv(&results))?;
     write(&paths[2], &trades_csv(&results))?;
     Ok((results, paths))
+}
+
+/// GCP2 history from `dir`; `None` when the directory does not exist (a present but broken
+/// cache is an error).
+pub fn load_gcp2(dir: &Path) -> Result<Option<Gcp2Feed>> {
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    Gcp2Feed::load_dir(dir).map(Some)
+}
+
+fn gcp2_summary(feed: Option<&Gcp2Feed>, dir: &Path) -> String {
+    let Some(feed) = feed else {
+        return format!("not loaded (`{}` does not exist)", dir.display());
+    };
+    let last = feed
+        .series()
+        .last_second()
+        .map_or_else(|| "none".to_string(), |s| iso(s * 1000));
+    let zones = feed
+        .zones()
+        .zones
+        .iter()
+        .map(|z| format!("{} from {}", z.label, z.start))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "`{}`, per-second network coherence up to {last}; colour zones as published by GCP2 at {} ({zones})",
+        dir.display(),
+        feed.zones().fetched_at
+    )
 }
 
 fn write(path: &Path, body: &str) -> Result<()> {
@@ -547,6 +589,7 @@ mod tests {
             slippage_bps: 5.0,
             step_minutes: 20,
             output_dir: out.to_path_buf(),
+            gcp2_cache_dir: cache.join("no-gcp2"),
         }
     }
 
@@ -623,5 +666,54 @@ mod tests {
         let err = run_backtest(&late).unwrap_err().to_string();
         assert!(err.contains("end before the window end"), "{err}");
         assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn the_gcp2_cache_is_optional_but_must_be_valid_when_present() {
+        let cache = cache_dir();
+        let out = tempfile::tempdir().unwrap();
+        // A missing directory runs without GCP2 and says so.
+        run_backtest(&args(cache.path(), out.path())).unwrap();
+        let md =
+            std::fs::read_to_string(out.path().join("schizoid_backtest_2026-07-23.md")).unwrap();
+        assert!(md.contains("- GCP2: not loaded"), "{md}");
+        // An existing but empty directory is an error, not a silent skip.
+        let gcp2 = tempfile::tempdir().unwrap();
+        let mut with = args(cache.path(), out.path());
+        with.gcp2_cache_dir = gcp2.path().to_path_buf();
+        let err = run_backtest(&with).unwrap_err().to_string();
+        assert!(err.contains("missing GCP2 cache"), "{err}");
+        // A valid cache is attached and described.
+        let zones = crate::persona_backtest::engine::tests::gcp2_zones();
+        std::fs::write(
+            gcp2.path().join("colorzones.json"),
+            serde_json::to_string(&zones).unwrap(),
+        )
+        .unwrap();
+        let start_s = (T_END - 4 * DAY_MS) / 1000;
+        let rows: String = (0..4 * 86_400)
+            .map(|i| {
+                format!(
+                    "{},{:.4},400\n",
+                    start_s + i,
+                    ((i as f64) / 5000.0).sin() * 0.11
+                )
+            })
+            .collect();
+        std::fs::write(
+            gcp2.path()
+                .join("GCP2_Network_Coherence_Global_Network_2026_07.csv"),
+            format!("epoch_time_utc,network_coherence,active_devices\n{rows}"),
+        )
+        .unwrap();
+        let (results, _) = run_backtest(&with).unwrap();
+        assert_eq!(results.len(), 6);
+        let md =
+            std::fs::read_to_string(out.path().join("schizoid_backtest_2026-07-23.md")).unwrap();
+        assert!(
+            md.contains("per-second network coherence up to 2026-07-23T07:59:59Z"),
+            "{md}"
+        );
+        assert!(md.contains("Normal from 0, Elevated from 140"), "{md}");
     }
 }

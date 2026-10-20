@@ -352,6 +352,91 @@ impl Gcp2Series {
         let minute_start_s = t_ms.div_euclid(60_000) * 60;
         self.reading_ending(minute_start_s - 1)
     }
+
+    /// The series cut after second `last_s` (the look-ahead tests' "data up to T").
+    #[cfg(test)]
+    pub(crate) fn truncated(&self, last_s: i64) -> Self {
+        let keep = usize::try_from(last_s - self.first_s + 2)
+            .unwrap_or(0)
+            .clamp(1, self.count.len().max(1));
+        Self {
+            first_s: self.first_s,
+            sum: self.sum[..keep].to_vec(),
+            count: self.count[..keep].to_vec(),
+        }
+    }
+}
+
+/// What a GCP2 reading means at one time: the value, its colour zone (by GCP2's own
+/// bounds) and its dice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gcp2View {
+    /// Last second of the hour the reading covers.
+    pub end_s: i64,
+    /// The value in [`UNITS_PER_ONE`] units (`value()` for the number).
+    pub units: u64,
+    /// Index into the colour zones, lowest first.
+    pub zone: usize,
+    pub zone_label: String,
+    pub dice: u64,
+}
+
+impl Gcp2View {
+    pub fn from_reading(reading: Gcp2Reading, zones: &ColorZones) -> Self {
+        let zone = zones.index(reading.value());
+        Self {
+            end_s: reading.end_s,
+            units: reading.units,
+            zone,
+            zone_label: zones.label(zone).to_string(),
+            dice: reading.dice(),
+        }
+    }
+
+    pub fn value(&self) -> f64 {
+        self.units as f64 / UNITS_PER_ONE as f64
+    }
+}
+
+/// Cached GCP2 history plus its colour zones, for point-in-time views.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Gcp2Feed {
+    series: Gcp2Series,
+    zones: ColorZones,
+}
+
+impl Gcp2Feed {
+    pub fn new(series: Gcp2Series, zones: ColorZones) -> Self {
+        Self { series, zones }
+    }
+
+    /// The monthly CSVs and `colorzones.json` of a `bb gcp2-history` cache directory.
+    pub fn load_dir(dir: &Path) -> Result<Self> {
+        Ok(Self::new(
+            Gcp2Series::load_dir(dir)?,
+            ColorZones::load(dir)?,
+        ))
+    }
+
+    pub fn series(&self) -> &Gcp2Series {
+        &self.series
+    }
+
+    pub fn zones(&self) -> &ColorZones {
+        &self.zones
+    }
+
+    /// The view known at `t_ms` (see [`Gcp2Series::reading_at`]); `None` without a reading.
+    pub fn view_at(&self, t_ms: i64) -> Option<Gcp2View> {
+        self.series
+            .reading_at(t_ms)
+            .map(|r| Gcp2View::from_reading(r, &self.zones))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn truncated(&self, last_s: i64) -> Self {
+        Self::new(self.series.truncated(last_s), self.zones.clone())
+    }
 }
 
 /// Reads GCP2's public download form and colour zones.

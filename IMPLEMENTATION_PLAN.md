@@ -1293,7 +1293,7 @@ Step 1, decisions and GCP2 data:
 
 Step 2, backtest:
 
-- [ ] Add a point-in-time GCP2 view in the persona backtest `Snapshot` (B1).
+- [x] Add a point-in-time GCP2 view in the persona backtest `Snapshot` (B1).
 - [ ] Add the `schizo` persona: inverted GCP2 mood, YOLO, votes, all-in (B2).
 - [ ] Run the 60-day backtest with `schizo`, cross-check it and commit the
   reports (B3).

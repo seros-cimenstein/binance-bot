@@ -9,10 +9,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::Deserialize;
 
 use crate::error::{Result, TraderError};
+use crate::gcp2::Gcp2Feed;
 
 pub const MINUTE_MS: i64 = 60_000;
 /// The only quote the cache files are read for.
@@ -183,17 +185,30 @@ impl Series {
     }
 }
 
-/// Every cached coin, keyed by base asset (sorted, so runs are deterministic).
+/// Every cached coin, keyed by base asset (sorted, so runs are deterministic), plus the
+/// optional GCP2 history the Phase 49 personas read.
 #[derive(Debug, Clone, Default)]
 pub struct Market {
     series: BTreeMap<String, Series>,
+    gcp2: Option<Arc<Gcp2Feed>>,
 }
 
 impl Market {
     pub fn from_series(series: impl IntoIterator<Item = Series>) -> Self {
         Self {
             series: series.into_iter().map(|s| (s.asset.clone(), s)).collect(),
+            gcp2: None,
         }
+    }
+
+    /// The same market with GCP2 history attached (`None` leaves it without).
+    pub fn with_gcp2(mut self, feed: Option<Gcp2Feed>) -> Self {
+        self.gcp2 = feed.map(Arc::new);
+        self
+    }
+
+    pub fn gcp2(&self) -> Option<&Gcp2Feed> {
+        self.gcp2.as_deref()
     }
 
     /// Read every `1m_<BASE>_USDT_<start>_<end>.json` in `dir`. Files of the same coin are

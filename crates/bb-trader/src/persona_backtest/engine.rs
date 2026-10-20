@@ -23,6 +23,7 @@ use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use super::data::{Bar, MINUTE_MS, Market, Series};
 use crate::error::{Result, TraderError};
 use crate::exit_plan::{ATR_PERIODS, ExitPlan, ExitWatch, PriceBar, average_true_range};
+use crate::gcp2::Gcp2View;
 use crate::market_mood::{HorizonBreadth, breadth_score_at};
 
 /// The 20-coin liquid universe: the `bb entry-study` top 20 by quote volume on 2026-10-18
@@ -107,6 +108,9 @@ pub struct Snapshot {
     pub coins: BTreeMap<String, CoinView>,
     /// The [`LIQUID`] coins present at `T`, top [`CANDIDATE_LIMIT`] by 24h quote volume.
     pub liquid_top: Vec<String>,
+    /// GCP2 at `T` (the hour ending at the last second before `T`'s minute); `None` without
+    /// GCP2 history or a reading.
+    pub gcp2: Option<Gcp2View>,
 }
 
 impl Snapshot {
@@ -148,6 +152,7 @@ impl Snapshot {
             horizons,
             coins,
             liquid_top,
+            gcp2: market.gcp2().and_then(|feed| feed.view_at(t)),
         }
     }
 
@@ -964,12 +969,14 @@ pub(crate) mod tests {
         ])
     }
 
+    /// The market as known at `t`: candles closed by `t` and GCP2 seconds before `t`.
     pub fn truncated(market: &Market, t: i64) -> Market {
         Market::from_series(
             market
                 .iter()
                 .map(|s| Series::new(s.asset(), s.closed_by(t).to_vec())),
         )
+        .with_gcp2(market.gcp2().map(|f| f.truncated(t.div_euclid(1000) - 1)))
     }
 
     #[test]
@@ -996,6 +1003,77 @@ pub(crate) mod tests {
         assert!(full.iter().any(|(_, i)| !i.is_empty()));
         assert!(full.iter().all(|(s, _)| s.score.is_some()));
         assert_eq!(upto(&full), upto(&cut));
+    }
+
+    /// GCP2 colour zones as published on 2026-10-20 (test fixture, not code).
+    pub fn gcp2_zones() -> crate::gcp2::ColorZones {
+        crate::gcp2::parse_color_zones(
+            &serde_json::json!({"colorzones": [
+                {"label": "Normal", "range_start": 0, "range_end": 140},
+                {"label": "Elevated", "range_start": 140, "range_end": 166},
+                {"label": "High", "range_start": 166, "range_end": 219},
+                {"label": "Very High", "range_start": 219, "range_end": 279},
+                {"label": "Extreme", "range_start": 279, "range_end": 10000}
+            ]}),
+            "fixture".into(),
+        )
+        .unwrap()
+    }
+
+    /// Per-second GCP2 from `T0` for `minutes`, `units(second index)` each.
+    pub fn gcp2_feed(minutes: i64, units: impl Fn(i64) -> i64) -> crate::gcp2::Gcp2Feed {
+        let t0_s = T0 / 1000;
+        let points = (0..minutes * 60).map(|i| (t0_s + i, units(i))).collect();
+        crate::gcp2::Gcp2Feed::new(crate::gcp2::Gcp2Series::from_points(points), gcp2_zones())
+    }
+
+    /// A slow wave whose hourly sums cross every zone from Normal to Extreme.
+    pub fn gcp2_wave(i: i64) -> i64 {
+        ((i as f64 / 5_000.0).sin() * 1_100.0) as i64
+    }
+
+    #[test]
+    fn the_gcp2_view_is_point_in_time_and_unchanged_by_later_seconds() {
+        let market =
+            wavy_market(3 * DAY_MINUTES).with_gcp2(Some(gcp2_feed(3 * DAY_MINUTES, gcp2_wave)));
+        let c = cfg(DAY_MINUTES + 30, 3 * DAY_MINUTES, 20);
+        let full = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        run(&market, &c, Box::new(Recorder { seen: full.clone() })).unwrap();
+        let cut_t = c.start_ms + 40 * c.step_ms();
+        let cut = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        run(
+            &truncated(&market, cut_t),
+            &c,
+            Box::new(Recorder { seen: cut.clone() }),
+        )
+        .unwrap();
+
+        let full = full.borrow();
+        let cut = cut.borrow();
+        let upto = |seen: &[(Snapshot, Vec<Intent>)]| -> Vec<(Snapshot, Vec<Intent>)> {
+            seen.iter().filter(|(s, _)| s.t <= cut_t).cloned().collect()
+        };
+        assert_eq!(upto(&full), upto(&cut));
+        // Every step has a reading for the hour that ended just before its minute.
+        for (snap, _) in full.iter() {
+            let view = snap.gcp2.as_ref().unwrap();
+            assert_eq!(view.end_s, snap.t / 1000 - 1);
+            assert_eq!(Some(view), market.gcp2().unwrap().view_at(snap.t).as_ref());
+        }
+        let zones: std::collections::BTreeSet<usize> = full
+            .iter()
+            .filter_map(|(s, _)| s.gcp2.as_ref().map(|g| g.zone))
+            .collect();
+        assert!(zones.len() >= 4, "{zones:?}");
+        // Without GCP2 history the view is absent.
+        assert!(
+            Snapshot::at(
+                &wavy_market(DAY_MINUTES + 60),
+                T0 + (DAY_MINUTES + 30) * MINUTE_MS
+            )
+            .gcp2
+            .is_none()
+        );
     }
 
     #[test]

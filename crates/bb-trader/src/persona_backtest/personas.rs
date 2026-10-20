@@ -647,6 +647,7 @@ pub(crate) mod tests {
                 })
                 .collect(),
             liquid_top: rows.iter().map(|r| r.0.to_string()).collect(),
+            gcp2: None,
         }
     }
 
