@@ -3,5 +3,7 @@
 //! client, never fetches, and has no order path.
 //!
 //! - [`data`]: the offline candle cache with point-in-time readers.
+//! - [`engine`]: the step clock, the [`engine::Persona`] trait, fills, exit plans, metrics.
 
 pub mod data;
+pub mod engine;

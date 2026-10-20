@@ -1227,7 +1227,7 @@ Step 1, backtest foundation:
   aggregation, trailing 24h quote volume and window returns (A2).
 - [x] Add a public point-in-time breadth score in `market_mood.rs`. This is an
   additive change; `mood()` stays unchanged (A3).
-- [ ] Add a portfolio engine with these parts (A4):
+- [x] Add a portfolio engine with these parts (A4):
   - a step clock and a `Persona` trait;
   - next-1m-open fills with fee and slippage;
   - `ExitWatch` exit plans;
