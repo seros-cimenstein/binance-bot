@@ -1259,6 +1259,58 @@ Step 3, runner, report and docs:
 - [x] Document the command in `README.md` and `OPERATIONS.md` (D1).
 - [x] Hand off in `PROGRESS.md` and `AGENTS.md` (D2).
 
+## 49. Schizo Live Trader (operator request 2026-10-20)
+
+Why: after the Phase 48 backtest the operator said "it is not schizo enough"
+and asked for a schizo live trader driven by GCP2 (gcp2.net Global
+Consciousness Project 2.0) data, live whatever the backtest shows. The binding
+rules are in `CODEX.md` ("Phase 49 schizo trader"); the loop ledger is
+`LOOP_SCHIZO_LIVE.md`.
+
+Scope:
+- GCP2 history and live reads.
+- A `schizo` persona backtest.
+- The live LLM trader made schizo:
+  - mood inverted to GCP2 zones;
+  - GCP2 dice;
+  - persona votes;
+  - YOLO at Very High or Extreme;
+  - one coin with all cash.
+- Deploy to the Pi.
+
+Non-goals:
+- No stop-loss or panic sell.
+- No change to hard safety.
+- No GCP2 write or login.
+
+Step 1, decisions and GCP2 data:
+
+- [ ] Record the operator decisions in `CODEX.md` and this section (A1).
+- [ ] Add `bb gcp2-history`: monthly network coherence CSVs plus the colour
+  zones in `data/gcp2-cache` (A2).
+- [ ] Add the GCP2 signal: hourly sum, zones read from GCP2, GCP2 dice, and
+  the investigated live/history gap (A3).
+
+Step 2, backtest:
+
+- [ ] Add a point-in-time GCP2 view in the persona backtest `Snapshot` (B1).
+- [ ] Add the `schizo` persona: inverted GCP2 mood, YOLO, votes, all-in (B2).
+- [ ] Run the 60-day backtest with `schizo`, cross-check it and commit the
+  reports (B3).
+
+Step 3, live:
+
+- [ ] Add the live GCP2 reader in the trader cycle (C1).
+- [ ] Add per-cycle schizo state with persisted mood, GCP2 dice, votes and the
+  audit field (C2).
+- [ ] Add prompt `bot-spot-v15-schizo` (C3).
+- [ ] Deploy to the Pi and verify the first schizo cycles (C4).
+
+Step 4, docs and handoff:
+
+- [ ] Update `README.md`, `OPERATIONS.md` and `.env.example` (D1).
+- [ ] Hand off in `PROGRESS.md` and `AGENTS.md` (D2).
+
 ## Post-Implementation Handoff
 
 Roadmap phases 1 through 11 are implemented and locally verified. Future

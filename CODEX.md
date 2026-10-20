@@ -162,6 +162,35 @@ driven project.
   ("positions sold by a plan: N (W wins), net X USDT after fees") instead of
   "plan vs your own exits", which in live mode only measured trigger price
   against fill.
+- Phase 49 schizo trader (operator decisions 2026-10-20, `LOOP_SCHIZO_LIVE.md`).
+  The operator asked for a "schizo" Bot Spot: "it is not schizo enough", "ai
+  needs to be schizoified or become schizo thats it", "on top of those it looks
+  at gcp2 data for reference …", and "Backtest, then trade live as schizo", with
+  GCP2 as "Mood ring" and "YOLO button".
+  - The LLM trader stays the trader. It becomes schizo through its prompt and
+    a per-cycle state: an active mood (one of the Phase 48 personas), dice,
+    the personas' votes, and a YOLO directive. Its behaviour is not replaced by
+    rules, and it still acts only through the host tools; `execute_route`
+    stays the only order path.
+  - GCP2 (gcp2.net, Global Consciousness Project 2.0) public data is read-only
+    information. It may be read without login (public colour zones,
+    per-minute aggregate, monthly history) and must never be posted to or
+    logged into. Mood switches are bound to GCP2 only ("nothing hardcoded …
+    we are going to be gcp bound in mood switches"): no timer, no fixed
+    switch probability, no fixed seed. The zone bounds come from GCP2's own
+    `getcolorzones`, and the dice come from GCP2 readings.
+  - The mood runs inverted to GCP2 ("mood is inverted not yolo"): the bot
+    switches mood when the GCP2 zone stays the same between cycles and keeps
+    it when the zone changes. YOLO is not inverted: while the zone is Very High
+    or Extreme the bot is told to sell other holdings and go all-in on the
+    hottest liquid coin, until the zone drops below High. A failed GCP2 read
+    means no mood switch and no YOLO for that cycle.
+  - There is no panic sell ("no panic sell"). The 2026-10-14 no-stop-loss rule
+    above stays in force, and exit plans keep the existing menu and default.
+  - Go-live is not gated on the backtest ("go live no tiny shit whatever we
+    said earlier will be live"): the schizo trader runs on the full wallet with
+    no size cap.
+  - Every Bot Spot hard-safety item below stays unchanged.
 - Bot Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,
