@@ -5,6 +5,75 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-20 (12:35 UTC): Phase 49, the schizo live trader (`LOOP_SCHIZO_LIVE.md`;
+  operator: "ai needs to be schizoified or become schizo thats it", GCP2 as
+  "Mood ring" and "YOLO button", "go live no tiny shit"). Prompt
+  `bot-spot-v15-schizo` is live on the Pi on the full wallet; hard safety and
+  the default exit plan `atr=3.5:1h,deadline=360` are unchanged, no panic sell.
+  - GCP2 (gcp2.net, public, read-only): `bb gcp2-history` caches the monthly
+    per-second CSVs and GCP2's own colour zones (`data/gcp2-cache`). The value
+    is `|Σ network_coherence|` over the hour ending at the minute (932 of 932
+    overlap minutes exact against the live API); the dice are the SplitMix64
+    finalizer of the 4-decimal value, no seed.
+  - Backtest (B3): `unshare -rn cargo run --release -p bb-cli --bin bb --
+    bot-spot-persona-backtest --cache-dir data/entry-study-cache
+    --gcp2-cache-dir data/gcp2-cache --end 2026-10-18T10:43:00Z --days 60
+    --persona all --persona schizo`; report
+    `reports/schizoid_backtest_2026-10-18.{md,csv}`, `_trades.csv`,
+    `_schizo_trace.csv` (4,320 steps: 1 initial, 3,643 switched, 676 held),
+    1000 USDT per variant, 20-minute steps, 25 bps per round trip:
+
+    | Variant | Net USDT | Net % | Max DD % | Trips | Win % | Sharpe | Fees USDT |
+    |---|---:|---:|---:|---:|---:|---:|---:|
+    | v13 | −183.99 | −18.40 | 39.36 | 100 | 40.0 | −0.865 | 161.52 |
+    | contrarian | −638.01 | −63.80 | 65.17 | 499 | 57.9 | −8.873 | 511.34 |
+    | detached | −918.29 | −91.83 | 95.80 | 1552 | 34.9 | −6.655 | 775.60 |
+    | high_variance | +193.82 | +19.38 | 35.59 | 174 | 50.0 | 1.517 | 124.51 |
+    | rotation | −159.82 | −15.98 | 55.95 | 436 | 42.7 | −0.163 | 547.39 |
+    | ensemble | −832.86 | −83.29 | 86.20 | 623 | 34.8 | −9.860 | 544.38 |
+    | schizo | −967.06 | −96.71 | 96.98 | 1347 | 36.8 | −15.653 | 541.42 |
+
+    `schizo` YOLO: 29 entries, net −26.66 USDT. GCP2 has no shown link to
+    prices. Go-live was not gated on this result (operator decision).
+  - Live trader (C1–C3): `gcp2.rs` `Gcp2LiveReader` (published token cached,
+    refetched on 401/403, 10 s timeout); `schizo.rs` per-cycle state from the
+    backtest rules (mood inverted to GCP2, GCP2 dice, the four personas' votes
+    on the live wallet with the mood counting double, YOLO in the two highest
+    zones), persisted in `bot-spot-schizo-state.json` next to the agent state
+    and recorded as `schizo` in each cycle audit row; the system prompt makes
+    the bot act out the mood and obey YOLO, and the cycle message opens with
+    `## Your schizo state`. `BOT_SPOT_GCP2_ENABLED` (default true); false gives
+    the v14 prompts.
+  - Deploy (C4): recreated 10:11:48 UTC (commit `f435d25`) and again 11:42:40
+    UTC (commit `d8e41c7`: the `detached` mood was told it had no exit plan,
+    so it tried to `clear` the default plan; now it keeps the default plan).
+    Rollback: tag `binance-bot:pre-c4-20261020` (v14 image) plus
+    `.env.docker.bak-20261020T100630Z-c4`; intermediate
+    `binance-bot:pre-c4b-20261020`. Steps in OPERATIONS.md, "Schizo trader
+    (Phase 49)".
+  - First live schizo cycles (all `bot-spot-v15-schizo` with a `schizo`
+    object):
+
+    | Cycle (UTC) | Mood (step) | GCP2 zone | Action |
+    |---|---|---|---|
+    | 10:34 | detached (initial) | High 168.66 | bought PHA (all USDT) |
+    | 10:58 | detached (held: High → Normal) | Normal 38.20 | hold |
+    | 11:21 | high_variance (switched: Normal stayed) | Normal 86.50 | sold PHA (−131 bps net), bought ZEC |
+    | 11:42 | high_variance (held: Normal → Elevated) | Elevated 165.29 | hold |
+    | 12:05 | high_variance (no reading) | unavailable (HTTP 429) | sold ZEC (−34 bps net), bought WLD |
+    | 12:30 | high_variance (no reading) | Normal 35.90 | hold |
+
+    No YOLO yet (GCP2 has not reached Very High since the deploy). The 12:03
+    `429 Too Many Requests` from gcp2.net is the only WARN so far; whether it
+    recurs is unknown.
+  - Log check: container logs are ANSI-coloured, so a plain `grep ' WARN '`
+    misses warnings (it did during C4); use `grep -a WARN`.
+  - Checks: `cargo test --workspace` 1081 passed, 0 failed; clippy
+    `-D warnings`, `scripts/smoke.sh`, `scripts/pool_replay.sh` and
+    `git diff --check` exit 0; the offline backtest rerun after the C2
+    refactor was byte-identical to the committed report.
+  - Next: watch the live cycles (mood steps, GCP2 429s, the first YOLO) and the
+    wallet; the operator judges the schizo trader on its live results.
 - 2026-10-20: Phase 48 ("schizoid" strategy personas, backtest only;
   `LOOP_SCHIZOID.md`; operator: "each time it got shittier … make it more
   schizoid", wants backtests only and will judge them). Nothing is deployed;
