@@ -146,6 +146,214 @@ pub fn parse_color_zones(body: &Value, fetched_at: String) -> Result<ColorZones>
     Ok(ColorZones { fetched_at, zones })
 }
 
+impl ColorZones {
+    /// Read `colorzones.json` from a cache directory (written by `bb gcp2-history`).
+    pub fn load(dir: &Path) -> Result<Self> {
+        let path = dir.join(COLOR_ZONES_FILE);
+        let text = std::fs::read_to_string(&path).map_err(|e| {
+            TraderError::config(format!("missing GCP2 colour zones {}: {e}", path.display()))
+        })?;
+        let zones: Self = serde_json::from_str(&text)?;
+        if zones.zones.is_empty() {
+            return Err(TraderError::config("GCP2 colour zones: empty list"));
+        }
+        Ok(zones)
+    }
+
+    /// Index of the zone holding `value`: the last zone whose start is at or below it
+    /// (values under the first start fall in the first zone, values past the last end in
+    /// the last one). Zones are sorted by start.
+    pub fn index(&self, value: f64) -> usize {
+        self.zones
+            .iter()
+            .rposition(|z| z.start <= value)
+            .unwrap_or(0)
+    }
+
+    pub fn label(&self, index: usize) -> &str {
+        self.zones
+            .get(index)
+            .map_or("unknown", |z| z.label.as_str())
+    }
+}
+
+/// GCP2 publishes values to 4 decimals; readings are kept in these integer units so the
+/// backtest and the live feed compute the same value (and the same dice) exactly.
+pub const UNITS_PER_ONE: i64 = 10_000;
+/// Seconds in GCP2's network-coherence aggregate window.
+pub const AGGREGATE_SECONDS: i64 = 3_600;
+/// An aggregate with fewer present seconds than this share is unavailable.
+const MIN_COVERAGE: f64 = 0.9;
+
+/// A 4-decimal GCP2 number (`"119.8923"`, `"-0.0827"`) in [`UNITS_PER_ONE`] units.
+pub fn parse_units(text: &str) -> Option<i64> {
+    let value: f64 = text.trim().parse().ok()?;
+    value
+        .is_finite()
+        .then(|| (value * UNITS_PER_ONE as f64).round() as i64)
+}
+
+/// One GCP2 per-minute reading: the network-coherence aggregate of the hour ending at
+/// second `end_s`, as the live page shows it (`getNetVarAggregate24H`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Gcp2Reading {
+    pub end_s: i64,
+    /// `|Σ network_coherence|` over the hour, in [`UNITS_PER_ONE`] units.
+    pub units: u64,
+}
+
+impl Gcp2Reading {
+    pub fn value(&self) -> f64 {
+        self.units as f64 / UNITS_PER_ONE as f64
+    }
+
+    /// The GCP2 dice for this minute (see [`dice`]).
+    pub fn dice(&self) -> u64 {
+        dice(self.units)
+    }
+}
+
+/// The roll GCP2 gives for a reading: the SplitMix64 finalizer of its 4-decimal value in
+/// integer units. No seed: the same GCP2 value always rolls the same, live or in history.
+pub fn dice(units: u64) -> u64 {
+    let mut z = units.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Per-second GCP2 network coherence, for point-in-time hourly aggregates.
+///
+/// The live minute value is `|Σ network_coherence|` over the 3,600 seconds ending at the
+/// minute's last second (checked against `getNetVarAggregate24H`: 932 of 932 overlap
+/// minutes exact on 2026-10-19). Missing seconds count as absent; an hour with less than
+/// 90% of its seconds present is unavailable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Gcp2Series {
+    first_s: i64,
+    /// `sum[i]` = Σ units of the seconds `first_s .. first_s + i`.
+    sum: Vec<i64>,
+    /// `count[i]` = present seconds among `first_s .. first_s + i`.
+    count: Vec<u32>,
+}
+
+impl Gcp2Series {
+    /// From `(epoch second, units)` points in any order; a repeated second keeps its first value.
+    pub fn from_points(mut points: Vec<(i64, i64)>) -> Self {
+        points.sort_by_key(|p| p.0);
+        points.dedup_by_key(|p| p.0);
+        let (Some(first), Some(last)) = (points.first(), points.last()) else {
+            return Self::default();
+        };
+        let first_s = first.0;
+        let len = usize::try_from(last.0 - first_s + 1).unwrap_or(0);
+        let mut sum = Vec::with_capacity(len + 1);
+        let mut count = Vec::with_capacity(len + 1);
+        sum.push(0);
+        count.push(0);
+        let mut next = points.iter().peekable();
+        let (mut s, mut c) = (0_i64, 0_u32);
+        for second in first_s..=last.0 {
+            if let Some((_, units)) = next.next_if(|p| p.0 == second) {
+                s += units;
+                c += 1;
+            }
+            sum.push(s);
+            count.push(c);
+        }
+        Self {
+            first_s,
+            sum,
+            count,
+        }
+    }
+
+    /// Every `GCP2_Network_Coherence_*.csv` in `dir` (`epoch_time_utc,network_coherence,…`).
+    pub fn load_dir(dir: &Path) -> Result<Self> {
+        let entries = std::fs::read_dir(dir).map_err(|e| {
+            TraderError::config(format!("missing GCP2 cache {}: {e}", dir.display()))
+        })?;
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    n.starts_with("GCP2_Network_Coherence_") && n.ends_with(".csv")
+                })
+            })
+            .collect();
+        if files.is_empty() {
+            return Err(TraderError::config(format!(
+                "missing GCP2 cache: no GCP2_Network_Coherence_*.csv in {}",
+                dir.display()
+            )));
+        }
+        files.sort();
+        let mut points = Vec::new();
+        for path in files {
+            let text = std::fs::read_to_string(&path)?;
+            for (n, line) in text.lines().enumerate().skip(1) {
+                let mut cols = line.split(',');
+                let parsed = cols
+                    .next()
+                    .and_then(|t| t.trim().parse::<i64>().ok())
+                    .zip(cols.next().and_then(parse_units));
+                match parsed {
+                    Some(point) => points.push(point),
+                    None if line.trim().is_empty() => {}
+                    None => {
+                        return Err(TraderError::config(format!(
+                            "bad GCP2 row {} in {}: {line:?}",
+                            n + 1,
+                            path.display()
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(Self::from_points(points))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count.len() <= 1
+    }
+
+    /// Last second with data (`None` when empty).
+    pub fn last_second(&self) -> Option<i64> {
+        (!self.is_empty()).then(|| self.first_s + self.count.len() as i64 - 2)
+    }
+
+    /// Index into the prefix arrays for "every second before `second`", clamped.
+    fn prefix(&self, second: i64) -> usize {
+        let i = (second - self.first_s).clamp(0, self.count.len() as i64 - 1);
+        usize::try_from(i).unwrap_or(0)
+    }
+
+    /// The reading of the hour ending at second `end_s` (inclusive); `None` below 90%
+    /// coverage, and `None` when `end_s` is past the last second the series holds (that
+    /// hour has not finished in the data, so it is not a gap).
+    pub fn reading_ending(&self, end_s: i64) -> Option<Gcp2Reading> {
+        if self.last_second().is_none_or(|last| end_s > last) {
+            return None;
+        }
+        let (from, to) = (
+            self.prefix(end_s - AGGREGATE_SECONDS + 1),
+            self.prefix(end_s + 1),
+        );
+        let present = f64::from(self.count[to] - self.count[from]);
+        (present >= MIN_COVERAGE * AGGREGATE_SECONDS as f64).then(|| Gcp2Reading {
+            end_s,
+            units: (self.sum[to] - self.sum[from]).unsigned_abs(),
+        })
+    }
+
+    /// The newest minute reading known at `t_ms`: the hour ending at the last second of
+    /// the last whole minute before `t_ms` (the live page's `end_epoch`).
+    pub fn reading_at(&self, t_ms: i64) -> Option<Gcp2Reading> {
+        let minute_start_s = t_ms.div_euclid(60_000) * 60;
+        self.reading_ending(minute_start_s - 1)
+    }
+}
+
 /// Reads GCP2's public download form and colour zones.
 pub struct Gcp2Client {
     http: reqwest::Client,
@@ -461,5 +669,171 @@ mod tests {
         let err = download_history(&args, "t").await.unwrap_err().to_string();
         assert!(err.contains("not a zip"), "{err}");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    const T0_S: i64 = 1_790_812_800; // 2026-10-01T00:00Z
+
+    /// `n` seconds from `T0_S` with `units(i)` each.
+    fn seconds(n: i64, units: impl Fn(i64) -> i64) -> Vec<(i64, i64)> {
+        (0..n).map(|i| (T0_S + i, units(i))).collect()
+    }
+
+    #[test]
+    fn parses_four_decimal_units() {
+        assert_eq!(parse_units("119.8923"), Some(1_198_923));
+        assert_eq!(parse_units("-0.0827"), Some(-827));
+        assert_eq!(parse_units(" 0.1030 "), Some(1_030));
+        assert_eq!(parse_units("0.004"), Some(40));
+        assert_eq!(parse_units("nan"), None);
+        assert_eq!(parse_units("x"), None);
+    }
+
+    #[test]
+    fn the_reading_is_the_absolute_hour_sum_ending_before_the_minute() {
+        // Seconds alternate +0.5 and -0.2 for 2 hours, then a run of -1.0.
+        let mut points = seconds(7_200, |i| if i % 2 == 0 { 5_000 } else { -2_000 });
+        points.extend((7_200..9_000).map(|i| (T0_S + i, -10_000)));
+        let series = Gcp2Series::from_points(points);
+        // At 02:00:00 the newest minute ends at 01:59:59: seconds 3600..7199.
+        let at_2h = series.reading_at((T0_S + 7_200) * 1000 + 30_000).unwrap();
+        assert_eq!(at_2h.end_s, T0_S + 7_199);
+        assert_eq!(at_2h.units, 1_800 * (5_000 - 2_000));
+        assert!((at_2h.value() - 540.0).abs() < 1e-12);
+        // At 02:30:00 the hour 01:30:00..02:29:59 sums 900 × 0.5 + 900 × (−0.2) − 1800 × 1.0
+        // = −1530; the reading is its absolute value.
+        let at = series.reading_at((T0_S + 9_000) * 1000).unwrap();
+        assert_eq!(at.units, 15_300_000);
+        assert_eq!(series.last_second(), Some(T0_S + 8_999));
+    }
+
+    #[test]
+    fn an_hour_under_ninety_percent_coverage_is_unavailable() {
+        let full = Gcp2Series::from_points(seconds(3_600, |_| 1));
+        assert!(full.reading_ending(T0_S + 3_599).is_some());
+        // 360 of 3600 seconds missing (exactly 90% present): still available.
+        let edge = Gcp2Series::from_points(
+            seconds(3_600, |_| 1)
+                .into_iter()
+                .filter(|p| p.0 - T0_S >= 360)
+                .collect(),
+        );
+        assert_eq!(
+            edge.reading_ending(T0_S + 3_599).map(|r| r.units),
+            Some(3_240)
+        );
+        // 361 missing: unavailable. Before the first second or past the last: unavailable.
+        let short = Gcp2Series::from_points(
+            seconds(3_600, |_| 1)
+                .into_iter()
+                .filter(|p| p.0 - T0_S >= 361)
+                .collect(),
+        );
+        assert!(short.reading_ending(T0_S + 3_599).is_none());
+        assert!(full.reading_ending(T0_S + 100).is_none());
+        assert!(full.reading_ending(T0_S + 3_599 + 400).is_none());
+        // One second past the end is unavailable even though 3599 of 3600 seconds exist.
+        assert!(full.reading_ending(T0_S + 3_600).is_none());
+        assert!(Gcp2Series::default().reading_at(T0_S * 1000).is_none());
+    }
+
+    fn zones() -> ColorZones {
+        parse_color_zones(
+            &serde_json::json!({"colorzones": [
+                {"label": "Normal", "range_start": 0, "range_end": 140},
+                {"label": "Elevated", "range_start": 140, "range_end": 166},
+                {"label": "High", "range_start": 166, "range_end": 219},
+                {"label": "Very High", "range_start": 219, "range_end": 279},
+                {"label": "Extreme", "range_start": 279, "range_end": 10000}
+            ]}),
+            "t".into(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn zones_come_from_the_published_bounds() {
+        let z = zones();
+        assert_eq!(z.label(z.index(139.9999)), "Normal");
+        assert_eq!(z.label(z.index(140.0)), "Elevated");
+        assert_eq!(z.label(z.index(218.9)), "High");
+        assert_eq!(z.label(z.index(219.0)), "Very High");
+        assert_eq!(z.label(z.index(20_000.0)), "Extreme");
+        // Shifted bounds move the answer: nothing about the bounds lives in code.
+        let mut shifted = zones();
+        shifted.zones[1].start = 150.0;
+        assert_eq!(shifted.label(shifted.index(145.0)), "Normal");
+        // Round trip through the cache file.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(COLOR_ZONES_FILE),
+            serde_json::to_string(&z).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ColorZones::load(dir.path()).unwrap(), z);
+        assert!(ColorZones::load(&dir.path().join("none")).is_err());
+    }
+
+    #[test]
+    fn the_dice_follow_the_gcp2_value_only() {
+        let a = Gcp2Reading {
+            end_s: 1,
+            units: 1_198_923,
+        };
+        let same_value_other_minute = Gcp2Reading {
+            end_s: 61,
+            units: 1_198_923,
+        };
+        let other = Gcp2Reading {
+            end_s: 1,
+            units: 1_198_924,
+        };
+        assert_eq!(a.dice(), same_value_other_minute.dice());
+        assert_ne!(a.dice(), other.dice());
+        assert_eq!(
+            a.dice(),
+            dice(parse_units("119.8923").unwrap().unsigned_abs())
+        );
+    }
+
+    #[test]
+    fn loads_monthly_csvs_and_fails_without_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let row = |s: i64, v: &str| format!("{s},{v},397\n");
+        let header = "epoch_time_utc,network_coherence,active_devices\n";
+        std::fs::write(
+            dir.path()
+                .join("GCP2_Network_Coherence_Global_Network_2026_10.csv"),
+            format!(
+                "{header}{}{}",
+                row(T0_S + 1, "0.5000"),
+                row(T0_S, "-0.2500")
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path()
+                .join("GCP2_Network_Coherence_Global_Network_2026_09.csv"),
+            format!("{header}{}", row(T0_S - 1, "1.0000")),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("colorzones.json"), "{}").unwrap();
+        let series = Gcp2Series::load_dir(dir.path()).unwrap();
+        assert_eq!(series.last_second(), Some(T0_S + 1));
+        assert_eq!(series.sum, vec![0, 10_000, 7_500, 12_500]);
+        let empty = tempfile::tempdir().unwrap();
+        let err = Gcp2Series::load_dir(empty.path()).unwrap_err().to_string();
+        assert!(err.contains("missing GCP2 cache"), "{err}");
+        std::fs::write(
+            dir.path()
+                .join("GCP2_Network_Coherence_Global_Network_2026_08.csv"),
+            format!("{header}oops,1,2\n"),
+        )
+        .unwrap();
+        assert!(
+            Gcp2Series::load_dir(dir.path())
+                .unwrap_err()
+                .to_string()
+                .contains("bad GCP2 row 2")
+        );
     }
 }
