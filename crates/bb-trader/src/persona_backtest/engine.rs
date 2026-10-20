@@ -220,6 +220,17 @@ pub trait Persona {
     fn notes(&self) -> Vec<String> {
         Vec::new()
     }
+    /// A per-step CSV the report writes next to the trades (e.g. `schizo`'s mood ring).
+    fn trace(&self) -> Option<Trace> {
+        None
+    }
+}
+
+/// A persona's per-step record: a CSV header and one row per step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Trace {
+    pub header: String,
+    pub rows: Vec<String>,
 }
 
 /// One round trip (or a position still open at the window end).
@@ -268,6 +279,8 @@ pub struct RunResult {
     pub trades: Vec<Trade>,
     /// [`Persona::notes`] at the end of the run.
     pub notes: Vec<String>,
+    /// [`Persona::trace`] at the end of the run.
+    pub trace: Option<Trace>,
 }
 
 struct Position {
@@ -681,6 +694,7 @@ impl Account {
             skip_reasons: self.skips,
             trades,
             notes: self.persona.notes(),
+            trace: self.persona.trace(),
         }
     }
 }

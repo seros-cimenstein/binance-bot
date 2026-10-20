@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::data::Market;
-use super::engine::{Account, Book, Config, Intent, Persona, Snapshot};
+use super::engine::{Account, Book, Config, Intent, Persona, Snapshot, Trace};
 use crate::error::{Result, TraderError};
 use crate::exit_plan::ExitPlan;
 use crate::market_mood::LEAN_SCORE;
@@ -600,10 +600,12 @@ impl Persona for Ensemble {
     }
 }
 
-/// How one step treated the mood: switched (GCP2 zone unchanged), held (zone changed) or
-/// held because a GCP2 reading was missing.
+/// How one step treated the mood: the first GCP2 reading picked it (`Initial`), switched
+/// (GCP2 zone unchanged), held (zone changed), or held because a GCP2 reading was missing
+/// now or at the previous step (`NoReading`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MoodStep {
+    Initial,
     Switched,
     Held,
     NoReading,
@@ -612,10 +614,55 @@ pub enum MoodStep {
 impl MoodStep {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Initial => "initial",
             Self::Switched => "switched",
             Self::Held => "held",
             Self::NoReading => "no reading",
         }
+    }
+}
+
+/// One step of the mood ring, as the report's per-step trace records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoodRecord {
+    pub t: i64,
+    /// This step's GCP2 value in 1e-4 units (`None` without a reading).
+    pub units: Option<u64>,
+    /// The previous step's zone (`None` when it had no reading or this is the first step).
+    pub from_zone: Option<String>,
+    pub to_zone: Option<String>,
+    pub dice: Option<u64>,
+    pub result: MoodStep,
+    pub mood_before: Option<String>,
+    pub mood_after: Option<String>,
+    pub yolo: bool,
+}
+
+/// Header of [`MoodRecord::csv_row`].
+pub const MOOD_TRACE_HEADER: &str =
+    "time,gcp2_value,from_zone,to_zone,dice,result,mood_before,mood_after,yolo";
+
+impl MoodRecord {
+    pub fn csv_row(&self) -> String {
+        let time = chrono::DateTime::from_timestamp_millis(self.t).map_or_else(
+            || self.t.to_string(),
+            |d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        );
+        let value = self
+            .units
+            .map(|u| format!("{}.{:04}", u / 10_000, u % 10_000))
+            .unwrap_or_default();
+        let text = |s: &Option<String>| s.clone().unwrap_or_default();
+        format!(
+            "{time},{value},{},{},{},{},{},{},{}",
+            text(&self.from_zone),
+            text(&self.to_zone),
+            self.dice.map(|d| d.to_string()).unwrap_or_default(),
+            self.result.as_str(),
+            text(&self.mood_before),
+            text(&self.mood_after),
+            self.yolo
+        )
     }
 }
 
@@ -640,7 +687,7 @@ pub fn next_mood(
     };
     let Some(current) = active else {
         let first = usize::try_from(dice % moods as u64).unwrap_or(0);
-        return (Some(first), MoodStep::Switched);
+        return (Some(first), MoodStep::Initial);
     };
     match prev_zone {
         Some(prev) if prev == zone => {
@@ -690,8 +737,7 @@ pub struct Schizo {
     yolo: bool,
     yolo_asset: Option<String>,
     next_plan: Option<ExitPlan>,
-    steps_by_result: BTreeMap<MoodStep, usize>,
-    zone_moves: BTreeMap<(String, String, MoodStep), usize>,
+    trace: Vec<MoodRecord>,
     active_steps: BTreeMap<String, usize>,
     yolo_steps: usize,
     yolo_buys: Vec<(i64, String)>,
@@ -707,8 +753,7 @@ impl Schizo {
             yolo: false,
             yolo_asset: None,
             next_plan: None,
-            steps_by_result: BTreeMap::new(),
-            zone_moves: BTreeMap::new(),
+            trace: Vec::new(),
             active_steps: BTreeMap::new(),
             yolo_steps: 0,
             yolo_buys: Vec::new(),
@@ -725,8 +770,15 @@ impl Schizo {
         &self.yolo_buys
     }
 
-    fn update_mood(&mut self, snap: &Snapshot) {
+    /// Every step's mood-ring record, oldest first.
+    pub fn trace_records(&self) -> &[MoodRecord] {
+        &self.trace
+    }
+
+    /// Advance the mood ring for `snap`; returns the record without the YOLO flag.
+    fn update_mood(&mut self, snap: &Snapshot) -> MoodRecord {
         let view = snap.gcp2.as_ref();
+        let mood_before = self.mood().map(str::to_string);
         let (active, result) = next_mood(
             self.active,
             self.voters.len(),
@@ -734,15 +786,20 @@ impl Schizo {
             self.prev_zone.as_ref().map(|(z, _)| *z),
             view.map(|v| v.dice),
         );
-        if let (Some(view), Some((_, prev_label))) = (view, &self.prev_zone) {
-            *self
-                .zone_moves
-                .entry((prev_label.clone(), view.zone_label.clone(), result))
-                .or_default() += 1;
-        }
-        *self.steps_by_result.entry(result).or_default() += 1;
+        let from_zone = self.prev_zone.as_ref().map(|(_, label)| label.clone());
         self.active = active;
         self.prev_zone = view.map(|v| (v.zone, v.zone_label.clone()));
+        MoodRecord {
+            t: snap.t,
+            units: view.map(|v| v.units),
+            from_zone,
+            to_zone: view.map(|v| v.zone_label.clone()),
+            dice: view.map(|v| v.dice),
+            result,
+            mood_before,
+            mood_after: self.mood().map(str::to_string),
+            yolo: false,
+        }
     }
 
     fn update_yolo(&mut self, snap: &Snapshot) {
@@ -838,8 +895,10 @@ impl Persona for Schizo {
     }
 
     fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
-        self.update_mood(snap);
+        let mut record = self.update_mood(snap);
         self.update_yolo(snap);
+        record.yolo = self.yolo;
+        self.trace.push(record);
         if let Some(name) = self.mood() {
             *self.active_steps.entry(name.to_string()).or_default() += 1;
         }
@@ -856,10 +915,19 @@ impl Persona for Schizo {
     }
 
     fn notes(&self) -> Vec<String> {
-        let count = |r: MoodStep| self.steps_by_result.get(&r).copied().unwrap_or(0);
+        let mut by_result: BTreeMap<MoodStep, usize> = BTreeMap::new();
+        let mut moves: BTreeMap<(&str, &str, MoodStep), usize> = BTreeMap::new();
+        for r in &self.trace {
+            *by_result.entry(r.result).or_default() += 1;
+            if let (Some(from), Some(to)) = (&r.from_zone, &r.to_zone) {
+                *moves.entry((from, to, r.result)).or_default() += 1;
+            }
+        }
+        let count = |r: MoodStep| by_result.get(&r).copied().unwrap_or(0);
         let mut notes = vec![
             format!(
-                "mood steps: {} switched, {} held, {} without a GCP2 reading",
+                "mood steps: {} initial, {} switched, {} held, {} without a GCP2 reading",
+                count(MoodStep::Initial),
                 count(MoodStep::Switched),
                 count(MoodStep::Held),
                 count(MoodStep::NoReading)
@@ -879,11 +947,18 @@ impl Persona for Schizo {
             ),
         ];
         notes.extend(
-            self.zone_moves
+            moves
                 .iter()
                 .map(|((from, to, r), n)| format!("zone {from} -> {to}: {} {n}", r.as_str())),
         );
         notes
+    }
+
+    fn trace(&self) -> Option<Trace> {
+        Some(Trace {
+            header: MOOD_TRACE_HEADER.to_string(),
+            rows: self.trace.iter().map(MoodRecord::csv_row).collect(),
+        })
     }
 }
 
@@ -1495,10 +1570,10 @@ pub(crate) mod tests {
 
     #[test]
     fn the_mood_switches_only_while_gcp2_is_stable() {
-        // First reading: the dice pick the mood.
+        // First reading: the dice pick the mood, recorded as the initial pick, not a switch.
         assert_eq!(
             next_mood(None, 4, Some(0), None, Some(6)),
-            (Some(2), MoodStep::Switched)
+            (Some(2), MoodStep::Initial)
         );
         // Same zone: switch to another mood picked by the dice; never the same one.
         for dice in 0..300 {
@@ -1633,20 +1708,31 @@ pub(crate) mod tests {
                 account.minute(market, m);
                 m += MINUTE_MS;
             }
-            (seen, account.finish(c.end_ms).notes)
+            let result = account.finish(c.end_ms);
+            (seen, result.trace.unwrap().rows)
         };
         let cut = T0 + (3 * 1440 + 200) * MINUTE_MS;
-        let (full, notes) = intents(&market);
+        let (full, trace) = intents(&market);
         let (short, _) = intents(&truncated(&market, cut));
         let upto = |s: &[(i64, Vec<Intent>)]| -> Vec<(i64, Vec<Intent>)> {
             s.iter().filter(|(t, _)| *t <= cut).cloned().collect()
         };
         assert!(upto(&full).iter().any(|(_, i)| !i.is_empty()));
         assert_eq!(upto(&full), upto(&short));
-        // The wave produces both kinds of mood steps and at least one YOLO buy.
-        let steps = &notes[0];
-        assert!(!steps.starts_with("mood steps: 0 switched"), "{notes:?}");
-        assert!(!steps.contains(" 0 held"), "{notes:?}");
-        assert!(!notes[2].ends_with("YOLO buys: 0"), "{notes:?}");
+        // The wave produces every kind of mood step: one initial pick, then switches on a
+        // stable zone and holds on a zone change; one trace row per step.
+        assert_eq!(trace.len(), full.len());
+        let count = |r: &str| {
+            trace
+                .iter()
+                .filter(|row| row.split(',').nth(5) == Some(r))
+                .count()
+        };
+        assert_eq!(count("initial"), 1);
+        assert!(count("switched") > 0 && count("held") > 0, "{trace:?}");
+        assert!(
+            trace.iter().any(|row| row.ends_with(",true")),
+            "no YOLO step"
+        );
     }
 }

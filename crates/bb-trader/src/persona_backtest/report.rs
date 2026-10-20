@@ -14,12 +14,12 @@ use super::data::{MINUTE_MS, Market};
 use super::engine::{Config, LIQUID, Persona, RunResult, run};
 use super::personas::{
     CONTRARIAN_EXIT_PLAN, Contrarian, Detached, Ensemble, HIGH_VARIANCE_EXIT_PLAN, HighVariance,
-    Rotation, V13, V13_EXIT_PLAN,
+    Rotation, Schizo, V13, V13_EXIT_PLAN,
 };
 use crate::error::{Result, TraderError};
 use crate::gcp2::Gcp2Feed;
 
-/// Every variant, in report order.
+/// The Phase 48 variants `all` expands to, in report order.
 pub const ALL_PERSONAS: [&str; 6] = [
     "v13",
     "contrarian",
@@ -27,6 +27,16 @@ pub const ALL_PERSONAS: [&str; 6] = [
     "high_variance",
     "rotation",
     "ensemble",
+];
+/// Every persona `--persona` accepts by name (`schizo`, Phase 49, is not part of `all`).
+pub const KNOWN_PERSONAS: [&str; 7] = [
+    "v13",
+    "contrarian",
+    "detached",
+    "high_variance",
+    "rotation",
+    "ensemble",
+    "schizo",
 ];
 const DAY_MS: i64 = 86_400_000;
 /// History needed before the window start: 24h breadth lookback plus the 22 closed 1h bars
@@ -83,10 +93,10 @@ pub fn resolve_personas(names: &[String]) -> Result<Vec<&'static str>> {
         let expanded: Vec<&'static str> = if name == "all" {
             ALL_PERSONAS.to_vec()
         } else {
-            let known = ALL_PERSONAS.iter().find(|p| **p == name).ok_or_else(|| {
+            let known = KNOWN_PERSONAS.iter().find(|p| **p == name).ok_or_else(|| {
                 TraderError::config(format!(
                     "unknown persona {name:?}; use one of {} or all",
-                    ALL_PERSONAS.join(", ")
+                    KNOWN_PERSONAS.join(", ")
                 ))
             })?;
             vec![*known]
@@ -111,6 +121,7 @@ fn build_persona(name: &str, cfg: Config) -> Result<Box<dyn Persona>> {
         "high_variance" => Box::new(HighVariance::new()?),
         "rotation" => Box::new(Rotation::new(cfg)?),
         "ensemble" => Box::new(Ensemble::new()?),
+        "schizo" => Box::new(Schizo::new()?),
         other => return Err(TraderError::config(format!("unknown persona {other:?}"))),
     })
 }
@@ -190,6 +201,8 @@ pub struct ReportContext {
     pub coins: usize,
     /// One line describing the GCP2 history the run used (or that it had none).
     pub gcp2: String,
+    /// The report's file stem, for naming the per-variant trace files.
+    pub stem: String,
 }
 
 /// Run the selected personas; one result per persona, in the order given.
@@ -215,6 +228,9 @@ fn rules(name: &str) -> String {
         "rotation" => "shadow-runs the four base personas; at the first step of each UTC day follows the one with the best trailing-72h shadow return (v13 on ties and before 72h exist)".to_string(),
         "ensemble" => format!(
             "the four base personas vote on its own book; buys the coin with ≥ 2 buy votes (most votes, then 24h volume), all cash; sells on ≥ 2 sell votes or when `{V13_EXIT_PLAN}` fires"
+        ),
+        "schizo" => format!(
+            "Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only while the GCP2 zone stays the same between steps (inverted: a zone change keeps it); in GCP2's two highest zones YOLO sells everything and goes all-in on the best 1h liquid coin until the zone drops below the third-highest; otherwise the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it (`{V13_EXIT_PLAN}` for YOLO); no stop-loss"
         ),
         other => other.to_string(),
     }
@@ -382,6 +398,15 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         for note in &r.notes {
             let _ = writeln!(out, "- {note}");
         }
+        if let Some(trace) = &r.trace {
+            let _ = writeln!(
+                out,
+                "- Per-step trace: `{}` ({} rows, one per step: `{}`).",
+                trace_file_name(&ctx.stem, &r.name),
+                trace.rows.len(),
+                trace.header
+            );
+        }
         let _ = writeln!(out);
     }
     let _ = writeln!(out, "## Assumptions\n");
@@ -424,8 +449,26 @@ pub fn file_stem(end_ms: i64) -> String {
     format!("schizoid_backtest_{date}")
 }
 
-/// Load, run and write; returns the three paths written.
-pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, [PathBuf; 3])> {
+/// File name of a variant's per-step trace: `<stem>_<variant>_trace.csv`.
+pub fn trace_file_name(stem: &str, variant: &str) -> String {
+    format!("{stem}_{variant}_trace.csv")
+}
+
+/// A trace as CSV text.
+pub fn trace_csv(trace: &super::engine::Trace) -> String {
+    let mut out = String::with_capacity(trace.rows.len() * 96);
+    out.push_str(&trace.header);
+    out.push('\n');
+    for row in &trace.rows {
+        out.push_str(row);
+        out.push('\n');
+    }
+    out
+}
+
+/// Load, run and write; returns the paths written (`.md`, `.csv`, `_trades.csv`, then one
+/// `_<variant>_trace.csv` per variant that keeps a trace).
+pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<PathBuf>)> {
     if args.days <= 0 {
         return Err(TraderError::config("--days must be positive"));
     }
@@ -447,6 +490,7 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, [Path
     let market = Market::load_dir(&args.cache_dir)?.with_gcp2(gcp2);
     check_coverage(&market, start_ms, end_ms)?;
     let results = run_personas(&market, &cfg, &names)?;
+    let stem = file_stem(end_ms);
     let ctx = ReportContext {
         cfg,
         fee_bps: args.fee_bps,
@@ -454,10 +498,10 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, [Path
         cache_dir: args.cache_dir.display().to_string(),
         coins: market.len(),
         gcp2: gcp2_line,
+        stem: stem.clone(),
     };
     std::fs::create_dir_all(&args.output_dir)?;
-    let stem = file_stem(end_ms);
-    let paths = [
+    let mut paths = vec![
         args.output_dir.join(format!("{stem}.md")),
         args.output_dir.join(format!("{stem}.csv")),
         args.output_dir.join(format!("{stem}_trades.csv")),
@@ -465,6 +509,13 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, [Path
     write(&paths[0], &markdown(&results, &ctx))?;
     write(&paths[1], &summary_csv(&results))?;
     write(&paths[2], &trades_csv(&results))?;
+    for r in &results {
+        if let Some(trace) = &r.trace {
+            let path = args.output_dir.join(trace_file_name(&stem, &r.name));
+            write(&path, &trace_csv(trace))?;
+            paths.push(path);
+        }
+    }
     Ok((results, paths))
 }
 
@@ -715,5 +766,120 @@ mod tests {
             "{md}"
         );
         assert!(md.contains("Normal from 0, Elevated from 140"), "{md}");
+    }
+
+    #[test]
+    fn the_schizo_trace_records_every_simulated_step() {
+        use crate::persona_backtest::engine::tests::{gcp2_wave, gcp2_zones};
+        let cache = cache_dir();
+        let out = tempfile::tempdir().unwrap();
+        let gcp2 = tempfile::tempdir().unwrap();
+        std::fs::write(
+            gcp2.path().join("colorzones.json"),
+            serde_json::to_string(&gcp2_zones()).unwrap(),
+        )
+        .unwrap();
+        // GCP2 starts at the window start (so the first steps have no full hour) and has a
+        // 90-minute gap mid-window (so some later steps have no reading either).
+        let window_start_s = (T_END - DAY_MS) / 1000;
+        let gap = (window_start_s + 5 * 3_600)..(window_start_s + 5 * 3_600 + 5_400);
+        let rows: String = (window_start_s..T_END / 1000)
+            .filter(|s| !gap.contains(s))
+            .map(|s| {
+                let units = gcp2_wave(s - window_start_s);
+                format!("{s},{:.4},400\n", units as f64 / 10_000.0)
+            })
+            .collect();
+        std::fs::write(
+            gcp2.path()
+                .join("GCP2_Network_Coherence_Global_Network_2026_07.csv"),
+            format!("epoch_time_utc,network_coherence,active_devices\n{rows}"),
+        )
+        .unwrap();
+        let mut a = args(cache.path(), out.path());
+        a.gcp2_cache_dir = gcp2.path().to_path_buf();
+        a.personas = names(&["schizo"]);
+        let (results, paths) = run_backtest(&a).unwrap();
+        let schizo = &results[0];
+        assert_eq!(schizo.name, "schizo");
+        let trace_path = out
+            .path()
+            .join("schizoid_backtest_2026-07-23_schizo_trace.csv");
+        assert_eq!(paths.last(), Some(&trace_path));
+        let text = std::fs::read_to_string(&trace_path).unwrap();
+        let mut lines = text.lines();
+        assert_eq!(
+            lines.next(),
+            Some(crate::persona_backtest::personas::MOOD_TRACE_HEADER)
+        );
+        let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
+        assert_eq!(rows.len(), schizo.steps);
+
+        let feed = load_gcp2(gcp2.path()).unwrap().unwrap();
+        let (mut prev_to, mut prev_mood, mut seen_reading) = ("", "", false);
+        for (k, row) in rows.iter().enumerate() {
+            let t = T_END - DAY_MS + k as i64 * 20 * MINUTE_MS;
+            assert_eq!(row[0], iso(t), "row {k}");
+            let view = feed.view_at(t);
+            assert_eq!(
+                row[3],
+                view.as_ref().map_or("", |v| v.zone_label.as_str()),
+                "row {k}"
+            );
+            let value = view
+                .as_ref()
+                .map(|v| format!("{:.4}", v.value()))
+                .unwrap_or_default();
+            assert_eq!(row[1], value, "row {k}");
+            let dice = view
+                .as_ref()
+                .map(|v| v.dice.to_string())
+                .unwrap_or_default();
+            assert_eq!(row[4], dice, "row {k}");
+            assert_eq!(
+                row[2], prev_to,
+                "row {k}: from zone is the previous step's zone"
+            );
+            let expected = if view.is_none() {
+                "no reading"
+            } else if !seen_reading {
+                "initial"
+            } else if prev_to.is_empty() {
+                "no reading"
+            } else if row[2] == row[3] {
+                "switched"
+            } else {
+                "held"
+            };
+            assert_eq!(row[5], expected, "row {k}");
+            assert_eq!(
+                row[6], prev_mood,
+                "row {k}: mood before is the last mood after"
+            );
+            let changed = row[6] != row[7];
+            assert_eq!(
+                changed,
+                expected == "initial" || expected == "switched",
+                "row {k}"
+            );
+            seen_reading |= view.is_some();
+            prev_to = row[3];
+            prev_mood = row[7];
+        }
+        let count = |r: &str| rows.iter().filter(|row| row[5] == r).count();
+        assert_eq!(count("initial"), 1);
+        assert!(
+            rows[0][5] == "no reading" && count("no reading") >= 6,
+            "{text}"
+        );
+        assert!(count("switched") > 0 && count("held") > 0, "{text}");
+        let md = std::fs::read_to_string(&paths[0]).unwrap();
+        assert!(
+            md.contains(&format!(
+                "Per-step trace: `schizoid_backtest_2026-07-23_schizo_trace.csv` ({} rows",
+                rows.len()
+            )),
+            "{md}"
+        );
     }
 }
