@@ -1238,7 +1238,7 @@ Step 1, backtest foundation:
 
 Step 2, schizoid personas:
 
-- [ ] `contrarian`: fades breadth; buys the 4h laggard under bearish breadth
+- [x] `contrarian`: fades breadth; buys the 4h laggard under bearish breadth
   and sells strength (B1).
 - [ ] `detached`: no breadth, no exit plans and no liquid filter; trades on the
   raw 1h/15m price action of all 32 cached coins (B2).

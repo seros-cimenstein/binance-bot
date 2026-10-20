@@ -105,6 +105,76 @@ impl Persona for V13 {
     }
 }
 
+/// The contrarian exit plan: sell into a stretch above the upper Bollinger band (only above
+/// break-even), or after 6 hours.
+pub const CONTRARIAN_EXIT_PLAN: &str = "stretch=2:1,deadline=360";
+/// A held coin's 1h move at which the contrarian takes the bounce.
+pub const CONTRARIAN_TAKE_1H_PCT: f64 = 1.5;
+
+/// `contrarian`: fades the market breadth: buys weakness, sells strength.
+///
+/// - Candidates: the liquid top 10, as `v13`.
+/// - Buy only when flat and the breadth score is at most −15: the candidate with the lowest
+///   4h return (the biggest laggard), with all cash.
+/// - Exit: plan `stretch=2:1,deadline=360`, plus a sell at a step when the held coin's 1h
+///   return is at least +1.5% or the breadth score is at least +15.
+#[derive(Debug, Clone)]
+pub struct Contrarian {
+    plan: ExitPlan,
+}
+
+impl Contrarian {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            plan: plan(CONTRARIAN_EXIT_PLAN)?,
+        })
+    }
+}
+
+impl Persona for Contrarian {
+    fn name(&self) -> &str {
+        "contrarian"
+    }
+
+    fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        if !book.is_flat() {
+            if snap.score.is_some_and(|s| s >= LEAN_SCORE) {
+                return sell_all(book, "breadth_strength");
+            }
+            return book
+                .holdings
+                .keys()
+                .filter(|asset| {
+                    snap.coin(asset)
+                        .and_then(|c| c.ret_1h)
+                        .is_some_and(|r| r >= CONTRARIAN_TAKE_1H_PCT)
+                })
+                .map(|asset| Intent::Sell {
+                    asset: asset.clone(),
+                    reason: "bounce",
+                })
+                .collect();
+        }
+        if !snap.score.is_some_and(|s| s <= -LEAN_SCORE) {
+            return Vec::new();
+        }
+        best_by(snap.liquid_top.iter(), |asset| {
+            snap.coin(asset)?.ret_4h.map(|r| -r)
+        })
+        .map(|asset| {
+            vec![Intent::Buy {
+                asset: asset.clone(),
+                equity_fraction: 1.0,
+            }]
+        })
+        .unwrap_or_default()
+    }
+
+    fn exit_plan(&self) -> Option<ExitPlan> {
+        Some(self.plan)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::BTreeMap;
@@ -267,6 +337,75 @@ pub(crate) mod tests {
         assert_eq!(first.reason, "deadline");
         assert_eq!(first.exit_ms - first.entry_ms, 360 * MINUTE_MS);
         assert!(first.net_pnl_usdt > 0.0);
+        assert_eq!(r.skipped_orders, 0);
+    }
+
+    const LAGGARDS: [Row<'static>; 3] = [
+        ("BTC", -0.2, -0.5, -1.5, 3e8),
+        ("SOL", -0.3, -0.8, -4.0, 1e8),
+        ("ETH", -0.1, -0.1, -2.0, 2e8),
+    ];
+
+    #[test]
+    fn contrarian_buys_the_worst_4h_coin_only_under_bearish_breadth() {
+        let mut c = Contrarian::new().unwrap();
+        assert!(
+            c.decide(&snap(-14.9, -2.0, &LAGGARDS), &flat_book())
+                .is_empty()
+        );
+        assert!(
+            c.decide(&snap(40.0, 2.0, &LAGGARDS), &flat_book())
+                .is_empty()
+        );
+        let intents = c.decide(&snap(-15.0, -2.0, &LAGGARDS), &flat_book());
+        assert_eq!(
+            intents,
+            vec![Intent::Buy {
+                asset: "SOL".into(),
+                equity_fraction: 1.0
+            }]
+        );
+    }
+
+    #[test]
+    fn contrarian_sells_the_bounce_or_when_breadth_turns_bullish() {
+        let mut c = Contrarian::new().unwrap();
+        let bounce = |r1h: f64| [("SOL", 0.3, r1h, -1.0, 1e8), ("BTC", 0.0, 0.0, 0.0, 3e8)];
+        // A 1.49% bounce in neutral breadth holds; 1.5% sells.
+        assert!(
+            c.decide(&snap(0.0, 0.0, &bounce(1.49)), &holding(&["SOL"]))
+                .is_empty()
+        );
+        let intents = c.decide(&snap(0.0, 0.0, &bounce(1.5)), &holding(&["SOL"]));
+        assert_eq!(sold(&intents), vec!["SOL"]);
+        // Breadth flipping to +15 sells everything even without a bounce.
+        assert!(
+            c.decide(&snap(14.9, 0.0, &bounce(0.2)), &holding(&["SOL"]))
+                .is_empty()
+        );
+        let intents = c.decide(&snap(15.0, 0.0, &bounce(0.2)), &holding(&["SOL"]));
+        assert_eq!(sold(&intents), vec!["SOL"]);
+        assert!(bought(&intents).is_empty());
+    }
+
+    #[test]
+    fn contrarian_holds_a_falling_laggard_until_its_deadline() {
+        // Every coin falls (SOL fastest): breadth −100, no bounce, no stretch above
+        // break-even, so the 6h deadline sells.
+        let fall =
+            |rate: f64| move |m: i64| 100.0 * (1.0 - rate * m as f64) + (m % 2) as f64 * 0.01;
+        let market = Market::from_series([
+            coin("BTC", 2880, fall(0.00005)),
+            coin("ETH", 2880, fall(0.00004)),
+            coin("SOL", 2880, fall(0.0001)),
+        ]);
+        let c = cfg(1500, 2880, 20);
+        let r = run(&market, &c, Box::new(Contrarian::new().unwrap())).unwrap();
+        let first = &r.trades[0];
+        assert_eq!((first.asset.as_str(), first.entry_ms), ("SOL", c.start_ms));
+        assert_eq!(first.reason, "deadline");
+        assert_eq!(first.exit_ms - first.entry_ms, 360 * MINUTE_MS);
+        assert!(first.net_pnl_usdt < 0.0);
         assert_eq!(r.skipped_orders, 0);
     }
 }
