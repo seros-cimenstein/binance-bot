@@ -1255,7 +1255,7 @@ Step 3, runner, report and docs:
   on a missing cache (C1).
 - [x] Run the 60-day backtest for all six variants and commit the report files.
   The runs must be deterministic, with identical `sha256sum` on a re-run (C2).
-- [ ] Cross-check the report against the trade list (C3).
+- [x] Cross-check the report against the trade list (C3).
 - [ ] Document the command in `README.md` and `OPERATIONS.md` (D1).
 - [ ] Hand off in `PROGRESS.md` and `AGENTS.md` (D2).
 
