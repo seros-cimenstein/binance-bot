@@ -1308,7 +1308,7 @@ Step 3, live:
 
 Step 4, docs and handoff:
 
-- [ ] Update `README.md`, `OPERATIONS.md` and `.env.example` (D1).
+- [x] Update `README.md`, `OPERATIONS.md` and `.env.example` (D1).
 - [ ] Hand off in `PROGRESS.md` and `AGENTS.md` (D2).
 
 ## Post-Implementation Handoff

@@ -58,7 +58,7 @@ defaults and data files.
 | Products / diagnostics | `api-permissions`, `scope-audit`, `product-modules`, `advanced-readiness`, `margin`, `margin-canary`, `futures`, `futures-canary`, `transfers`, `transfer-canary`, `withdrawals`, `prediction`, `spot-canary`, `live-spot-allocator`, `live-probe`, `ops-check` |
 | Legacy runtime | `main` |
 | Signals / Solana / misc | `signals-*`, `sniper-*`, `social-signal`, `polymarket-scanner`, `airdrop-scheduler` |
-| Research | `*-backtest`, `spec-snapshot` |
+| Research | `*-backtest`, `spec-snapshot`, `entry-study`, `gcp2-history` |
 
 ## Bot agentic Spot trader (`bb bot-spot`)
 
@@ -84,6 +84,31 @@ The bot trades the Spot wallet through omp (the oh-my-pi coding agent, npm
   ignored, with one warning listing them. There are no stop-loss or
   take-profit levels either: theses record why, expected move and horizon,
   and the prompt tells the bot not to set invalidation prices or exit triggers.
+- **Schizo trader (Phase 49, prompt `bot-spot-v15-schizo`, operator
+  decision 2026-10-20).** The LLM stays the trader but is told it has four
+  personalities (`v13`, `contrarian`, `detached`, `high_variance`, the Phase
+  48 personas) and acts out the one in charge. Each cycle the trader reads
+  GCP2 (gcp2.net, Global Consciousness Project 2.0 network coherence, public
+  and read-only) and works out the schizo state that opens the cycle message
+  (`## Your schizo state`):
+  - **Mood ring, inverted to GCP2:** when GCP2's colour zone is the same as at
+    the previous cycle the mood switches to another personality picked by the
+    GCP2 dice (a hash of the GCP2 value, no seed); when the zone changed, or a
+    reading is missing, the mood holds. No timer.
+  - **Voices:** the four personalities' rule votes on the live wallet, the
+    mood in charge counting double.
+  - **Bets:** one coin with all cash. Each mood has its own exit plan.
+  - **YOLO:** in GCP2's two highest zones (Very High, Extreme) the bot is
+    ordered to go all-in on the liquid coin with the highest 1h move until
+    the zone drops below High.
+
+  A failed GCP2 read (timeout, HTTP error, HTTP 429 rate limit) means "GCP2
+  unavailable" for that cycle: the mood holds and there is no YOLO. The state
+  is recorded as `schizo` in each cycle audit row and persisted in
+  `bot-spot-schizo-state.json` next to `BOT_SPOT_STATE_PATH`.
+  `BOT_SPOT_GCP2_ENABLED` (default true) switches it; false gives the v14
+  prompts. GCP2 has no shown link to prices. See OPERATIONS.md, "Schizo
+  trader (Phase 49)".
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
   - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked at cycle start, before every route, before every leg and before every order;
@@ -108,6 +133,7 @@ bb bot-spot-exit-replay --table             # replay the Phase 45 sell-plan menu
 bb bot-spot-exit-watch --daemon             # paper exit-plan watcher (no orders)
 bb bot-spot-exit-watch --summary            # closed plan trials vs the bot's own exits (live plan-sold positions apart)
 bb bot-spot-persona-backtest --end 2026-10-18T10:43:00Z   # Phase 48 rule personas, offline backtest (no orders)
+bb gcp2-history --year 2026 --month 8 --month 9 --month 10 --cache-dir data/gcp2-cache   # GCP2 history for the schizo backtest
 ```
 
 `bb bot-spot-exit-replay` (Phase 45, research only, public klines, no
@@ -130,7 +156,7 @@ klines are unavailable is listed under `skipped`.
 
 Exit plans: The bot may give an open position one of these plans with the
 `set_exit_plan` host tool (its own parameters; it never writes code; setting
-again replaces it, `clear` removes it). Positions opened from
+again replaces it, `clear` removes a plan the bot set). Positions opened from
 `BOT_SPOT_DEFAULT_EXIT_PLAN_FROM` run `BOT_SPOT_DEFAULT_EXIT_PLAN`
 unless the bot sets its own plan. With `BOT_SPOT_EXIT_PLANS_LIVE=true` the
 `bot-spot --submit-live --daemon` process follows those positions' bids
@@ -146,9 +172,11 @@ reads only the cached 1m candles in `--cache-dir` (default
 `data/entry-study-cache`), makes no network call, has no order path and never
 touches the live trader. It runs deterministic rule personas over `--days`
 (60) before `--end`: the `v13` rule proxy, `contrarian`, `detached`,
-`high_variance`, `rotation` and `ensemble`. It writes
-`reports/schizoid_backtest_<end-date>.md`, `.csv` and `_trades.csv`. See
-OPERATIONS.md, "Persona backtest".
+`high_variance`, `rotation` and `ensemble` (`--persona all`), plus the Phase 49
+`schizo` persona by name, which also reads the GCP2 history that
+`bb gcp2-history` caches in `--gcp2-cache-dir` (default `data/gcp2-cache`). It
+writes `reports/schizoid_backtest_<end-date>.md`, `.csv`, `_trades.csv` and,
+for `schizo`, `_schizo_trace.csv`. See OPERATIONS.md, "Persona backtest".
 
 Cost control (not a trading gate): `BOT_SPOT_MAX_DAILY_LLM_COST_USD` (0 = unlimited).
 Choose the model and thinking level with `BOT_SPOT_MODEL` (default
