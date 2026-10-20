@@ -1,6 +1,6 @@
 # Loop ledger: "schizoid" strategy personas, backtested against the v13 baseline (2026-10-20)
 
-STATUS: OPEN
+STATUS: DONE
 
 Source: the 2026-10-20 guided-goal interview. The operator said every change made the bot worse and asked for a "schizoid" bot covering all four proposed modes (contrarian, detached, multi-persona vote/rotate, high-variance). They want backtests only and will judge the results themselves. The agreed draft sets these limits:
 - 4 modes plus an ensemble, compared against the current v13 config over the same 60-day liquid-universe window.
@@ -136,3 +136,42 @@ Each persona implements the A4 trait in `persona_backtest/personas.rs`, with its
 
 - The laptop `.env.example` is stale against the live Pi: `BOT_SPOT_MARKET_PICK_MODE=small_market_aggressive` (`:117`), blank `DEFAULT_EXIT_PLAN` (`:110`), `CANDIDATE_LIMIT=5`. The `config.rs:750-752` test still asserts `deadline=120`. The Pi uses `liquid_top_value`, 10 and `atr=3.5:1h,deadline=360`. These are config/live-path files, so they are out of scope here.
 - The Phase 47 basket is the top 20 by current volume, both live and in this cache, so every backtest over the cache has survivorship bias. C2 states it; fixing it would need historical volume ranks for coins outside the cache, which means new data.
+
+## Summary (2026-10-20)
+
+15 items: 15 done, 0 invalid, 0 blocked.
+
+- **A (foundation):**
+  - roadmap Phase 48;
+  - offline 1m cache loader;
+  - point-in-time breadth (`market_mood::breadth_score_at`, additive);
+  - portfolio engine with look-ahead, hand-calculation and equity-sum tests;
+  - the `v13` rule proxy.
+- **B (personas):** `contrarian`, `detached`, `high_variance`, `rotation` (daily switch to the best trailing-72h shadow) and `ensemble` (2-of-4 vote).
+  - The engine also counts skipped orders by reason and carries persona notes.
+- **C (runner and report):**
+  - `bb bot-spot-persona-backtest` is offline only and fails on a missing cache.
+  - The 60-day report is committed: `reports/schizoid_backtest_2026-10-18.{md,csv}` and `_trades.csv`.
+  - Reruns are byte-identical, and an independent cross-check shows a largest difference of 1.4e-8 USDT with exact counts.
+- **D (docs and handoff):** README, OPERATIONS, PROGRESS, AGENTS and the plan boxes are updated.
+
+Results, net over 60 days on 1000 USDT:
+
+| Variant | Net USDT | Net % |
+|---|---:|---:|
+| v13 | −183.99 | −18.40 |
+| contrarian | −638.01 | −63.80 |
+| detached | −918.29 | −91.83 |
+| high_variance | +193.82 | +19.38 |
+| rotation | −159.82 | −15.98 |
+| ensemble | −832.86 | −83.29 |
+
+Final check on `0be747d`, statuses captured directly:
+- `cargo test --workspace` exit 0 (1047 passed, 0 failed);
+- `cargo clippy --workspace --all-targets -- -D warnings` 0;
+- `scripts/smoke.sh` 0;
+- `scripts/pool_replay.sh` 0;
+- `git diff --check` 0.
+- A fresh C2 run (`unshare -rn cargo run --release … --persona all`) exited 0 with 0 `ERROR` lines and reproduced all three committed report files (`sha256sum -c`: OK ×3).
+
+Nothing was deployed; the Pi was only read. The untracked `LOOP_BOT_HEALTH.manager.md` and `LOOP_SCHIZOID.manager.md` were left alone.
