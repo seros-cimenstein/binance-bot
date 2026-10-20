@@ -30,6 +30,8 @@ anyhow.workspace = true
 tracing.workspace = true
 clap.workspace = true
 html-escape.workspace = true
+reqwest.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

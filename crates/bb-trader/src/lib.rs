@@ -20,8 +20,10 @@
 //!   [`exit_guard`]: live exit plans inside the trader daemon.
 //! - [`persona_backtest`]: Phase 48 offline backtest of deterministic rule personas
 //!   (research only, no network, no order path).
+//! - [`gcp2`]: GCP2 (gcp2.net) public network coherence, read-only (Phase 49).
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
-//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `bot-spot-persona-backtest`.
+//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `bot-spot-persona-backtest`,
+//!   `gcp2-history`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
@@ -41,6 +43,7 @@ pub mod exit_guard;
 pub mod exit_plan;
 pub mod exit_replay;
 pub mod exit_watch;
+pub mod gcp2;
 pub mod journal;
 pub mod market_mood;
 pub mod memory;

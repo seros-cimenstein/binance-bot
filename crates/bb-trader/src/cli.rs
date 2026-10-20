@@ -26,6 +26,8 @@ pub enum Command {
     BotSpotExitWatch(crate::exit_watch::ExitWatchArgs),
     /// Backtest the Phase 48 rule personas offline on cached 1m candles (no network, no orders).
     BotSpotPersonaBacktest(crate::persona_backtest::report::PersonaBacktestArgs),
+    /// Download GCP2 network coherence history and colour zones (public data, read-only).
+    Gcp2History(crate::gcp2::Gcp2HistoryArgs),
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -84,6 +86,13 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
                 }
             })
         }
+        Command::Gcp2History(args) => Ok(match crate::gcp2::run_history_cli(args).await {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("GCP2 history download failed: {error}");
+                ExitCode::FAILURE
+            }
+        }),
     }
 }
 

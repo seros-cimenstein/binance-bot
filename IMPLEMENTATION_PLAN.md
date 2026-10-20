@@ -1286,7 +1286,7 @@ Non-goals:
 Step 1, decisions and GCP2 data:
 
 - [x] Record the operator decisions in `CODEX.md` and this section (A1).
-- [ ] Add `bb gcp2-history`: monthly network coherence CSVs plus the colour
+- [x] Add `bb gcp2-history`: monthly network coherence CSVs plus the colour
   zones in `data/gcp2-cache` (A2).
 - [ ] Add the GCP2 signal: hourly sum, zones read from GCP2, GCP2 dice, and
   the investigated live/history gap (A3).
