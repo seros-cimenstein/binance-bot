@@ -203,6 +203,35 @@ pub struct ReportContext {
     pub gcp2: String,
     /// The report's file stem, for naming the per-variant trace files.
     pub stem: String,
+    /// Minutes of the window per GCP2 zone (in zone order) and minutes without a reading;
+    /// `None` without GCP2 history.
+    pub gcp2_zone_minutes: Option<(Vec<(String, usize)>, usize)>,
+}
+
+/// Minutes of `[start_ms, end_ms)` per GCP2 zone (zone order) and without a reading.
+pub fn gcp2_zone_minutes(
+    feed: &Gcp2Feed,
+    start_ms: i64,
+    end_ms: i64,
+) -> (Vec<(String, usize)>, usize) {
+    let mut counts = vec![0_usize; feed.zones().zones.len()];
+    let mut unavailable = 0;
+    let mut m = start_ms;
+    while m < end_ms {
+        match feed.view_at(m) {
+            Some(view) => counts[view.zone] += 1,
+            None => unavailable += 1,
+        }
+        m += MINUTE_MS;
+    }
+    let zones = feed
+        .zones()
+        .zones
+        .iter()
+        .zip(counts)
+        .map(|(z, n)| (z.label.clone(), n))
+        .collect();
+    (zones, unavailable)
 }
 
 /// Run the selected personas; one result per persona, in the order given.
@@ -261,13 +290,13 @@ pub fn summary_csv(results: &[RunResult]) -> String {
 /// The trade CSV: one row per round trip or still-open position, per variant.
 pub fn trades_csv(results: &[RunResult]) -> String {
     let mut out = String::from(
-        "variant,asset,entry_time,exit_time,entry_price,exit_price,qty,cost_usdt,proceeds_usdt,fees_usdt,net_pnl_usdt,reason,open_at_end\n",
+        "variant,asset,entry_time,exit_time,entry_price,exit_price,qty,cost_usdt,proceeds_usdt,fees_usdt,net_pnl_usdt,reason,open_at_end,entry_tag\n",
     );
     for r in results {
         for t in &r.trades {
             let _ = writeln!(
                 out,
-                "{},{},{},{},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{},{}",
+                "{},{},{},{},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{},{},{}",
                 r.name,
                 t.asset,
                 iso(t.entry_ms),
@@ -280,7 +309,8 @@ pub fn trades_csv(results: &[RunResult]) -> String {
                 t.fees_usdt,
                 t.net_pnl_usdt,
                 t.reason,
-                t.open_at_end
+                t.open_at_end,
+                t.entry_tag.unwrap_or_default()
             );
         }
     }
@@ -409,6 +439,54 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         }
         let _ = writeln!(out);
     }
+    if let Some((zones, unavailable)) = &ctx.gcp2_zone_minutes {
+        let total = zones.iter().map(|(_, n)| n).sum::<usize>() + unavailable;
+        let pct = |n: usize| {
+            if total == 0 {
+                0.0
+            } else {
+                n as f64 / total as f64 * 100.0
+            }
+        };
+        let _ = writeln!(out, "## GCP2\n");
+        let _ = writeln!(
+            out,
+            "- Zone minutes over the window (each minute's reading is the hour ending at the second before it): {}; unavailable {} ({:.1}%).",
+            zones
+                .iter()
+                .map(|(label, n)| format!("{label} {n} ({:.1}%)", pct(*n)))
+                .collect::<Vec<_>>()
+                .join(", "),
+            unavailable,
+            pct(*unavailable)
+        );
+        for r in results {
+            let yolo: Vec<&super::engine::Trade> = r
+                .trades
+                .iter()
+                .filter(|t| t.entry_tag == Some("yolo"))
+                .collect();
+            if r.trace.is_none() && yolo.is_empty() {
+                continue;
+            }
+            let net: f64 = yolo.iter().map(|t| t.net_pnl_usdt).sum();
+            let wins = yolo
+                .iter()
+                .filter(|t| !t.open_at_end && t.net_pnl_usdt > 0.0)
+                .count();
+            let open = yolo.iter().filter(|t| t.open_at_end).count();
+            let _ = writeln!(
+                out,
+                "- `{}` YOLO entries: {}, net {:.2} USDT ({} wins, {} still open at the end); its mood switches by zone change (from → to) are in its per-variant details and per-step trace.",
+                r.name,
+                yolo.len(),
+                net,
+                wins,
+                open
+            );
+        }
+        let _ = writeln!(out);
+    }
     let _ = writeln!(out, "## Assumptions\n");
     for line in [
         "Decisions see only bars closed by the step time; intents fill at the open of the 1m bar that opens at the step, sells before buys.".to_string(),
@@ -421,6 +499,12 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         "`rotation` scores its shadows at the first scheduled step of each new UTC day (00:03 in the default window, keeping the step cadence). A switch step only sells the old book; the new persona trades from the next step on a flat book.".to_string(),
     ] {
         let _ = writeln!(out, "- {line}");
+    }
+    if ctx.gcp2_zone_minutes.is_some() {
+        let _ = writeln!(
+            out,
+            "- GCP2 at a step is `|Σ network_coherence|` over the hour ending at the last second before the step's minute (the live `getNetVarAggregate24H` value); an hour with under 90% of its seconds is unavailable, and zones are GCP2's own published bounds."
+        );
     }
     let _ = writeln!(out, "\n## Caveats\n");
     let window_note = if cfg.end_ms <= PHASE_47_DEPLOY_MS {
@@ -438,6 +522,12 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         "No out-of-sample split: the rules were fixed in `LOOP_SCHIZOID.md` before any real-cache run and not tuned on it, but they are tested on this one period only.".to_string(),
     ] {
         let _ = writeln!(out, "- {line}");
+    }
+    if ctx.gcp2_zone_minutes.is_some() {
+        let _ = writeln!(
+            out,
+            "- GCP2 (gcp2.net, a network of random-number generators) has no shown link to crypto prices; `schizo` reads it only because the operator chose it (`LOOP_SCHIZO_LIVE.md`)."
+        );
     }
     out
 }
@@ -490,6 +580,9 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
     let market = Market::load_dir(&args.cache_dir)?.with_gcp2(gcp2);
     check_coverage(&market, start_ms, end_ms)?;
     let results = run_personas(&market, &cfg, &names)?;
+    let zone_minutes = market
+        .gcp2()
+        .map(|feed| gcp2_zone_minutes(feed, start_ms, end_ms));
     let stem = file_stem(end_ms);
     let ctx = ReportContext {
         cfg,
@@ -499,6 +592,7 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
         coins: market.len(),
         gcp2: gcp2_line,
         stem: stem.clone(),
+        gcp2_zone_minutes: zone_minutes,
     };
     std::fs::create_dir_all(&args.output_dir)?;
     let mut paths = vec![
@@ -728,6 +822,10 @@ mod tests {
         let md =
             std::fs::read_to_string(out.path().join("schizoid_backtest_2026-07-23.md")).unwrap();
         assert!(md.contains("- GCP2: not loaded"), "{md}");
+        assert!(
+            !md.contains("## GCP2") && !md.contains("random-number generators"),
+            "{md}"
+        );
         // An existing but empty directory is an error, not a silent skip.
         let gcp2 = tempfile::tempdir().unwrap();
         let mut with = args(cache.path(), out.path());
@@ -880,6 +978,43 @@ mod tests {
                 rows.len()
             )),
             "{md}"
+        );
+        // The GCP2 section: zone minutes cover the window, YOLO entries total from tagged trades.
+        let (zones, unavailable) = gcp2_zone_minutes(&feed, T_END - DAY_MS, T_END);
+        assert_eq!(
+            zones.iter().map(|(_, n)| n).sum::<usize>() + unavailable,
+            1440
+        );
+        assert!(unavailable >= 59 + 90, "{unavailable}");
+        assert!(md.contains("## GCP2"), "{md}");
+        assert!(md.contains(&format!("unavailable {unavailable} (")), "{md}");
+        let yolo: Vec<_> = schizo
+            .trades
+            .iter()
+            .filter(|t| t.entry_tag == Some("yolo"))
+            .collect();
+        assert!(!yolo.is_empty());
+        let net: f64 = yolo.iter().map(|t| t.net_pnl_usdt).sum();
+        assert!(
+            md.contains(&format!(
+                "`schizo` YOLO entries: {}, net {net:.2} USDT",
+                yolo.len()
+            )),
+            "{md}"
+        );
+        assert!(
+            schizo
+                .trades
+                .iter()
+                .all(|t| matches!(t.entry_tag, Some("yolo" | "vote")))
+        );
+        let trades = std::fs::read_to_string(&paths[2]).unwrap();
+        assert_eq!(
+            trades.lines().filter(|l| l.ends_with(",yolo")).count(),
+            yolo.len()
+        );
+        assert!(
+            md.contains("GCP2 (gcp2.net, a network of random-number generators) has no shown link")
         );
     }
 }

@@ -737,6 +737,7 @@ pub struct Schizo {
     yolo: bool,
     yolo_asset: Option<String>,
     next_plan: Option<ExitPlan>,
+    next_tag: Option<&'static str>,
     trace: Vec<MoodRecord>,
     active_steps: BTreeMap<String, usize>,
     yolo_steps: usize,
@@ -753,6 +754,7 @@ impl Schizo {
             yolo: false,
             yolo_asset: None,
             next_plan: None,
+            next_tag: None,
             trace: Vec::new(),
             active_steps: BTreeMap::new(),
             yolo_steps: 0,
@@ -842,6 +844,7 @@ impl Schizo {
                 equity_fraction: 1.0,
             });
             self.next_plan = Some(self.yolo_plan);
+            self.next_tag = Some("yolo");
             self.yolo_buys.push((snap.t, target.clone()));
         }
         self.yolo_asset = Some(target);
@@ -882,6 +885,7 @@ impl Schizo {
             return Vec::new();
         };
         self.next_plan = self.active.and_then(|i| self.voters[i].exit_plan());
+        self.next_tag = Some("vote");
         vec![Intent::Buy {
             asset: asset.clone(),
             equity_fraction: 1.0,
@@ -903,6 +907,7 @@ impl Persona for Schizo {
             *self.active_steps.entry(name.to_string()).or_default() += 1;
         }
         self.next_plan = None;
+        self.next_tag = None;
         if self.yolo {
             self.yolo_intents(snap, book)
         } else {
@@ -912,6 +917,10 @@ impl Persona for Schizo {
 
     fn exit_plan(&self) -> Option<ExitPlan> {
         self.next_plan
+    }
+
+    fn entry_tag(&self) -> Option<&'static str> {
+        self.next_tag
     }
 
     fn notes(&self) -> Vec<String> {

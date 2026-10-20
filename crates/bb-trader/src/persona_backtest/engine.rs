@@ -224,6 +224,11 @@ pub trait Persona {
     fn trace(&self) -> Option<Trace> {
         None
     }
+    /// Why the buy being filled now was made (e.g. `schizo`'s `yolo` or `vote`); asked at
+    /// fill time like [`Self::exit_plan`] and kept on the trade.
+    fn entry_tag(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// A persona's per-step record: a CSV header and one row per step.
@@ -254,6 +259,8 @@ pub struct Trade {
     /// Sell reasons in order, joined by `+` (`open_at_end` when still held).
     pub reason: String,
     pub open_at_end: bool,
+    /// [`Persona::entry_tag`] of the buy that opened it.
+    pub entry_tag: Option<&'static str>,
 }
 
 /// Result of one persona over the window.
@@ -297,6 +304,7 @@ struct Position {
     last_close: f64,
     reasons: Vec<&'static str>,
     watch: Option<ExitWatch>,
+    entry_tag: Option<&'static str>,
 }
 
 /// One persona's account, advanced step by step and minute by minute.
@@ -485,6 +493,7 @@ impl Account {
                 last_close: bar.open,
                 reasons: Vec::new(),
                 watch,
+                entry_tag: self.persona.entry_tag(),
             },
         );
     }
@@ -602,6 +611,7 @@ impl Account {
             net_pnl_usdt: proceeds - p.cost,
             reason,
             open_at_end: open,
+            entry_tag: p.entry_tag,
         }
     }
 

@@ -7,6 +7,7 @@ Research only: `bb bot-spot-persona-backtest`, offline on `data/entry-study-cach
 - Window: 2026-08-19T10:43:00Z → 2026-10-18T10:43:00Z (60 days), a decision step every 20 minutes (4320 steps).
 - Each variant starts with 1000.00 USDT. Costs per side: fee 7.5 bps + slippage 5 bps (25 bps per round trip).
 - Liquid universe (20 coins): BTC, ETH, ZEC, SOL, NEAR, XRP, BNB, WLD, HYPE, DOGE, SUI, SAND, TRX, UNI, ENA, STRK, TAO, HBAR, TIA, LINK.
+- GCP2: `data/gcp2-cache`, per-second network coherence up to 2026-10-19T23:59:59Z; colour zones as published by GCP2 at 2026-10-20T08:23:14Z (Normal from 0, Elevated from 140, High from 166, Very High from 219, Extreme from 279).
 
 ## Results
 
@@ -18,6 +19,7 @@ Research only: `bb bot-spot-persona-backtest`, offline on `data/entry-study-cach
 | high_variance | 193.82 | 19.38 | 35.59 | 174 | 50.0 | 1.517 | 124.51 | 354 |
 | rotation | -159.82 | -15.98 | 55.95 | 436 | 42.7 | -0.163 | 547.39 | 787 |
 | ensemble | -832.86 | -83.29 | 86.20 | 623 | 34.8 | -9.860 | 544.38 | 0 |
+| schizo | -967.06 | -96.71 | 96.98 | 1347 | 36.8 | -15.653 | 541.42 | 0 |
 
 Net = ending equity − starting balance after every fee and slippage; positions still open at the end are marked at their last close. Win rate counts closed round trips with a positive net. Sharpe = mean / population std of step-equity returns × √(525600 / step minutes). Full numbers: the `.csv`; every trade: `_trades.csv`.
 
@@ -29,6 +31,7 @@ Net = ending equity − starting balance after every fee and slippage; positions
 - `high_variance`: liquid top 10; every step buys each coin not held that is up ≥ +0.5% over 1h, strongest first, up to 3 positions, sized clamp(|1h| / 2%, 0.25, 1.0) of equity capped by cash; exit `atr=6:1h,deadline=1440` only.
 - `rotation`: shadow-runs the four base personas; at the first step of each UTC day follows the one with the best trailing-72h shadow return (v13 on ties and before 72h exist).
 - `ensemble`: the four base personas vote on its own book; buys the coin with ≥ 2 buy votes (most votes, then 24h volume), all cash; sells on ≥ 2 sell votes or when `atr=3.5:1h,deadline=360` fires.
+- `schizo`: Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only while the GCP2 zone stays the same between steps (inverted: a zone change keeps it); in GCP2's two highest zones YOLO sells everything and goes all-in on the best 1h liquid coin until the zone drops below the third-highest; otherwise the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it (`atr=3.5:1h,deadline=360` for YOLO); no stop-loss.
 
 ## Per-variant details
 
@@ -96,6 +99,42 @@ Net = ending equity − starting balance after every fee and slippage; positions
 - buy intents: 557 with 2 votes, 67 with 3 votes
 - vote sells: 620
 
+### `schizo`
+
+- Ending equity 32.94 USDT; 1347 closed round trips (496 wins), 1 still open at the end.
+- Exit reasons: open_at_end 1, stretch 197, vote 1144, yolo 6.
+- Skipped orders: none.
+- mood steps: 1 initial, 3643 switched, 676 held, 0 without a GCP2 reading
+- active steps: contrarian 1100, detached 1095, high_variance 1018, v13 1107
+- YOLO steps: 52, YOLO buys: 29
+- zone Elevated -> Elevated: switched 29
+- zone Elevated -> High: held 33
+- zone Elevated -> Normal: held 153
+- zone Elevated -> Very High: held 9
+- zone Extreme -> Elevated: held 1
+- zone Extreme -> Normal: held 1
+- zone Extreme -> Very High: held 3
+- zone High -> Elevated: held 35
+- zone High -> Extreme: held 3
+- zone High -> High: switched 35
+- zone High -> Normal: held 114
+- zone High -> Very High: held 5
+- zone Normal -> Elevated: held 154
+- zone Normal -> High: held 114
+- zone Normal -> Normal: switched 3576
+- zone Normal -> Very High: held 17
+- zone Very High -> Elevated: held 5
+- zone Very High -> Extreme: held 2
+- zone Very High -> High: held 10
+- zone Very High -> Normal: held 17
+- zone Very High -> Very High: switched 3
+- Per-step trace: `schizoid_backtest_2026-10-18_schizo_trace.csv` (4320 rows, one per step: `time,gcp2_value,from_zone,to_zone,dice,result,mood_before,mood_after,yolo`).
+
+## GCP2
+
+- Zone minutes over the window (each minute's reading is the hour ending at the second before it): Normal 77515 (89.7%), Elevated 4325 (5.0%), High 3779 (4.4%), Very High 679 (0.8%), Extreme 102 (0.1%); unavailable 0 (0.0%).
+- `schizo` YOLO entries: 29, net -26.66 USDT (8 wins, 0 still open at the end); its mood switches by zone change (from → to) are in its per-variant details and per-step trace.
+
 ## Assumptions
 
 - Decisions see only bars closed by the step time; intents fill at the open of the 1m bar that opens at the step, sells before buys.
@@ -106,6 +145,7 @@ Net = ending equity − starting balance after every fee and slippage; positions
 - The `stretch` exit counts break-even with fees only (as the live rule does), not slippage.
 - Exit plans read each 1m bar low before high (the pessimistic order `bb bot-spot-exit-replay` uses); ATR comes from the closed 1h bars before entry and stretch/slowdown get 60 minutes of 1m warm-up.
 - `rotation` scores its shadows at the first scheduled step of each new UTC day (00:03 in the default window, keeping the step cadence). A switch step only sells the old book; the new persona trades from the next step on a flat book.
+- GCP2 at a step is `|Σ network_coherence|` over the hour ending at the last second before the step's minute (the live `getNetVarAggregate24H` value); an hour with under 90% of its seconds is unavailable, and zones are GCP2's own published bounds.
 
 ## Caveats
 
@@ -114,3 +154,4 @@ Net = ending equity − starting balance after every fee and slippage; positions
 - Costs: 25 bps per round trip, against the measured 14.8 bps of the 40 live trips (deliberately pessimistic).
 - The window ends before the Phase 47 (v13) deploy at 2026-10-18T14:02:04Z, so the `v13` row cannot be compared with live v13 trades on the same dates.
 - No out-of-sample split: the rules were fixed in `LOOP_SCHIZOID.md` before any real-cache run and not tuned on it, but they are tested on this one period only.
+- GCP2 (gcp2.net, a network of random-number generators) has no shown link to crypto prices; `schizo` reads it only because the operator chose it (`LOOP_SCHIZO_LIVE.md`).
