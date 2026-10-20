@@ -107,6 +107,7 @@ bb bot-spot --mark-failed-route-reviewed    # clear the failed-route halt after 
 bb bot-spot-exit-replay --table             # replay the Phase 45 sell-plan menu on real round trips
 bb bot-spot-exit-watch --daemon             # paper exit-plan watcher (no orders)
 bb bot-spot-exit-watch --summary            # closed plan trials vs the bot's own exits (live plan-sold positions apart)
+bb bot-spot-persona-backtest --end 2026-10-18T10:43:00Z   # Phase 48 rule personas, offline backtest (no orders)
 ```
 
 `bb bot-spot-exit-replay` (Phase 45, research only, public klines, no
@@ -139,6 +140,15 @@ into USDT when its plan fires, with the same hard safety as the bot's routes
 runs the plans on paper and only records would-be sells. Either way the cycle
 prompt shows the bot each plan. Files: `BOT_SPOT_EXIT_PLANS_PATH`,
 `BOT_SPOT_EXIT_WATCH_STATE_PATH`, `BOT_SPOT_EXIT_WATCH_LOG_PATH`.
+
+`bb bot-spot-persona-backtest` (Phase 48) is research only and runs offline: it
+reads only the cached 1m candles in `--cache-dir` (default
+`data/entry-study-cache`), makes no network call, has no order path and never
+touches the live trader. It runs deterministic rule personas over `--days`
+(60) before `--end`: the `v13` rule proxy, `contrarian`, `detached`,
+`high_variance`, `rotation` and `ensemble`. It writes
+`reports/schizoid_backtest_<end-date>.md`, `.csv` and `_trades.csv`. See
+OPERATIONS.md, "Persona backtest".
 
 Cost control (not a trading gate): `BOT_SPOT_MAX_DAILY_LLM_COST_USD` (0 = unlimited).
 Choose the model and thinking level with `BOT_SPOT_MODEL` (default

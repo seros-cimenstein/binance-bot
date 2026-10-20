@@ -601,6 +601,57 @@ bb entry-study --audit docker-data/bot-spot-decisions.jsonl \
   --output data/entry-study.json --markdown docs/research/entry-study.md
 ```
 
+#### Persona backtest
+
+`bb bot-spot-persona-backtest` (Phase 48) backtests deterministic rule
+personas on the same 1m cache. It is offline and research only: it reads only
+`--cache-dir`, never fetches or calls Binance, has no order path, and leaves
+the live `bot-spot` untouched. If the cache is missing a liquid coin, ends
+before `--end`, or lacks 48h of history before the window start, it exits 1
+with `missing cache`.
+
+```bash
+cargo run --release -p bb-cli --bin bb -- bot-spot-persona-backtest \
+  --cache-dir data/entry-study-cache --end 2026-10-18T10:43:00Z --days 60 --persona all
+```
+
+The other flags are `--starting-balance` (1000), `--fee-bps` (7.5),
+`--slippage-bps` (5), `--step-minutes` (20) and `--output-dir` (`reports`).
+`--persona` repeats and defaults to `all`.
+
+Personas:
+
+- `v13` is a rule proxy of the live v13/v14 guidance, not the LLM. It trades
+  the liquid top 10 and buys when flat, breadth is at least +15 and the 4h
+  market median is at least +1%. Exits use `atr=3.5:1h,deadline=360`, or a
+  sell when breadth falls to −15 or below.
+- `contrarian` buys the worst 4h coin when breadth is −15 or below. It sells
+  on `stretch=2:1,deadline=360`, a +1.5% 1h bounce, or breadth of +15 or more.
+- `detached` trades all cached coins on 1h/15m price only, with no breadth,
+  volume filter or exit plan. It buys the best 1h coin above +0.25% while its
+  15m is rising, sells when 15m and 1h are both negative, and rotates when
+  another coin leads by more than 0.5 points.
+- `high_variance` holds up to 3 positions, buying any coin with a 1h move of
+  at least +0.5%. Each position is sized `clamp(|1h| / 2%, 0.25, 1.0)` of
+  equity and exits only on `atr=6:1h,deadline=1440`.
+- `rotation` shadow-runs the four base personas and, at the first step of
+  each UTC day, follows the best trailing-72h shadow (`v13` on ties or with
+  less than 72h of history). A switch step only sells.
+- `ensemble` buys the coin with at least 2 of 4 base-persona buy votes. It
+  sells on 2 sell votes or the `v13` exit plan.
+
+Cost model: fills happen at the next 1m open, with the fee plus slippage
+charged on each side (25 bps per round trip by default, against the measured
+live 14.8 bps). Buys under 5 USDT are skipped. Equity is marked at the last
+close with no exit costs.
+
+Output: `reports/schizoid_backtest_<end-date>.md` (settings, results,
+per-variant exit and skip reasons, assumptions, caveats), `.csv` (one row per
+variant) and `_trades.csv` (one row per trade). The files are byte-identical
+across reruns. The cache comes from `bb entry-study` (`data/` is gitignored).
+The liquid universe is the 2026-10-18 top 20, so results carry survivorship
+bias.
+
 ## Capital Pool, Bot Allocator, Auto-Convert
 
 `bb capital-pool` shows the capital plan and persisted state
