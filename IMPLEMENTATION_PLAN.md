@@ -1304,7 +1304,7 @@ Step 3, live:
 - [x] Add per-cycle schizo state with persisted mood, GCP2 dice, votes and the
   audit field (C2).
 - [x] Add prompt `bot-spot-v15-schizo` (C3).
-- [ ] Deploy to the Pi and verify the first schizo cycles (C4).
+- [x] Deploy to the Pi and verify the first schizo cycles (C4).
 
 Step 4, docs and handoff:
 
