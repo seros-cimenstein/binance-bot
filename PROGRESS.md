@@ -5,6 +5,17 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-21 (11:17 UTC): operator: "sell that ena for me please good profit
+  is achieved here". Sold through the existing guarded exit-plan path, with
+  no LLM turn: `docker compose run -d --name bot-spot-sell bot-spot bb
+  bot-spot --submit-live --daemon --interval-seconds 86400` (first cycle due
+  in 68,065 s). The ENA plan `atr=3.5:1h,deadline=360` had passed its
+  deadline (entry 04:42:32 + 360 min = 10:42:32), so the watcher sold at
+  start: audit row `cycle_id` `exit-plan`, 11:16:40, sell 69.17 ENA at avg
+  0.2076 = 14.359692 USDT (buy at 04:42: 0.2002, 13.847834 USDT). Net about
+  +0.49 USDT (+3.5%) after 0.0000284 BNB in fees. Then `docker stop` and
+  `docker rm bot-spot-sell`; `bot-spot` stays stopped (Exited 0). No stop
+  file exists.
 - 2026-10-21 (06:20 UTC): operator: "stop the bot". `docker compose stop
   bot-spot` on the Pi at 06:20:49, right after the 06:10:58 `cycle_summary`
   (hold, no route in flight); the container exited 0 and stays stopped
