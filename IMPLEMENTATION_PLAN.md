@@ -1345,7 +1345,7 @@ model.
 - [x] Remove YOLO from the backtest persona, the live schizo state, the
   prompts, the report and the trade list (`entry_tag` went with it).
 - [x] Backtest persona `schizo_mdp`, out of sample (`reports/mdp/`).
-- [ ] Deploy to the Pi with the model file and verify the first v17 cycles.
+- [x] Deploy to the Pi with the model file and verify the first v17 cycles.
 
 ## Post-Implementation Handoff
 

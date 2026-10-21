@@ -5,6 +5,49 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-21 (19:10 UTC): Phase 50, long-term value voice and YOLO removal
+  (operator: a "reward function alike system that has gamma … markov's
+  stuff", "backtest as well", "remove yolo"; ask tool: γ = 0.95 per 20-minute
+  cycle, strong voice in the prompt, live directly). Commit `fcfe40f`.
+  - Why: on the 51 real USDT trades since 2026-10-15 the bot sold good picks
+    early: median hold 45 min, 28 coins rose +2% or more within 24 h of the
+    buy, 18 of those were sold within an hour.
+  - `crate::mdp` + `bb bot-spot-mdp-fit`: a Markov decision process on
+    20-minute steps fitted on `data/entry-study-cache` (every liquid coin at
+    every step followed 24 h, 8.9 M transitions); state = gain since entry,
+    time held, 1h move, breadth; hold pays the next return, sell pays minus
+    the 0.125% exit cost; value iteration with γ. Live: the trader reads
+    `docker-data/bot-spot-mdp.json` (fitted 2026-07-20 → 2026-10-18) every
+    cycle; `## Your long-term value` in the cycle message, audit field `mdp`,
+    system prompt "strongest voice, written reason to go against it", never a
+    gate. Prompt `bot-spot-v17-schizo`; `BOT_SPOT_MDP_ENABLED`,
+    `BOT_SPOT_MDP_MODEL_PATH`.
+  - What the model says: with γ < 1 almost every held state is worth holding
+    (selling pays the fee now); its effect is patience, not exit timing. Its
+    own held-out test (fit to 2026-09-28, test the last 20 days, all coins,
+    not the bot's picks): policy −0.42% per entry vs hold-24h −0.36%; on the
+    earlier split (fit to 2026-08-29) +0.32% vs +0.35%. No edge on entries.
+  - Backtest out of sample (model fit to 2026-09-18, 30 days to 2026-10-18,
+    `reports/mdp/`): `schizo_mdp` −31.61% (75 trips, win 58.7%, fees 106)
+    against `schizo` −82.41% (614 trips, fees 406), `v13` −32.23%,
+    `high_variance` −26.82%. The model vetoed 1,515 vote sells. Churn and fees
+    fall sharply; the window lost money for every variant.
+  - YOLO removed everywhere (persona, live state, prompts, report, trade list
+    `entry_tag`). The 60-day report was rerun: `schizo` −93.53% (was −94.03%
+    with YOLO). Old state files with `yolo` fields still load.
+  - A local LLM (operator: "i am more intuned with an local llm") was not
+    pursued: the laptop has an MX150 with 2 GB and the Pi 500 has no GPU.
+  - Checks: `cargo test --workspace` 1087 passed, 0 failed; clippy
+    `-D warnings`, `scripts/smoke.sh`, `scripts/pool_replay.sh`,
+    `git diff --check` exit 0; isolated `--evidence-only` on the Pi with the
+    new image: `mdp` `ready`, prompt `bot-spot-v17-schizo`.
+  - Deploy: rollback tag `binance-bot:pre-v17-20261021` (v16), env backup
+    `.env.docker.bak-20261021T190758Z-v17`; `bot-spot` started 19:07:59 UTC
+    (it had been stopped since 06:20). First v17 cycle 19:09:23: flat in
+    cash (17.86 USDT), mood `v13` held, GCP2 Normal, `mdp` ready (best buys
+    ETH/NEAR/WLD +0.073%), action hold. No WARN in the container log.
+  - Next: watch whether holds get longer and vote-driven sells drop; refit the
+    model when the candle cache is extended.
 - 2026-10-21 (11:17 UTC): operator: "sell that ena for me please good profit
   is achieved here". Sold through the existing guarded exit-plan path, with
   no LLM turn: `docker compose run -d --name bot-spot-sell bot-spot bb
