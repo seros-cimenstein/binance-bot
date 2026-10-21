@@ -24,11 +24,14 @@ use crate::scope::ScopeConfig;
 /// "plan vs your own exits" (in live mode only trigger price vs fill). v15 (2026-10-20,
 /// Phase 49, operator decision): the schizo trader. With `BOT_SPOT_GCP2_ENABLED` (on by
 /// default) the system prompt makes the bot act out a GCP2-driven mood among the four
-/// personas, hear their votes, bet one coin with all cash and obey YOLO, and the cycle
+/// personas, hear their votes, bet one coin with all cash and obey YOLO (removed in v17), and the cycle
 /// message opens with `## Your schizo state`. With GCP2 off both prompts are the v14 text.
 /// v16 (2026-10-20, operator decision): the mood follows GCP2 instead of running inverted
-/// (it switches when the GCP2 zone changes and holds while it stays the same).
-pub const PROMPT_VERSION: &str = "bot-spot-v16-schizo";
+/// (it switches when the GCP2 zone changes and holds while it stays the same). v17
+/// (2026-10-21, Phase 50, operator decision): with `BOT_SPOT_MDP_ENABLED` (on by default) the
+/// system prompt adds the long-term value voice and the cycle message its
+/// `## Your long-term value` section (`crate::mdp`, γ=0.95 per cycle); YOLO is removed.
+pub const PROMPT_VERSION: &str = "bot-spot-v17-schizo";
 /// The only accepted value of `BOT_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 
@@ -227,6 +230,10 @@ pub struct TraderConfig {
     /// Phase 49: read GCP2 live once per cycle and run the schizo state and voice (v15).
     pub gcp2_enabled: bool,
     pub gcp2_base_url: String,
+    /// Phase 50: show the long-term value voice (`crate::mdp`) every cycle (v17).
+    pub mdp_enabled: bool,
+    /// `bb bot-spot-mdp-fit` model file the voice reads every cycle.
+    pub mdp_model_path: PathBuf,
     // operator scope
     pub scope: ScopeConfig,
 }
@@ -374,6 +381,8 @@ impl TraderConfig {
             trade_memory_limit: env.integer("BOT_SPOT_TRADE_MEMORY_LIMIT", 8)?,
             gcp2_enabled: env.boolean("BOT_SPOT_GCP2_ENABLED", true)?,
             gcp2_base_url: env.string("BOT_SPOT_GCP2_BASE_URL", crate::gcp2::DEFAULT_BASE_URL),
+            mdp_enabled: env.boolean("BOT_SPOT_MDP_ENABLED", true)?,
+            mdp_model_path: env.path("BOT_SPOT_MDP_MODEL_PATH", crate::mdp::DEFAULT_MODEL_PATH),
             scope,
         };
         config.validate()?;
@@ -549,6 +558,10 @@ impl TraderConfig {
             "gcp2": {
                 "enabled": self.gcp2_enabled,
                 "base_url": self.gcp2_base_url,
+            },
+            "mdp": {
+                "enabled": self.mdp_enabled,
+                "model_path": self.mdp_model_path,
             },
             "scope": self.scope,
         })

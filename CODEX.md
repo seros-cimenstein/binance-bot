@@ -168,10 +168,9 @@ driven project.
   at gcp2 data for reference …", and "Backtest, then trade live as schizo", with
   GCP2 as "Mood ring" and "YOLO button".
   - The LLM trader stays the trader. It becomes schizo through its prompt and
-    a per-cycle state: an active mood (one of the Phase 48 personas), dice,
-    the personas' votes, and a YOLO directive. Its behaviour is not replaced by
-    rules, and it still acts only through the host tools; `execute_route`
-    stays the only order path.
+    a per-cycle state: an active mood (one of the Phase 48 personas), dice and
+    the personas' votes. Its behaviour is not replaced by rules, and it still
+    acts only through the host tools; `execute_route` stays the only order path.
   - GCP2 (gcp2.net, Global Consciousness Project 2.0) public data is read-only
     information. It may be read without login (public colour zones,
     per-minute aggregate, monthly history) and must never be posted to or
@@ -184,11 +183,13 @@ driven project.
     normal aight inverse of what it is rn"): the bot switches mood when the
     GCP2 zone changed between cycles (up or down) and keeps it while the zone
     stays the same. The first deploy ran it inverted ("mood is inverted not
-    yolo": switch on the same zone, keep on a change). YOLO was never
-    inverted: while the zone is Very High or Extreme the bot is told to sell
-    other holdings and go all-in on the hottest liquid coin, until the zone
-    drops below High. A failed GCP2 read means no mood switch and no YOLO for
-    that cycle.
+    yolo": switch on the same zone, keep on a change). A failed GCP2 read means
+    no mood switch for that cycle.
+  - YOLO is removed (operator decision 2026-10-21: "remove yolo as well if it
+    still persists it is a stupid decision making way"). Until then, while
+    GCP2 was Very High or Extreme, the bot was told to sell other holdings and
+    go all-in on the hottest liquid coin. Bringing it back needs a new operator
+    decision.
   - There is no panic sell ("no panic sell"). The 2026-10-14 no-stop-loss rule
     above stays in force, and exit plans keep the existing menu and default.
   - Go-live is not gated on the backtest ("go live no tiny shit whatever we
@@ -203,6 +204,30 @@ driven project.
     exit-plan, hard-safety and tool text is the v14 text. Tag
     `bot-spot-v16-schizo` changes only the mood ring: the mood follows GCP2.
     `BOT_SPOT_GCP2_ENABLED=false` gives the v14 prompts.
+- Phase 50 long-term value voice (operator decisions 2026-10-21): "we need to
+  create a reward function alike system that has gamma value around 0.6 or
+  something that would make him more wanting to achieve longer term rewards
+  that influences directly the ai's decisions", "we will use markov's stuff
+  closer to it", "backtest as well". Chosen through the ask tool: γ = 0.95 per
+  20-minute cycle (the operator's 0.6 per cycle would have a 50-minute
+  horizon, shorter than the trader's holds), a strong voice in the prompt, and
+  live directly.
+  - `bb bot-spot-mdp-fit` fits a Markov decision process on cached 1m candles
+    (`crate::mdp`): states of a held coin (gain since entry, time held, 1h
+    move, market breadth), hold or sell, rewards in percent after costs, value
+    iteration with γ. The trader reads the model file
+    (`BOT_SPOT_MDP_MODEL_PATH`) every cycle and shows Q(hold) against Q(sell)
+    for the held coin and the value of buying each liquid coin
+    (`## Your long-term value`, audit field `mdp`).
+  - The voice is information and guidance for the LLM, never a gate: the
+    system prompt calls it the strongest voice and asks for a written reason
+    to act against it, and the bot still decides. A missing or unreadable
+    model means "voice unavailable" for that cycle.
+  - Tag `bot-spot-v17-schizo` (`BOT_SPOT_MDP_ENABLED=true`, the default) is
+    v16 plus this voice and minus YOLO. The no-stop-loss rule, exit plans and
+    hard safety are unchanged.
+  - The backtest persona `schizo_mdp` (offline only) lets the model overrule
+    the votes; its model must be fitted on data that ends before the window.
 - Bot Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

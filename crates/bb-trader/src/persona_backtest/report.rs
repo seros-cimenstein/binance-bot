@@ -7,6 +7,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 
@@ -14,10 +15,11 @@ use super::data::{MINUTE_MS, Market};
 use super::engine::{Config, LIQUID, Persona, RunResult, run};
 use super::personas::{
     CONTRARIAN_EXIT_PLAN, Contrarian, Detached, Ensemble, HIGH_VARIANCE_EXIT_PLAN, HighVariance,
-    Rotation, Schizo, V13, V13_EXIT_PLAN,
+    Rotation, Schizo, SchizoMdp, V13, V13_EXIT_PLAN,
 };
 use crate::error::{Result, TraderError};
 use crate::gcp2::Gcp2Feed;
+use crate::mdp::Model;
 
 /// The Phase 48 variants `all` expands to, in report order.
 pub const ALL_PERSONAS: [&str; 6] = [
@@ -28,8 +30,9 @@ pub const ALL_PERSONAS: [&str; 6] = [
     "rotation",
     "ensemble",
 ];
-/// Every persona `--persona` accepts by name (`schizo`, Phase 49, is not part of `all`).
-pub const KNOWN_PERSONAS: [&str; 7] = [
+/// Every persona `--persona` accepts by name (`schizo`, Phase 49, and `schizo_mdp`, Phase 50,
+/// are not part of `all`).
+pub const KNOWN_PERSONAS: [&str; 8] = [
     "v13",
     "contrarian",
     "detached",
@@ -37,6 +40,7 @@ pub const KNOWN_PERSONAS: [&str; 7] = [
     "rotation",
     "ensemble",
     "schizo",
+    "schizo_mdp",
 ];
 const DAY_MS: i64 = 86_400_000;
 /// History needed before the window start: 24h breadth lookback plus the 22 closed 1h bars
@@ -84,6 +88,10 @@ pub struct PersonaBacktestArgs {
     /// runs without GCP2.
     #[arg(long, default_value = "data/gcp2-cache")]
     pub gcp2_cache_dir: PathBuf,
+    /// `bb bot-spot-mdp-fit` model for `schizo_mdp`; it must be fitted on data that ends
+    /// before the window starts.
+    #[arg(long)]
+    pub mdp_model: Option<PathBuf>,
 }
 
 /// Expand `all`, drop repeats (first mention wins) and reject unknown names.
@@ -113,7 +121,7 @@ pub fn resolve_personas(names: &[String]) -> Result<Vec<&'static str>> {
     Ok(out)
 }
 
-fn build_persona(name: &str, cfg: Config) -> Result<Box<dyn Persona>> {
+fn build_persona(name: &str, cfg: Config, mdp: Option<&Arc<Model>>) -> Result<Box<dyn Persona>> {
     Ok(match name {
         "v13" => Box::new(V13::new()?),
         "contrarian" => Box::new(Contrarian::new()?),
@@ -122,6 +130,9 @@ fn build_persona(name: &str, cfg: Config) -> Result<Box<dyn Persona>> {
         "rotation" => Box::new(Rotation::new(cfg)?),
         "ensemble" => Box::new(Ensemble::new()?),
         "schizo" => Box::new(Schizo::new()?),
+        "schizo_mdp" => Box::new(SchizoMdp::new(Arc::clone(mdp.ok_or_else(|| {
+            TraderError::config("schizo_mdp needs --mdp-model")
+        })?))?),
         other => return Err(TraderError::config(format!("unknown persona {other:?}"))),
     })
 }
@@ -235,10 +246,15 @@ pub fn gcp2_zone_minutes(
 }
 
 /// Run the selected personas; one result per persona, in the order given.
-pub fn run_personas(market: &Market, cfg: &Config, names: &[&str]) -> Result<Vec<RunResult>> {
+pub fn run_personas(
+    market: &Market,
+    cfg: &Config,
+    names: &[&str],
+    mdp: Option<&Arc<Model>>,
+) -> Result<Vec<RunResult>> {
     names
         .iter()
-        .map(|name| run(market, cfg, build_persona(name, *cfg)?))
+        .map(|name| run(market, cfg, build_persona(name, *cfg, mdp)?))
         .collect()
 }
 
@@ -258,9 +274,8 @@ fn rules(name: &str) -> String {
         "ensemble" => format!(
             "the four base personas vote on its own book; buys the coin with ≥ 2 buy votes (most votes, then 24h volume), all cash; sells on ≥ 2 sell votes or when `{V13_EXIT_PLAN}` fires"
         ),
-        "schizo" => format!(
-            "Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only when the GCP2 zone changes between steps (the mood follows GCP2: an unchanged zone keeps it); in GCP2's two highest zones YOLO sells everything and goes all-in on the best 1h liquid coin until the zone drops below the third-highest; otherwise the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it (`{V13_EXIT_PLAN}` for YOLO); no stop-loss"
-        ),
+        "schizo" => "Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only when the GCP2 zone changes between steps (the mood follows GCP2: an unchanged zone keeps it); the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it; no stop-loss".to_string(),
+        "schizo_mdp" => format!("Phase 50: `schizo` with the long-term value voice (`bb bot-spot-mdp-fit`, a Markov model of 20-minute steps, fitted before the window) as the strongest voice: a vote sell goes through only when the model values selling above holding, the model sells on its own when it does, and a buy goes through only when its long-term value after the entry cost is above 0 (cash); a buy whose mood has no exit plan (`detached`) runs the live default plan `{V13_EXIT_PLAN}`"),
         other => other.to_string(),
     }
 }
@@ -290,13 +305,13 @@ pub fn summary_csv(results: &[RunResult]) -> String {
 /// The trade CSV: one row per round trip or still-open position, per variant.
 pub fn trades_csv(results: &[RunResult]) -> String {
     let mut out = String::from(
-        "variant,asset,entry_time,exit_time,entry_price,exit_price,qty,cost_usdt,proceeds_usdt,fees_usdt,net_pnl_usdt,reason,open_at_end,entry_tag\n",
+        "variant,asset,entry_time,exit_time,entry_price,exit_price,qty,cost_usdt,proceeds_usdt,fees_usdt,net_pnl_usdt,reason,open_at_end\n",
     );
     for r in results {
         for t in &r.trades {
             let _ = writeln!(
                 out,
-                "{},{},{},{},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{},{},{}",
+                "{},{},{},{},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{},{}",
                 r.name,
                 t.asset,
                 iso(t.entry_ms),
@@ -310,7 +325,6 @@ pub fn trades_csv(results: &[RunResult]) -> String {
                 t.net_pnl_usdt,
                 t.reason,
                 t.open_at_end,
-                t.entry_tag.unwrap_or_default()
             );
         }
     }
@@ -460,31 +474,6 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
             unavailable,
             pct(*unavailable)
         );
-        for r in results {
-            let yolo: Vec<&super::engine::Trade> = r
-                .trades
-                .iter()
-                .filter(|t| t.entry_tag == Some("yolo"))
-                .collect();
-            if r.trace.is_none() && yolo.is_empty() {
-                continue;
-            }
-            let net: f64 = yolo.iter().map(|t| t.net_pnl_usdt).sum();
-            let wins = yolo
-                .iter()
-                .filter(|t| !t.open_at_end && t.net_pnl_usdt > 0.0)
-                .count();
-            let open = yolo.iter().filter(|t| t.open_at_end).count();
-            let _ = writeln!(
-                out,
-                "- `{}` YOLO entries: {}, net {:.2} USDT ({} wins, {} still open at the end); its mood switches by zone change (from → to) are in its per-variant details and per-step trace.",
-                r.name,
-                yolo.len(),
-                net,
-                wins,
-                open
-            );
-        }
         let _ = writeln!(out);
     }
     let _ = writeln!(out, "## Assumptions\n");
@@ -575,11 +564,28 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
         min_notional: MIN_NOTIONAL_USDT,
     };
     cfg.validate()?;
+    let mdp = match &args.mdp_model {
+        Some(path) => {
+            let model = Model::load(path)?;
+            let fitted_to = DateTime::parse_from_rfc3339(&model.data_to)
+                .map_err(|e| TraderError::config(format!("MDP model data_to {:?}: {e}", model.data_to)))?
+                .timestamp_millis();
+            if fitted_to >= start_ms {
+                return Err(TraderError::config(format!(
+                    "the MDP model saw data up to {}, inside the window that starts {} (look-ahead); refit with --end before the window",
+                    model.data_to,
+                    iso(start_ms)
+                )));
+            }
+            Some(Arc::new(model))
+        }
+        None => None,
+    };
     let gcp2 = load_gcp2(&args.gcp2_cache_dir)?;
     let gcp2_line = gcp2_summary(gcp2.as_ref(), &args.gcp2_cache_dir);
     let market = Market::load_dir(&args.cache_dir)?.with_gcp2(gcp2);
     check_coverage(&market, start_ms, end_ms)?;
-    let results = run_personas(&market, &cfg, &names)?;
+    let results = run_personas(&market, &cfg, &names, mdp.as_ref())?;
     let zone_minutes = market
         .gcp2()
         .map(|feed| gcp2_zone_minutes(feed, start_ms, end_ms));
@@ -735,6 +741,7 @@ mod tests {
             step_minutes: 20,
             output_dir: out.to_path_buf(),
             gcp2_cache_dir: cache.join("no-gcp2"),
+            mdp_model: None,
         }
     }
 
@@ -979,7 +986,7 @@ mod tests {
             )),
             "{md}"
         );
-        // The GCP2 section: zone minutes cover the window, YOLO entries total from tagged trades.
+        // The GCP2 section: zone minutes cover the window.
         let (zones, unavailable) = gcp2_zone_minutes(&feed, T_END - DAY_MS, T_END);
         assert_eq!(
             zones.iter().map(|(_, n)| n).sum::<usize>() + unavailable,
@@ -988,31 +995,6 @@ mod tests {
         assert!(unavailable >= 59 + 90, "{unavailable}");
         assert!(md.contains("## GCP2"), "{md}");
         assert!(md.contains(&format!("unavailable {unavailable} (")), "{md}");
-        let yolo: Vec<_> = schizo
-            .trades
-            .iter()
-            .filter(|t| t.entry_tag == Some("yolo"))
-            .collect();
-        assert!(!yolo.is_empty());
-        let net: f64 = yolo.iter().map(|t| t.net_pnl_usdt).sum();
-        assert!(
-            md.contains(&format!(
-                "`schizo` YOLO entries: {}, net {net:.2} USDT",
-                yolo.len()
-            )),
-            "{md}"
-        );
-        assert!(
-            schizo
-                .trades
-                .iter()
-                .all(|t| matches!(t.entry_tag, Some("yolo" | "vote")))
-        );
-        let trades = std::fs::read_to_string(&paths[2]).unwrap();
-        assert_eq!(
-            trades.lines().filter(|l| l.ends_with(",yolo")).count(),
-            yolo.len()
-        );
         assert!(
             md.contains("GCP2 (gcp2.net, a network of random-number generators) has no shown link")
         );

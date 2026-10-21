@@ -9,13 +9,10 @@
 //!   reading is missing now or at the previous cycle, the mood is kept. The first reading
 //!   picks the mood with the dice. No timer, no seed.
 //! - **Dice:** the GCP2 dice of the latest minute ([`crate::gcp2::dice`]).
-//! - **YOLO** ([`yolo_next`]): on in GCP2's two highest zones, kept while the zone stays at
-//!   or above the third-highest. The target is the liquid-top coin with the highest 1h
-//!   return, or the YOLO coin already held.
 //! - **Votes** ([`Votes::cast`]): the four base personas decide on the live book; the
 //!   active mood's vote counts 2.
 //!
-//! The mood, the previous cycle's zone and the YOLO coin are persisted next to the agent
+//! The mood and the previous cycle's zone are persisted next to the agent
 //! state ([`STATE_FILE`]) after the cycle's audit row is written, so they survive restarts.
 
 use std::path::{Path, PathBuf};
@@ -28,7 +25,7 @@ use crate::error::Result;
 use crate::gcp2::Gcp2View;
 use crate::persona_backtest::engine::{Book, Holding, Snapshot};
 use crate::persona_backtest::personas::{
-    MoodStep, Votes, base_personas, next_mood, yolo_next, yolo_target,
+    MoodStep, Votes, base_personas, next_mood,
 };
 use crate::universe::Balances;
 
@@ -48,9 +45,6 @@ pub struct SchizoMemory {
     /// The cycle's GCP2 zone index (`None` when it had no reading).
     pub zone: Option<usize>,
     pub zone_label: Option<String>,
-    pub yolo: bool,
-    /// The YOLO coin while YOLO lasts.
-    pub yolo_asset: Option<String>,
     pub updated_at: String,
 }
 
@@ -97,9 +91,6 @@ pub struct SchizoState {
     pub vote_buy: Option<String>,
     /// Held coins with at least 2 weighted sell votes.
     pub vote_sell: Vec<String>,
-    pub yolo: bool,
-    /// The coin YOLO goes all-in on (`None` outside YOLO or without market breadth).
-    pub yolo_target: Option<String>,
     /// Saved after the cycle's audit row is written.
     #[serde(skip)]
     pub memory: SchizoMemory,
@@ -138,16 +129,6 @@ impl SchizoState {
             previous_mood.as_deref(),
         );
 
-        let yolo = yolo_next(memory.yolo, gcp2.map(|v| (v.zone, v.zone_count)));
-        let yolo_target = if yolo {
-            match &memory.yolo_asset {
-                Some(held) if book.holdings.contains_key(held) => Some(held.clone()),
-                _ => snap.and_then(yolo_target).cloned(),
-            }
-        } else {
-            None
-        };
-
         let votes = snap.map(|s| Votes::cast(&mut voters, next, s, book));
         let (vote_buy, vote_sell) = match (&votes, snap) {
             (Some(v), Some(s)) if book.is_flat() => (v.pick(s).cloned(), Vec::new()),
@@ -170,16 +151,12 @@ impl SchizoState {
             votes,
             vote_buy,
             vote_sell,
-            yolo,
             memory: SchizoMemory {
                 mood,
                 zone: gcp2.map(|v| v.zone),
                 zone_label: gcp2.map(|v| v.zone_label.clone()),
-                yolo,
-                yolo_asset: yolo_target.clone(),
                 updated_at: now,
             },
-            yolo_target,
         })
     }
 }
@@ -207,7 +184,7 @@ fn reason(
             "GCP2 stayed {zone} since the last cycle, so the mood holds: still {mood}"
         ),
         MoodStep::NoReading if gcp2.is_none() => {
-            format!("GCP2 unavailable this cycle: no mood switch, no YOLO; still {mood}")
+            format!("GCP2 unavailable this cycle: no mood switch; still {mood}")
         }
         MoodStep::NoReading => {
             format!("no GCP2 reading at the last cycle to compare with ({zone} now): still {mood}")
@@ -241,6 +218,7 @@ pub fn live_book(
                 let holding = Holding {
                     qty: float(*qty),
                     value: float(value),
+                    entry: None,
                 };
                 (asset.clone(), holding)
             })
@@ -341,6 +319,7 @@ mod tests {
                 Holding {
                     qty: 1.0,
                     value: 100.0,
+                    entry: None,
                 },
             )]
             .into(),
@@ -404,18 +383,13 @@ mod tests {
             memory = state.memory;
         }
 
-        // GCP2 unavailable: kept, no dice, no YOLO, and the next cycle has nothing to compare.
-        let mut yolo = remembered("high_variance", 230.0);
-        yolo.yolo = true;
-        let missing = step(&yolo, None, &flat());
+        // GCP2 unavailable: kept, no dice, and the next cycle has nothing to compare.
+        let missing = step(&remembered("high_variance", 230.0), None, &flat());
         assert_eq!(
             (missing.mood_step, missing.mood.as_deref()),
             ("no reading", Some("high_variance"))
         );
-        assert_eq!(
-            (missing.dice, missing.gcp2.as_ref(), missing.yolo),
-            (None, None, false)
-        );
+        assert_eq!((missing.dice, missing.gcp2.as_ref()), (None, None));
         assert!(missing.mood_reason.contains("GCP2 unavailable"));
         assert_eq!(missing.memory.zone, None);
         let after = step(&missing.memory, Some(&view(100.0, 100)), &flat());
@@ -423,32 +397,6 @@ mod tests {
             (after.mood_step, after.mood.as_deref()),
             ("no reading", Some("high_variance"))
         );
-    }
-
-    #[test]
-    fn yolo_starts_at_very_high_on_the_hottest_coin_and_ends_below_high() {
-        let calm = step(&SchizoMemory::default(), Some(&view(180.0, 100)), &flat());
-        assert!(!calm.yolo, "High alone does not start YOLO");
-        let hot = step(&calm.memory, Some(&view(230.0, 160)), &holding("BTC"));
-        assert!(hot.yolo);
-        assert_eq!(hot.yolo_target.as_deref(), Some("SOL"), "highest 1h return");
-        // Holding the YOLO coin keeps it as the target while the zone stays High or above,
-        // even when another coin is hotter now.
-        let mut hotter = snap();
-        hotter.coins.get_mut("ETH").unwrap().ret_1h = Some(5.0);
-        let held = SchizoState::next(
-            &hot.memory,
-            Some(&view(200.0, 220)),
-            Some(&hotter),
-            &holding("SOL"),
-            "n".into(),
-        )
-        .unwrap();
-        assert!(held.yolo);
-        assert_eq!(held.yolo_target.as_deref(), Some("SOL"));
-        let over = step(&held.memory, Some(&view(150.0, 280)), &holding("SOL"));
-        assert!(!over.yolo);
-        assert_eq!((over.yolo_target, over.memory.yolo_asset), (None, None));
     }
 
     #[test]
@@ -519,10 +467,17 @@ mod tests {
         assert_eq!(after_restart.previous_mood, first.mood);
         std::fs::write(&path, "{oops").unwrap();
         assert!(SchizoMemory::load(&path).is_err());
+        // A file written before YOLO was removed (2026-10-21) still loads.
+        std::fs::write(
+            &path,
+            r#"{"mood":"high_variance","zone":0,"zone_label":"Normal","yolo":false,"yolo_asset":null,"updated_at":"t"}"#,
+        )
+        .unwrap();
+        assert_eq!(SchizoMemory::load(&path).unwrap().mood.as_deref(), Some("high_variance"));
     }
 
     #[test]
-    fn the_audit_object_carries_mood_reason_gcp2_dice_votes_and_yolo() {
+    fn the_audit_object_carries_mood_reason_gcp2_dice_and_votes() {
         let state = step(&remembered("v13", 170.0), Some(&view(230.5, 100)), &flat());
         let json = serde_json::to_value(&state).unwrap();
         assert_eq!(json["mood"], serde_json::json!(state.mood));
@@ -532,8 +487,6 @@ mod tests {
         assert_eq!(json["gcp2"]["zone"], "Very High");
         assert_eq!(json["gcp2"]["previous_zone"], "High");
         assert_eq!(json["dice"], serde_json::json!(view(230.5, 1).dice));
-        assert_eq!(json["yolo"], true);
-        assert_eq!(json["yolo_target"], "SOL");
         assert_eq!(json["votes"]["by_persona"].as_array().unwrap().len(), 4);
         assert!(json.get("memory").is_none());
     }

@@ -87,7 +87,7 @@ and prefer entries on pullbacks or early structure inside 4h/24h uptrends over c
 loser does not drift into a deep drawdown; while a 1h/4h uptrend and demand hold, let winners work instead of capping them with \
 short 60-90 minute deadlines or selling on a single 5m/15m dip.\n";
 
-/// Phase 49 (v15): the schizo trader's personalities, mood ring, voices, bets and YOLO.
+/// Phase 49 (v15): the schizo trader's personalities, mood ring, voices and bets.
 /// The personality rules are the backtest personas' (`persona_backtest::personas`).
 fn schizo_rules() -> String {
     use crate::market_mood::LEAN_SCORE;
@@ -114,8 +114,6 @@ shown link to prices; it is your mood, not a forecast.\n\
 - The four personalities' votes are the voices arguing in your head; the mood in charge counts double. Hear them out, then make the call.\n\
 - Bet big: one coin at a time with all your cash, no half positions. Give a new position its mood's exit plan with set_exit_plan; \
 every position without one runs the default plan, which clear does not remove (clear only removes a plan you set).\n\
-- YOLO: when the message says YOLO, obey it: sell your other holdings and go all-in on the coin it names, now, and keep holding it \
-while YOLO lasts.\n\
 - Name your mood in every journal thesis and in your end_cycle summary.\n"
     )
 }
@@ -123,6 +121,7 @@ while YOLO lasts.\n\
 /// The trader's standing instructions.
 pub fn system_prompt(config: &TraderConfig) -> String {
     let exit_rule = exit_plan_rule(config);
+    let value_rule = if config.mdp_enabled { VALUE_RULE } else { "" };
     let style = if config.gcp2_enabled {
         schizo_rules()
     } else {
@@ -142,6 +141,7 @@ includes the sizing reserve). Weigh them against the move you expect; they are i
 evidence, trade memory and your record are information for your judgement. Nothing blocks a route on their behalf.\n\
 - Write down every thesis (why, expected move, horizon) with journal_write, and review open theses at the \
 start of each cycle. Record lessons from closed trades.\n\
+{value_rule}\
 - No stop-loss or take-profit levels in your own trading: do not set yourself invalidation prices or profit \
 targets and sell when they are touched. Judge each holding on its thesis over its horizon; a small move \
 against or in favour of a position is not by itself a reason to exit.\n\
@@ -208,8 +208,90 @@ fn hold_bucket_line(window: &crate::trades::RecordWindow) -> String {
     )
 }
 
-/// `## Your schizo state` (Phase 49): the mood and why, GCP2 with its 24h range, the dice,
-/// the four voices and YOLO. Empty when the GCP2 reader is off.
+/// The system-prompt bullet for the Phase 50 long-term value voice.
+const VALUE_RULE: &str = "- Your long-term value voice (\"## Your long-term value\"): a Markov model of past prices that adds up the rewards \
+of the coming cycles, each cycle worth γ times the one before, so it sees hours past the next 20 minutes. It is the strongest voice in \
+your head. When it values holding above selling, a red 15 minutes or a small dip is not a reason to sell: selling against it needs a \
+reason it cannot see (news, a broken thesis), written in your journal. When it values selling above holding, write why you still hold. \
+A buy it values at or below 0 (staying in cash) needs a reason too. It is a model of past prices, not a forecast and not a rule: you \
+decide.\n";
+
+fn minutes_text(minutes: i64) -> String {
+    match (minutes / 60, minutes % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
+}
+
+/// `## Your long-term value` (Phase 50): the MDP voice on the held coin and on buying now.
+/// Empty when the voice is off.
+fn mdp_section(context: &DecisionContext) -> String {
+    use crate::mdp::MdpNow;
+    let Some(mdp) = &context.mdp else {
+        return String::new();
+    };
+    let voice = match mdp {
+        MdpNow::Ready(voice) => voice,
+        MdpNow::Unavailable { reason } => {
+            return format!(
+                "\n## Your long-term value\n- the voice is unavailable this cycle ({reason}): judge the holding time on your own\n"
+            );
+        }
+    };
+    let mut out = format!(
+        "\n## Your long-term value (Markov voice, γ={} per cycle, about {:.0} cycles ≈ {} of horizon)\n",
+        voice.gamma,
+        voice.horizon_cycles,
+        minutes_text((voice.horizon_cycles * crate::mdp::STEP_MINUTES as f64).round() as i64)
+    );
+    let _ = writeln!(
+        out,
+        "- fitted on {} → {}; values are percent of the position after costs; cash is worth 0",
+        voice.data_from, voice.data_to
+    );
+    match &voice.held {
+        Some(h) => {
+            let momentum = h.momentum_1h_pct.map_or("1h ?".into(), |m| format!("1h {m:+.2}%"));
+            let (better, worse) = if h.verdict == "hold" {
+                ("HOLD", h.q_hold_pct - h.q_sell_pct)
+            } else {
+                ("SELL", h.q_sell_pct - h.q_hold_pct)
+            };
+            let _ = writeln!(
+                out,
+                "- holding {}: gain {:+.2}%, held {}, {momentum} → state \"{}\" ({}, {} samples): hold {:+.3}%, sell now {:+.3}% → {better} is worth {worse:.3} points more",
+                h.asset,
+                h.gain_pct,
+                minutes_text(h.held_minutes),
+                h.state,
+                h.level,
+                h.samples,
+                h.q_hold_pct,
+                h.q_sell_pct,
+            );
+        }
+        None => out.push_str("- no open coin position to value\n"),
+    }
+    if voice.buys.is_empty() {
+        out.push_str("- buying now: no liquid coin to value (market breadth unavailable)\n");
+    } else {
+        let list: Vec<String> = voice
+            .buys
+            .iter()
+            .map(|b| format!("{} {:+.3}%", b.asset, b.value_pct))
+            .collect();
+        let _ = writeln!(
+            out,
+            "- buying now (long-term value after the entry cost; above 0 beats cash): {}",
+            list.join(", ")
+        );
+    }
+    out
+}
+
+/// `## Your schizo state` (Phase 49): the mood and why, GCP2 with its 24h range, the dice
+/// and the four voices. Empty when the GCP2 reader is off.
 fn schizo_section(context: &DecisionContext) -> String {
     use crate::gcp2::Gcp2Now;
     let Some(gcp2) = &context.gcp2 else {
@@ -247,7 +329,7 @@ fn schizo_section(context: &DecisionContext) -> String {
         Gcp2Now::Unavailable(error) => {
             let _ = writeln!(
                 out,
-                "- GCP2 unavailable this cycle ({error}): no mood switch and no YOLO"
+                "- GCP2 unavailable this cycle ({error}): no mood switch"
             );
         }
     }
@@ -282,32 +364,6 @@ fn schizo_section(context: &DecisionContext) -> String {
         }
         None => out.push_str("- the voices are silent: market breadth is unavailable this cycle\n"),
     }
-    if state.yolo {
-        let zone = state.gcp2.as_ref().map_or("?", |g| g.zone.as_str());
-        let until = gcp2
-            .live()
-            .and_then(|live| {
-                let n = live.zones.zones.len();
-                (n >= 3).then(|| live.zones.label(n - 3).to_string())
-            })
-            .map_or(String::new(), |z| format!(" until GCP2 drops below {z}"));
-        match &state.yolo_target {
-            Some(coin) => {
-                let _ = writeln!(
-                    out,
-                    "- YOLO (GCP2 {zone}): go all-in on {coin} now. Sell every other holding into it and hold it{until}."
-                );
-            }
-            None => {
-                let _ = writeln!(
-                    out,
-                    "- YOLO (GCP2 {zone}): go all-in now on the liquid coin with the highest 1h move (market breadth could not name it). Sell every other holding into it and hold it{until}."
-                );
-            }
-        }
-    } else {
-        out.push_str("- YOLO: off\n");
-    }
     out
 }
 
@@ -334,6 +390,7 @@ pub fn cycle_prompt(
         config.prompt_version
     );
     out.push_str(&schizo_section(context));
+    out.push_str(&mdp_section(context));
     let _ = writeln!(
         out,
         "\n## Wallet (free value ≈ {} USDT)",
@@ -2029,6 +2086,7 @@ mod tests {
             market_mood: None,
             gcp2: None,
             schizo: None,
+            mdp: None,
         };
         let last = LastCycle {
             cycle_id: "c0".into(),
@@ -2102,6 +2160,7 @@ mod tests {
             market_mood: None,
             gcp2: None,
             schizo: None,
+            mdp: None,
         };
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
         for i in 0..8 {
@@ -2199,6 +2258,7 @@ mod tests {
             market_mood: None,
             gcp2: Some(gcp2),
             schizo: Some(schizo),
+            mdp: None,
         }
     }
 
@@ -2212,9 +2272,9 @@ mod tests {
     }
 
     #[test]
-    fn the_v16_system_prompt_is_schizo_and_keeps_the_safety_and_tool_text() {
+    fn the_v17_system_prompt_is_schizo_and_keeps_the_safety_and_tool_text() {
         let on = config(&[]);
-        assert_eq!(on.prompt_version, "bot-spot-v16-schizo");
+        assert_eq!(on.prompt_version, "bot-spot-v17-schizo");
         assert!(on.gcp2_enabled);
         let off = config(&[("BOT_SPOT_GCP2_ENABLED", "false")]);
         let (schizo, plain) = (system_prompt(&on), system_prompt(&off));
@@ -2225,7 +2285,6 @@ mod tests {
             "votes are the voices arguing in your head",
             "while GCP2 stays in the same zone between cycles your mood holds",
             "one coin at a time with all your cash",
-            "YOLO: when the message says YOLO, obey it",
             "Name your mood",
             "atr=6:1h,deadline=1440",
         ] {
@@ -2237,6 +2296,51 @@ mod tests {
         let tail = |p: &str| p[p.find("- No stop-loss").unwrap()..].to_string();
         assert_eq!(tail(&schizo), tail(&plain));
         assert!(schizo.contains("order/test") && schizo.contains("end_cycle exactly once"));
+        // The long-term value voice follows its own switch, with or without GCP2.
+        let voice = "Your long-term value voice";
+        assert!(schizo.contains(voice) && plain.contains(voice));
+        assert!(!system_prompt(&config(&[("BOT_SPOT_MDP_ENABLED", "false")])).contains(voice));
+    }
+
+    #[test]
+    fn the_cycle_message_carries_the_long_term_value_verdict_or_its_absence() {
+        use crate::mdp::{HeldValue, MdpNow, MdpVoice};
+        let config = config(&[]);
+        let mut context = schizo_context(&config, Some(180.0), &remembered("v13", 2, "High"));
+        let voice = MdpVoice {
+            gamma: 0.95,
+            horizon_cycles: 20.0,
+            data_from: "2026-07-20T08:20:00Z".into(),
+            data_to: "2026-10-18T10:40:00Z".into(),
+            fitted_at: "now".into(),
+            breadth: Some(22.0),
+            held: Some(HeldValue {
+                asset: "ENA".into(),
+                gain_pct: 1.2,
+                held_minutes: 130,
+                momentum_1h_pct: Some(0.4),
+                state: "gain +1% to +2%, held 1-3 h, 1h 0% to +1%, breadth +15 or more".into(),
+                level: "full",
+                samples: 1234,
+                q_hold_pct: 0.312,
+                q_sell_pct: -0.125,
+                verdict: "hold",
+            }),
+            buys: vec![],
+        };
+        context.mdp = Some(MdpNow::Ready(Box::new(voice)));
+        let prompt = cycle_prompt(&config, CycleMode::Live, 6, "c6", &context, None, &[]);
+        assert!(prompt.contains("γ=0.95 per cycle, about 20 cycles ≈ 6 h 40 min of horizon"), "{prompt}");
+        assert!(prompt.contains("- holding ENA: gain +1.20%, held 2 h 10 min, 1h +0.40%"), "{prompt}");
+        assert!(prompt.contains("hold +0.312%, sell now -0.125% → HOLD is worth 0.437 points more"), "{prompt}");
+        context.mdp = Some(MdpNow::Unavailable {
+            reason: "MDP model data/bot-spot-mdp.json unreadable".into(),
+        });
+        let prompt = cycle_prompt(&config, CycleMode::Live, 7, "c7", &context, None, &[]);
+        assert!(prompt.contains("- the voice is unavailable this cycle (MDP model data/bot-spot-mdp.json unreadable)"), "{prompt}");
+        context.mdp = None;
+        let prompt = cycle_prompt(&config, CycleMode::Live, 8, "c8", &context, None, &[]);
+        assert!(!prompt.contains("## Your long-term value"));
     }
 
     #[test]
@@ -2256,7 +2360,7 @@ mod tests {
         assert!(section.contains(&format!("  - {mood} x2:")), "{section}");
         assert!(section.contains("  - v13 x1: buy SOL"), "{section}");
         assert!(section.contains("together they would buy SOL"), "{section}");
-        assert!(section.contains("- YOLO: off"), "{section}");
+        assert!(!section.contains("YOLO"), "{section}");
         // GCP2 off: no section at all.
         let mut off = context.clone();
         off.gcp2 = None;
@@ -2265,30 +2369,15 @@ mod tests {
     }
 
     #[test]
-    fn very_high_gcp2_orders_yolo_on_the_hottest_coin() {
-        let config = config(&[]);
-        let context = schizo_context(&config, Some(230.0), &remembered("detached", 3, "Very High"));
-        let prompt = cycle_prompt(&config, CycleMode::Live, 4, "c4", &context, None, &[]);
-        assert!(
-            prompt.contains("- YOLO (GCP2 Very High): go all-in on SOL now. Sell every other holding into it and hold it until GCP2 drops below High."),
-            "{prompt}"
-        );
-        assert!(prompt.contains("- mood in charge: detached (before: detached; held)"), "{prompt}");
-    }
-
-    #[test]
     fn a_failed_gcp2_read_says_gcp2_unavailable_and_keeps_the_mood() {
         let config = config(&[]);
-        let mut memory = remembered("high_variance", 3, "Very High");
-        memory.yolo = true;
-        let context = schizo_context(&config, None, &memory);
+        let context = schizo_context(&config, None, &remembered("high_variance", 3, "Very High"));
         let prompt = cycle_prompt(&config, CycleMode::Live, 5, "c5", &context, None, &[]);
         assert!(
-            prompt.contains("- GCP2 unavailable this cycle (GCP2 /api/getNetVarAggregate24H: timed out): no mood switch and no YOLO"),
+            prompt.contains("- GCP2 unavailable this cycle (GCP2 /api/getNetVarAggregate24H: timed out): no mood switch"),
             "{prompt}"
         );
         assert!(prompt.contains("- mood in charge: high_variance (before: high_variance; no reading)"), "{prompt}");
-        assert!(prompt.contains("- YOLO: off"), "{prompt}");
         assert!(!prompt.contains("dice roll"));
     }
 
@@ -2383,6 +2472,7 @@ mod tests {
             market_mood: Some(mood),
             gcp2: None,
             schizo: None,
+            mdp: None,
         };
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
         assert!(prompt.contains("- by hold time (all time): <30m: 11 trips, 2 wins (18%), net -0.594 USDT | 30-60m: 9 trips, 3 wins (33%), net 0.017 USDT | >=60m: 10 trips, 7 wins (70%), net 0.692 USDT"));

@@ -215,6 +215,9 @@ pub struct AuditRow {
     /// Cycle summaries (Phase 49): the cycle's schizo state ([`crate::schizo::SchizoState`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schizo: Option<Value>,
+    /// Cycle summaries (Phase 50): the long-term value voice ([`crate::mdp::MdpNow`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mdp: Option<Value>,
 }
 
 impl AuditRow {
@@ -249,6 +252,7 @@ impl AuditRow {
             operator_review: None,
             run_config: None,
             schizo: None,
+            mdp: None,
         }
     }
 }

@@ -1320,6 +1320,33 @@ inverse of what it is rn"):
 - [x] Rerun the 60-day backtest and commit the regenerated `schizo` row.
 - [x] Deploy to the Pi and verify the first v16 cycles.
 
+## 50. Long-Term Value Voice (Markov) and YOLO Removal (operator request 2026-10-21)
+
+Why: the operator lost money with the bot and saw it could not "catch the
+intuition"; the 51 real trades since 2026-10-15 showed good picks sold too
+early (median hold 45 min; 28 of 51 coins rose +2% or more after the buy).
+The operator asked for "a reward function alike system that has gamma … that
+would make him more wanting to achieve longer term rewards that influences
+directly the ai's decisions", "markov's stuff", "backtest as well", and to
+"remove yolo". Decisions (ask tool): γ = 0.95 per 20-minute cycle, a strong
+voice in the prompt, live directly. Binding rules: `CODEX.md`, "Phase 50".
+
+Non-goals: no gate on the LLM, no change to exit plans, no-stop-loss rule or
+hard safety. A local LLM was considered: neither the laptop (MX150, 2 GB) nor
+the Pi 500 (no GPU) can run or fine-tune one that could replace the hosted
+model.
+
+- [x] `crate::mdp`: states, transitions from cached 1m candles, value
+  iteration with γ, the model file, the live voice; `bb bot-spot-mdp-fit`
+  with a held-out evaluation.
+- [x] Live: `## Your long-term value` in the cycle message, the system-prompt
+  rule, audit field `mdp`, `BOT_SPOT_MDP_ENABLED` / `BOT_SPOT_MDP_MODEL_PATH`;
+  prompt `bot-spot-v17-schizo`.
+- [x] Remove YOLO from the backtest persona, the live schizo state, the
+  prompts, the report and the trade list (`entry_tag` went with it).
+- [x] Backtest persona `schizo_mdp`, out of sample (`reports/mdp/`).
+- [ ] Deploy to the Pi with the model file and verify the first v17 cycles.
+
 ## Post-Implementation Handoff
 
 Roadmap phases 1 through 11 are implemented and locally verified. Future

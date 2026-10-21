@@ -495,7 +495,7 @@ fn utc_second(end_s: i64) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Gcp2Now {
     Live(Box<Gcp2Live>),
-    /// Any failed read: the cycle runs with "GCP2 unavailable" (no mood switch, no YOLO).
+    /// Any failed read: the cycle runs with "GCP2 unavailable" (no mood switch).
     Unavailable(String),
 }
 

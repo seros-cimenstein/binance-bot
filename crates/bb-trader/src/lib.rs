@@ -22,10 +22,12 @@
 //!   (research only, no network, no order path).
 //! - [`gcp2`]: GCP2 (gcp2.net) public network coherence, read-only (Phase 49).
 //! - [`schizo`]: the live trader's per-cycle schizo state (GCP2 mood ring, dice, the
-//!   personas' votes, YOLO), persisted next to the agent state (Phase 49).
+//!   personas' votes), persisted next to the agent state (Phase 49).
+//! - [`mdp`]: the long-term value voice, a Markov decision process fitted on cached
+//!   candles (Phase 50).
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
-//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `bot-spot-persona-backtest`,
-//!   `gcp2-history`.
+//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `bot-spot-mdp-fit`,
+//!   `bot-spot-persona-backtest`, `gcp2-history`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
@@ -48,6 +50,7 @@ pub mod exit_watch;
 pub mod gcp2;
 pub mod journal;
 pub mod market_mood;
+pub mod mdp;
 pub mod memory;
 pub mod persona_backtest;
 pub mod schizo;

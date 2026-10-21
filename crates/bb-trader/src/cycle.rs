@@ -250,10 +250,19 @@ impl Runtime {
             None => None,
         };
         let portfolio_value_usdt = balances.free_value_usdt(&view);
+        // The personas' point-in-time view, shared by the schizo voices and the MDP voice.
+        let t = bb_core::time::now_ms();
+        let latest = gcp2.as_ref().and_then(|g| g.live()).map(|live| live.latest.clone());
+        let snap = breadth.as_ref().and_then(|mood| {
+            crate::persona_backtest::engine::Snapshot::from_breadth(t, mood, latest.clone())
+        });
         let schizo = match &gcp2 {
-            Some(now) => self.schizo_state(now, breadth.as_ref(), &balances, &view, portfolio_value_usdt),
+            Some(_) => self.schizo_state(t, latest.as_ref(), snap.as_ref(), &balances, &view, portfolio_value_usdt),
             None => None,
         };
+        let mdp = self.config.mdp_enabled.then(|| {
+            self.mdp_voice(trade_memory.current_holding.as_ref(), snap.as_ref())
+        });
         let market_mood = breadth.filter(|mood| mood.score.is_some());
         let context = DecisionContext {
             timestamp: crate::audit::utc_timestamp(),
@@ -269,6 +278,7 @@ impl Runtime {
             market_mood,
             gcp2,
             schizo,
+            mdp,
         };
         Ok(Snapshot {
             context,
@@ -281,8 +291,9 @@ impl Runtime {
     /// error log, when the persisted memory cannot be read.
     fn schizo_state(
         &self,
-        gcp2: &crate::gcp2::Gcp2Now,
-        breadth: Option<&crate::market_mood::MarketView>,
+        t: i64,
+        latest: Option<&crate::gcp2::Gcp2View>,
+        snap: Option<&crate::persona_backtest::engine::Snapshot>,
         balances: &Balances,
         view: &MarketView,
         equity: Decimal,
@@ -295,11 +306,6 @@ impl Runtime {
                 return None;
             }
         };
-        let t = bb_core::time::now_ms();
-        let latest = gcp2.live().map(|live| live.latest.clone());
-        let snap = breadth.and_then(|mood| {
-            crate::persona_backtest::engine::Snapshot::from_breadth(t, mood, latest.clone())
-        });
         let book = crate::schizo::live_book(
             t,
             balances,
@@ -309,8 +315,8 @@ impl Runtime {
         );
         match crate::schizo::SchizoState::next(
             &memory,
-            latest.as_ref(),
-            snap.as_ref(),
+            latest,
+            snap,
             &book,
             crate::audit::utc_timestamp(),
         ) {
@@ -318,6 +324,24 @@ impl Runtime {
             Err(error) => {
                 tracing::error!(%error, "schizo state failed; none this cycle");
                 None
+            }
+        }
+    }
+
+    /// The long-term value voice; `Unavailable`, with a warning, when the model file cannot
+    /// be read.
+    fn mdp_voice(
+        &self,
+        holding: Option<&crate::memory::CurrentHolding>,
+        snap: Option<&crate::persona_backtest::engine::Snapshot>,
+    ) -> crate::mdp::MdpNow {
+        match crate::mdp::Model::load(&self.config.mdp_model_path) {
+            Ok(model) => crate::mdp::MdpNow::Ready(Box::new(crate::mdp::voice(&model, holding, snap, chrono::Utc::now()))),
+            Err(error) => {
+                tracing::warn!(%error, "MDP voice unavailable this cycle");
+                crate::mdp::MdpNow::Unavailable {
+                    reason: error.to_string(),
+                }
             }
         }
     }
@@ -406,6 +430,10 @@ impl Runtime {
         row.run_config = self.run_config.get().cloned();
         row.schizo = match &state.context.schizo {
             Some(schizo) => Some(serde_json::to_value(schizo)?),
+            None => None,
+        };
+        row.mdp = match &state.context.mdp {
+            Some(mdp) => Some(serde_json::to_value(mdp)?),
             None => None,
         };
         let route_alerts = state.executions.len();
@@ -1222,6 +1250,7 @@ mod tests {
             market_mood: None,
             gcp2: None,
             schizo: None,
+            mdp: None,
         };
         runtime
             .begin_cycle(
@@ -1921,7 +1950,6 @@ mod tests {
         assert_eq!(schizo["gcp2"]["value"], 169.1705);
         assert_eq!(schizo["gcp2"]["zone"], "High");
         assert_eq!(schizo["dice"], json!(view.dice));
-        assert_eq!(schizo["yolo"], true, "High is one of the two highest of 2 zones");
         assert!(rows[1].get("schizo").is_none());
         let saved = crate::schizo::SchizoMemory::load(&dir.path().join(crate::schizo::STATE_FILE))
             .unwrap();

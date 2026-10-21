@@ -84,7 +84,7 @@ The bot trades the Spot wallet through omp (the oh-my-pi coding agent, npm
   ignored, with one warning listing them. There are no stop-loss or
   take-profit levels either: theses record why, expected move and horizon,
   and the prompt tells the bot not to set invalidation prices or exit triggers.
-- **Schizo trader (Phase 49, prompt `bot-spot-v16-schizo`, operator
+- **Schizo trader (Phase 49, prompt `bot-spot-v17-schizo`, operator
   decisions 2026-10-20).** The LLM stays the trader but is told it has four
   personalities (`v13`, `contrarian`, `detached`, `high_variance`, the Phase
   48 personas) and acts out the one in charge. Each cycle the trader reads
@@ -100,17 +100,28 @@ The bot trades the Spot wallet through omp (the oh-my-pi coding agent, npm
   - **Voices:** the four personalities' rule votes on the live wallet, the
     mood in charge counting double.
   - **Bets:** one coin with all cash. Each mood has its own exit plan.
-  - **YOLO:** in GCP2's two highest zones (Very High, Extreme) the bot is
-    ordered to go all-in on the liquid coin with the highest 1h move until
-    the zone drops below High.
 
-  A failed GCP2 read (timeout, HTTP error, HTTP 429 rate limit) means "GCP2
-  unavailable" for that cycle: the mood holds and there is no YOLO. The state
-  is recorded as `schizo` in each cycle audit row and persisted in
-  `bot-spot-schizo-state.json` next to `BOT_SPOT_STATE_PATH`.
+  YOLO (all-in on the hottest coin in GCP2's two highest zones) was removed
+  on 2026-10-21 by operator decision. A failed GCP2 read (timeout, HTTP
+  error, HTTP 429 rate limit) means "GCP2 unavailable" for that cycle: the
+  mood holds. The state is recorded as `schizo` in each cycle audit row and
+  persisted in `bot-spot-schizo-state.json` next to `BOT_SPOT_STATE_PATH`.
   `BOT_SPOT_GCP2_ENABLED` (default true) switches it; false gives the v14
   prompts. GCP2 has no shown link to prices. See OPERATIONS.md, "Schizo
   trader (Phase 49)".
+- **Long-term value voice (Phase 50, operator decision 2026-10-21).** A
+  Markov decision process fitted on cached 1m candles (`bb bot-spot-mdp-fit`,
+  model file `BOT_SPOT_MDP_MODEL_PATH`, default `data/bot-spot-mdp.json`)
+  values holding against selling the held coin, and buying each liquid coin
+  against staying in cash, as the discounted sum of 20-minute rewards after
+  costs (γ = 0.95 per cycle, about 20 cycles of horizon). States: gain since
+  entry, time held, the coin's 1h move, market breadth. The cycle message
+  shows it as `## Your long-term value` (audit field `mdp`); the system prompt
+  calls it the strongest voice and asks for a written reason to act against
+  it. Information, never a gate. `BOT_SPOT_MDP_ENABLED` (default true).
+  Offline, `bb bot-spot-persona-backtest --persona schizo_mdp --mdp-model
+  <file>` lets the model overrule the schizo votes; the model must be fitted
+  on data before the window (`bb bot-spot-mdp-fit --end <time>`).
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
   - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked at cycle start, before every route, before every leg and before every order;

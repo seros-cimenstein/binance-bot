@@ -183,6 +183,8 @@ pub struct DecisionContext {
     pub gcp2: Option<crate::gcp2::Gcp2Now>,
     /// Phase 49 schizo state (`None` unless the GCP2 reader is on).
     pub schizo: Option<crate::schizo::SchizoState>,
+    /// Phase 50 long-term value voice (`None` unless `BOT_SPOT_MDP_ENABLED`).
+    pub mdp: Option<crate::mdp::MdpNow>,
 }
 
 impl DecisionContext {
@@ -203,6 +205,7 @@ impl DecisionContext {
             "market_mood": self.market_mood,
             "gcp2": self.gcp2.as_ref().map(crate::gcp2::Gcp2Now::payload),
             "schizo": self.schizo,
+            "mdp": self.mdp,
         })
     }
 

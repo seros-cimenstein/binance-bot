@@ -24,6 +24,8 @@ pub enum Command {
     BotSpotExitReplay(crate::exit_replay::ExitReplayArgs),
     /// Paper exit-plan watcher: follows bids between cycles, records would-be sells (no orders).
     BotSpotExitWatch(crate::exit_watch::ExitWatchArgs),
+    /// Fit the Phase 50 long-term value (Markov) model on cached 1m candles (offline, no orders).
+    BotSpotMdpFit(crate::mdp::MdpFitArgs),
     /// Backtest the Phase 48 rule personas offline on cached 1m candles (no network, no orders).
     BotSpotPersonaBacktest(crate::persona_backtest::report::PersonaBacktestArgs),
     /// Download GCP2 network coherence history and colour zones (public data, read-only).
@@ -74,6 +76,13 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("Exit-plan watcher failed: {error}");
+                ExitCode::FAILURE
+            }
+        }),
+        Command::BotSpotMdpFit(args) => Ok(match crate::mdp::run_fit_cli(&args) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("MDP fit failed: {error}");
                 ExitCode::FAILURE
             }
         }),

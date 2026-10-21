@@ -4,8 +4,9 @@
 //! the Phase 45 menu (`ExitPlan::parse_spec`).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-use super::data::Market;
+use super::data::{MINUTE_MS, Market};
 use super::engine::{Account, Book, Config, Intent, Persona, Snapshot, Trace};
 use crate::error::{Result, TraderError};
 use crate::exit_plan::ExitPlan;
@@ -611,12 +612,11 @@ pub struct MoodRecord {
     pub result: MoodStep,
     pub mood_before: Option<String>,
     pub mood_after: Option<String>,
-    pub yolo: bool,
 }
 
 /// Header of [`MoodRecord::csv_row`].
 pub const MOOD_TRACE_HEADER: &str =
-    "time,gcp2_value,from_zone,to_zone,dice,result,mood_before,mood_after,yolo";
+    "time,gcp2_value,from_zone,to_zone,dice,result,mood_before,mood_after";
 
 impl MoodRecord {
     pub fn csv_row(&self) -> String {
@@ -630,14 +630,13 @@ impl MoodRecord {
             .unwrap_or_default();
         let text = |s: &Option<String>| s.clone().unwrap_or_default();
         format!(
-            "{time},{value},{},{},{},{},{},{},{}",
+            "{time},{value},{},{},{},{},{},{}",
             text(&self.from_zone),
             text(&self.to_zone),
             self.dice.map(|d| d.to_string()).unwrap_or_default(),
             self.result.as_str(),
             text(&self.mood_before),
             text(&self.mood_after),
-            self.yolo
         )
     }
 }
@@ -674,32 +673,6 @@ pub fn next_mood(
         Some(_) => (Some(current), MoodStep::Held),
         None => (Some(current), MoodStep::NoReading),
     }
-}
-
-/// Whether a GCP2 zone triggers YOLO: one of the two highest zones GCP2 publishes.
-pub fn yolo_enters(zone: usize, zone_count: usize) -> bool {
-    zone + 2 >= zone_count
-}
-
-/// Whether YOLO keeps going: the zone is still at or above the third-highest.
-pub fn yolo_stays(zone: usize, zone_count: usize) -> bool {
-    zone + 3 >= zone_count
-}
-
-/// YOLO after a step: `zone` is `(zone index, zone count)` of this step's GCP2 reading.
-/// Entering needs one of the two highest zones, staying the third-highest or above; without
-/// a reading there is no YOLO.
-pub fn yolo_next(was_yolo: bool, zone: Option<(usize, usize)>) -> bool {
-    match zone {
-        Some((z, n)) if was_yolo => yolo_stays(z, n),
-        Some((z, n)) => yolo_enters(z, n),
-        None => false,
-    }
-}
-
-/// The YOLO coin: the liquid-top coin with the highest 1h return (ties: liquid-top order).
-pub fn yolo_target(snap: &Snapshot) -> Option<&String> {
-    best_by(snap.liquid_top.iter(), |a| snap.coin(a)?.ret_1h)
 }
 
 /// One persona's votes at a step.
@@ -784,47 +757,29 @@ impl Votes {
 ///   `detached`, `high_variance`. The first reading picks it with the dice. Then, when the
 ///   GCP2 zone changed (up or down) since the previous step, the mood switches to another one
 ///   picked by the dice; when the zone is the same, or a reading is missing, it is kept.
-/// - **YOLO:** when the zone reaches one of GCP2's two highest zones, sell every other
-///   holding and put all cash into the liquid coin with the highest 1h return. Hold it
-///   until the zone drops below the third-highest zone (or its exit plan sells it); then the
-///   normal rules take over.
-/// - **Argues with itself:** outside YOLO all four personas decide on the schizo's book.
-///   The active mood's vote counts 2, the others 1. Flat: buy the coin with the most votes
-///   if it reaches 2 (ties: higher 24h volume, then name). Holding: sell on 2 or more sell
-///   votes.
+/// - **Argues with itself:** all four personas decide on the schizo's book. The active
+///   mood's vote counts 2, the others 1. Flat: buy the coin with the most votes if it
+///   reaches 2 (ties: higher 24h volume, then name). Holding: sell on 2 or more sell votes.
 /// - **Extreme bets:** one coin, all cash.
-/// - **Exits:** a position runs the exit plan of the mood that bought it (`v13`'s for a
-///   YOLO buy); no added stop-loss.
+/// - **Exits:** a position runs the exit plan of the mood that bought it; no added stop-loss.
 pub struct Schizo {
     voters: Vec<Box<dyn Persona>>,
-    yolo_plan: ExitPlan,
     active: Option<usize>,
     prev_zone: Option<(usize, String)>,
-    yolo: bool,
-    yolo_asset: Option<String>,
     next_plan: Option<ExitPlan>,
-    next_tag: Option<&'static str>,
     trace: Vec<MoodRecord>,
     active_steps: BTreeMap<String, usize>,
-    yolo_steps: usize,
-    yolo_buys: Vec<(i64, String)>,
 }
 
 impl Schizo {
     pub fn new() -> Result<Self> {
         Ok(Self {
             voters: base_personas()?,
-            yolo_plan: plan(V13_EXIT_PLAN)?,
             active: None,
             prev_zone: None,
-            yolo: false,
-            yolo_asset: None,
             next_plan: None,
-            next_tag: None,
             trace: Vec::new(),
             active_steps: BTreeMap::new(),
-            yolo_steps: 0,
-            yolo_buys: Vec::new(),
         })
     }
 
@@ -833,17 +788,12 @@ impl Schizo {
         self.active.map(|i| self.voters[i].name())
     }
 
-    /// Times and coins of every YOLO buy.
-    pub fn yolo_buys(&self) -> &[(i64, String)] {
-        &self.yolo_buys
-    }
-
     /// Every step's mood-ring record, oldest first.
     pub fn trace_records(&self) -> &[MoodRecord] {
         &self.trace
     }
 
-    /// Advance the mood ring for `snap`; returns the record without the YOLO flag.
+    /// Advance the mood ring for `snap`.
     fn update_mood(&mut self, snap: &Snapshot) -> MoodRecord {
         let view = snap.gcp2.as_ref();
         let mood_before = self.mood().map(str::to_string);
@@ -866,50 +816,7 @@ impl Schizo {
             result,
             mood_before,
             mood_after: self.mood().map(str::to_string),
-            yolo: false,
         }
-    }
-
-    fn update_yolo(&mut self, snap: &Snapshot) {
-        let zone = snap.gcp2.as_ref().map(|v| (v.zone, v.zone_count));
-        self.yolo = yolo_next(self.yolo, zone);
-        if !self.yolo {
-            self.yolo_asset = None;
-        }
-    }
-
-    fn yolo_intents(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
-        self.yolo_steps += 1;
-        if self
-            .yolo_asset
-            .as_ref()
-            .is_some_and(|a| book.holdings.contains_key(a))
-        {
-            return Vec::new();
-        }
-        let Some(target) = yolo_target(snap).cloned() else {
-            return Vec::new();
-        };
-        let mut intents: Vec<Intent> = book
-            .holdings
-            .keys()
-            .filter(|a| **a != target)
-            .map(|a| Intent::Sell {
-                asset: a.clone(),
-                reason: "yolo",
-            })
-            .collect();
-        if !book.holdings.contains_key(&target) {
-            intents.push(Intent::Buy {
-                asset: target.clone(),
-                equity_fraction: 1.0,
-            });
-            self.next_plan = Some(self.yolo_plan);
-            self.next_tag = Some("yolo");
-            self.yolo_buys.push((snap.t, target.clone()));
-        }
-        self.yolo_asset = Some(target);
-        intents
     }
 
     fn vote_intents(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
@@ -928,7 +835,6 @@ impl Schizo {
             return Vec::new();
         };
         self.next_plan = self.active.and_then(|i| self.voters[i].exit_plan());
-        self.next_tag = Some("vote");
         vec![Intent::Buy {
             asset,
             equity_fraction: 1.0,
@@ -942,28 +848,17 @@ impl Persona for Schizo {
     }
 
     fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
-        let mut record = self.update_mood(snap);
-        self.update_yolo(snap);
-        record.yolo = self.yolo;
+        let record = self.update_mood(snap);
         self.trace.push(record);
         if let Some(name) = self.mood() {
             *self.active_steps.entry(name.to_string()).or_default() += 1;
         }
         self.next_plan = None;
-        self.next_tag = None;
-        if self.yolo {
-            self.yolo_intents(snap, book)
-        } else {
-            self.vote_intents(snap, book)
-        }
+        self.vote_intents(snap, book)
     }
 
     fn exit_plan(&self) -> Option<ExitPlan> {
         self.next_plan
-    }
-
-    fn entry_tag(&self) -> Option<&'static str> {
-        self.next_tag
     }
 
     fn notes(&self) -> Vec<String> {
@@ -992,11 +887,6 @@ impl Persona for Schizo {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            format!(
-                "YOLO steps: {}, YOLO buys: {}",
-                self.yolo_steps,
-                self.yolo_buys.len()
-            ),
         ];
         notes.extend(
             moves
@@ -1011,6 +901,129 @@ impl Persona for Schizo {
             header: MOOD_TRACE_HEADER.to_string(),
             rows: self.trace.iter().map(MoodRecord::csv_row).collect(),
         })
+    }
+}
+
+/// `schizo_mdp` (Phase 50): `schizo` with the long-term value voice ([`crate::mdp`]) as the
+/// strongest voice, as the live `bot-spot-v17-schizo` prompt asks the bot to treat it.
+///
+/// - Moods, dice, votes and exit plans as [`Schizo`], except that a buy whose mood has no
+///   exit plan (`detached`) runs the live default plan `atr=3.5:1h,deadline=360`, as every
+///   live position without a plan of its own does.
+/// - Each held coin is valued by the model (gain since the buy fill, time held,
+///   its 1h move, breadth). A vote sell goes through only when selling is worth more than
+///   holding; when the model values selling higher and the votes hold, it sells (`mdp`).
+/// - A buy goes through only when its long-term value after the entry cost is above 0, the
+///   value of staying in cash.
+pub struct SchizoMdp {
+    inner: Schizo,
+    model: Arc<crate::mdp::Model>,
+    default_plan: ExitPlan,
+    mdp_sells: usize,
+    vetoed_sells: usize,
+    vetoed_buys: usize,
+}
+
+impl SchizoMdp {
+    pub fn new(model: Arc<crate::mdp::Model>) -> Result<Self> {
+        Ok(Self {
+            inner: Schizo::new()?,
+            model,
+            default_plan: plan(V13_EXIT_PLAN)?,
+            mdp_sells: 0,
+            vetoed_sells: 0,
+            vetoed_buys: 0,
+        })
+    }
+
+    /// `true` when the model values selling `asset` now above holding it.
+    fn sells(&self, snap: &Snapshot, asset: &str, holding: &super::engine::Holding) -> Option<bool> {
+        let (entry_price, entry_ms) = holding.entry?;
+        if holding.qty <= 0.0 || entry_price <= 0.0 {
+            return None;
+        }
+        let state = crate::mdp::State::new(
+            (holding.value / holding.qty / entry_price - 1.0) * 100.0,
+            (snap.t - entry_ms) / MINUTE_MS,
+            snap.coin(asset).and_then(|c| c.ret_1h),
+            snap.score,
+        );
+        self.model.lookup(state).map(|(_, v)| !v.holds())
+    }
+}
+
+impl Persona for SchizoMdp {
+    fn name(&self) -> &str {
+        "schizo_mdp"
+    }
+
+    fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        let intents = self.inner.decide(snap, book);
+        let verdicts: BTreeMap<String, bool> = book
+            .holdings
+            .iter()
+            .filter_map(|(asset, h)| Some((asset.clone(), self.sells(snap, asset, h)?)))
+            .collect();
+        let mut out = Vec::new();
+        for intent in intents {
+            match intent {
+                Intent::Sell { asset, reason } => {
+                    if verdicts.get(&asset) == Some(&false) {
+                        self.vetoed_sells += 1;
+                    } else {
+                        out.push(Intent::Sell { asset, reason });
+                    }
+                }
+                Intent::Buy {
+                    asset,
+                    equity_fraction,
+                } => {
+                    let momentum = snap.coin(&asset).and_then(|c| c.ret_1h);
+                    match self.model.buy_value(momentum, snap.score) {
+                        Some((_, _, value)) if value <= 0.0 => self.vetoed_buys += 1,
+                        _ => out.push(Intent::Buy {
+                            asset,
+                            equity_fraction,
+                        }),
+                    }
+                }
+            }
+        }
+        for (asset, sells) in verdicts {
+            let selling = out
+                .iter()
+                .any(|i| matches!(i, Intent::Sell { asset: a, .. } if *a == asset));
+            if sells && !selling {
+                self.mdp_sells += 1;
+                out.push(Intent::Sell {
+                    asset,
+                    reason: "mdp",
+                });
+            }
+        }
+        out
+    }
+
+    fn exit_plan(&self) -> Option<ExitPlan> {
+        self.inner.exit_plan().or(Some(self.default_plan))
+    }
+
+    fn notes(&self) -> Vec<String> {
+        let mut notes = vec![format!(
+            "MDP model: γ={} per step, fitted on {} → {}; model sells {}, vote sells it vetoed {}, buys it vetoed {}",
+            self.model.gamma,
+            self.model.data_from,
+            self.model.data_to,
+            self.mdp_sells,
+            self.vetoed_sells,
+            self.vetoed_buys
+        )];
+        notes.extend(self.inner.notes());
+        notes
+    }
+
+    fn trace(&self) -> Option<Trace> {
+        self.inner.trace()
     }
 }
 
@@ -1088,6 +1101,7 @@ pub(crate) mod tests {
                     let h = Holding {
                         qty: 1.0,
                         value: 1000.0 / assets.len() as f64,
+                        entry: None,
                     };
                     (a.to_string(), h)
                 })
@@ -1672,44 +1686,51 @@ pub(crate) mod tests {
         };
         assert_eq!(step(&zones), MoodStep::Switched);
         assert_eq!(step(&shifted), MoodStep::Held);
-        // YOLO thresholds follow the published zone list, not labels in code.
-        assert!(yolo_enters(3, 5) && yolo_enters(4, 5) && !yolo_enters(2, 5));
-        assert!(yolo_stays(2, 5) && !yolo_stays(1, 5));
-        assert!(yolo_enters(4, 6) && !yolo_enters(3, 6));
     }
 
     #[test]
-    fn yolo_goes_all_in_on_the_hottest_coin_and_holds_it() {
-        let zones = gcp2_zones();
-        let rows = [
-            ("BTC", 0.0, 0.2, 0.0, 3e8),
-            ("SOL", 0.0, 1.4, 0.0, 1e8),
-            ("ETH", 0.0, 0.9, 0.0, 2e8),
-        ];
-        let mut s = Schizo::new().unwrap();
-        let mut very_high = snap(0.0, 0.0, &rows);
-        very_high.gcp2 = Some(view(230.0, &zones));
-        assert_eq!(very_high.gcp2.as_ref().unwrap().zone_label, "Very High");
-        let intents = s.decide(&very_high, &holding(&["BTC"]));
-        assert_eq!(sold(&intents), vec!["BTC"]);
+    fn schizo_mdp_lets_the_long_term_value_overrule_the_votes() {
+        use crate::mdp::State;
+        // Coarse values: down 2% after 2 h is worth selling, up 2% worth holding; a new entry
+        // is worth +0.1% before its 0.125% cost, so below cash.
+        let model = Arc::new(crate::mdp::test_model(&[
+            (State::new(-2.0, 120, None, None), -0.5),
+            (State::new(2.0, 120, None, None), 0.3),
+            (State::new(0.0, 0, None, None), 0.1),
+        ]));
+        let held = |price: f64| Book {
+            t: T0,
+            cash: 0.0,
+            equity: price,
+            holdings: [(
+                "SOL".to_string(),
+                Holding {
+                    qty: 1.0,
+                    value: price,
+                    entry: Some((100.0, T0 - 120 * MINUTE_MS)),
+                },
+            )]
+            .into(),
+        };
+        let mut s = SchizoMdp::new(model).unwrap();
+        s.inner.active = Some(2); // detached: chases a rising 1h, dumps a red 15m and 1h
+        let rising = [("BTC", 0.1, 0.1, 0.0, 3e8), ("SOL", 0.2, 0.4, 0.0, 1e8)];
+        let turn = [("BTC", 0.1, 0.1, 0.0, 3e8), ("SOL", -0.1, -0.2, -1.0, 1e8)];
+        // Down 2%: the votes hold (SOL still rising), the model sells.
+        let intents = s.decide(&snap(0.0, 0.0, &rising), &held(98.0));
         assert_eq!(
-            intents.last(),
-            Some(&Intent::Buy {
+            intents,
+            vec![Intent::Sell {
                 asset: "SOL".into(),
-                equity_fraction: 1.0
-            })
+                reason: "mdp"
+            }]
         );
-        assert_eq!(s.exit_plan(), Some(plan(V13_EXIT_PLAN).unwrap()));
-        assert_eq!(s.yolo_buys().len(), 1);
-        // Still High (third-highest): YOLO holds SOL, nothing else happens.
-        let mut high = snap(0.0, 0.0, &rows);
-        high.gcp2 = Some(view(170.0, &zones));
-        assert!(s.decide(&high, &holding(&["SOL"])).is_empty());
-        // Back to Normal: YOLO is over and the votes decide again.
-        let mut normal = snap(0.0, 0.0, &rows);
-        normal.gcp2 = Some(view(50.0, &zones));
-        s.decide(&normal, &holding(&["SOL"]));
-        assert!(!s.yolo);
+        // Up 2%: detached votes to sell (weight 2), the model holds: no sell.
+        assert!(s.decide(&snap(0.0, 0.0, &turn), &held(102.0)).is_empty());
+        // Flat: detached would buy SOL, but a new entry is worth less than cash.
+        assert!(s.decide(&snap(0.0, 0.0, &rising), &flat_book()).is_empty());
+        let notes = s.notes();
+        assert!(notes[0].contains("model sells 1, vote sells it vetoed 1, buys it vetoed 1"), "{notes:?}");
     }
 
     #[test]
@@ -1768,7 +1789,7 @@ pub(crate) mod tests {
         assert!(upto(&full).iter().any(|(_, i)| !i.is_empty()));
         assert_eq!(upto(&full), upto(&short));
         // The wave produces every kind of mood step: one initial pick, then switches on a
-        // stable zone and holds on a zone change; one trace row per step.
+        // zone change and holds on a stable zone; one trace row per step.
         assert_eq!(trace.len(), full.len());
         let count = |r: &str| {
             trace
@@ -1778,9 +1799,5 @@ pub(crate) mod tests {
         };
         assert_eq!(count("initial"), 1);
         assert!(count("switched") > 0 && count("held") > 0, "{trace:?}");
-        assert!(
-            trace.iter().any(|row| row.ends_with(",true")),
-            "no YOLO step"
-        );
     }
 }
