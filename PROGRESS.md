@@ -5,6 +5,16 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-21 (06:20 UTC): operator: "stop the bot". `docker compose stop
+  bot-spot` on the Pi at 06:20:49, right after the 06:10:58 `cycle_summary`
+  (hold, no route in flight); the container exited 0 and stays stopped
+  (restart policy `unless-stopped`; the systemd units are inactive). No stop
+  file was created and nothing else changed. Open position left in place:
+  69.17 ENA (bought by the bot; wallet 17.22 USDT at 06:10), plus 1.085 USDT
+  and BNB. With the container down, nothing follows that position: neither
+  the cycles nor the exit-plan watcher (`atr=3.5:1h,deadline=360`).
+  Restart: `cd ~/binance-bot && docker compose up -d bot-spot` (keeps the
+  cycle cadence from the last audit row).
 - 2026-10-20 (14:45 UTC): Phase 49 step 5, the mood follows GCP2 (operator:
   "reverse mood change meaning if gcp is normal he is normal aight inverse of
   what it is rn"). `next_mood` (`persona_backtest/personas.rs`, used by the
