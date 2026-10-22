@@ -5,6 +5,15 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-22 (05:00 UTC): operator: "stop the bot aight" (after "llm picking
+  stuff was a bad idea", "i always should have traded via functions", and
+  "lets stop right here" on the Markov-trades-the-wallet design, so nothing
+  of that was built). `docker compose stop bot-spot` at 05:00:12, right after
+  the 04:47:42 `cycle_summary` (hold); the container exited 0 and stays
+  stopped. No open position: wallet 17.41 USDT, 15.05 of it USDT cash, plus
+  BNB and dust. One trade since the v17 start: NEAR bought 22:00:09 (2.8 at
+  5.345, 14.966 USDT) and sold 01:56:43 (5.204, 14.5712 USDT), −2.6%. No stop
+  file created. Restart: `cd ~/binance-bot && docker compose up -d bot-spot`.
 - 2026-10-21 (19:10 UTC): Phase 50, long-term value voice and YOLO removal
   (operator: a "reward function alike system that has gamma … markov's
   stuff", "backtest as well", "remove yolo"; ask tool: γ = 0.95 per 20-minute
