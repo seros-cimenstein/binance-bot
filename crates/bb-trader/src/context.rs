@@ -185,6 +185,9 @@ pub struct DecisionContext {
     pub schizo: Option<crate::schizo::SchizoState>,
     /// Phase 50 long-term value voice (`None` unless `BOT_SPOT_MDP_ENABLED`).
     pub mdp: Option<crate::mdp::MdpNow>,
+    /// Phase 51 /biz/ feed (`None` in tests; the cycle always reads it); the LLM prompt does
+    /// not show it, the rule-based decider scores on it.
+    pub biz: Option<crate::biz::BizNow>,
 }
 
 impl DecisionContext {
@@ -206,6 +209,7 @@ impl DecisionContext {
             "gcp2": self.gcp2.as_ref().map(crate::gcp2::Gcp2Now::payload),
             "schizo": self.schizo,
             "mdp": self.mdp,
+            "biz": self.biz,
         })
     }
 

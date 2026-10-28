@@ -5,8 +5,8 @@
 //! withdrawal endpoint.
 //!
 //! - `GET /`: the dashboard page.
-//! - `GET /api/status`: Bot Spot stop file, failed-route halt, agent state, recent cycles
-//!   and journal notes.
+//! - `GET /api/status`: Bot Spot stop file, failed-route halt, agent state, recent cycles,
+//!   the /biz/ feed the newest cycle read (Phase 51) and journal notes.
 //! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
@@ -347,8 +347,10 @@ fn no_store(mut response: Response) -> Response {
 }
 
 /// Bot Spot state: stop file, the trader's own failed-route halt verdict, agent state,
-/// newest cycle summaries and journal notes (newest first), and where the data came from
-/// (`source`: a missing audit file means this host has no Bot Spot data at all).
+/// newest cycle summaries and journal notes (newest first), the /biz/ feed the newest cycle
+/// that read one recorded (`biz`: its cycle time and the audit `biz` field, `null` before
+/// Phase 51), and where the data came from (`source`: a missing audit file means this host
+/// has no Bot Spot data at all).
 pub fn status_view(files: &BotSpotFiles) -> Value {
     let audit = load_audit_rows(&files.audit_path);
     let halt = failed_route_halt(&audit);
@@ -369,9 +371,22 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
                 "error": row.get("error"),
                 "decision": row.get("decision"),
                 "agent": row.get("agent"),
+                // Phase 51: `llm` or `algo` (absent before, which was the LLM), and the
+                // algo rule's verdict.
+                "decider": row.get("decider").and_then(Value::as_str).unwrap_or("llm"),
+                "algo": row.get("algo"),
             })
         })
         .collect();
+    let biz = audit
+        .rows
+        .iter()
+        .rev()
+        .filter(|row| row.get("row_type").and_then(Value::as_str) == Some("cycle_summary"))
+        .find_map(|row| {
+            row.get("biz")
+                .map(|feed| json!({"cycle_at": row.get("timestamp"), "feed": feed}))
+        });
     let (journal, journal_error) = match Journal::new(&files.journal_path).read(JOURNAL_LIMIT) {
         Ok(mut entries) => {
             entries.reverse();
@@ -396,6 +411,7 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
         "audit_error": audit.error,
         "agent": AgentState::load(&files.state_path),
         "cycles": cycles,
+        "biz": biz,
         "journal": journal,
         "journal_error": journal_error,
     })
@@ -518,6 +534,26 @@ mod tests {
         );
         assert_eq!(status_view(&files)["halt"], Value::Null);
         assert_eq!(status_view(&files)["source"]["audit_present"], json!(true));
+    }
+
+    #[test]
+    fn status_shows_the_biz_feed_of_the_newest_cycle_that_read_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = files(dir.path());
+        assert_eq!(status_view(&files)["biz"], Value::Null);
+        write_lines(
+            &files.audit_path,
+            &[
+                json!({"timestamp": "t1", "row_type": "cycle_summary", "biz": {"status": "unavailable", "reason": "old"}}),
+                json!({"timestamp": "t2", "row_type": "cycle_summary", "biz": {"status": "fresh", "coins": {}}}),
+                json!({"timestamp": "t3", "row_type": "route", "biz": {"status": "unavailable", "reason": "not a cycle"}}),
+                // A skipped cycle never read the feed.
+                json!({"timestamp": "t4", "row_type": "cycle_summary"}),
+            ],
+        );
+        let biz = &status_view(&files)["biz"];
+        assert_eq!(biz["cycle_at"], json!("t2"));
+        assert_eq!(biz["feed"]["status"], json!("fresh"));
     }
 
     #[test]

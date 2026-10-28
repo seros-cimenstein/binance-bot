@@ -269,6 +269,7 @@
       <a href="#exits" data-tab="exits">Exits</a>
       <a href="#fleet" data-tab="fleet">Fleet</a>
       <a href="#signals" data-tab="signals">Signals</a>
+      <a href="#biz" data-tab="biz">/biz/</a>
     </nav>
     <div class="top-right">
       <span class="status" id="status-pill" title=""><span class="dot"></span><span>…</span></span>
@@ -287,7 +288,7 @@
 // textContent / createTextNode; nothing is parsed as HTML.
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
-const TABS = ["overview", "history", "sessions", "wallet", "bot", "exits", "fleet", "signals"];
+const TABS = ["overview", "history", "sessions", "wallet", "bot", "exits", "fleet", "signals", "biz"];
 const ENDPOINTS = { status: "/api/status", history: "/api/history", sessions: "/api/sessions", wallet: "/api/wallet", fleet: "/api/fleet", exits: "/api/exits", signals: "/api/signals", market: "/api/market" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
@@ -789,7 +790,7 @@ function renderHeader() {
 function render() {
   renderHeader();
   const view = document.getElementById("view");
-  const pages = { overview: overviewPage, history: historyPage, sessions: sessionsPage, wallet: walletPage, bot: botPage, exits: exitsPage, fleet: fleetPage, signals: signalsPage };
+  const pages = { overview: overviewPage, history: historyPage, sessions: sessionsPage, wallet: walletPage, bot: botPage, exits: exitsPage, fleet: fleetPage, signals: signalsPage, biz: bizPage };
   ui.pendingRender = false;
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
@@ -1195,14 +1196,22 @@ function cycleDetail(c) {
   const attempts = (a.attempts || []).map((at, i) => el("div", { class: "grid small", style: "gap:2px" },
     el("div", null, chip(shortModel(at.model), "warn"), " ", pretty(at.status)),
     at.error ? longText(key + ":attempt:" + i, String(at.error), "feed-text muted") : null));
+  const algo = c.algo;
+  const scored = (p) => p.asset + " " + (num(p.score) === null ? "—" : fixed(num(p.score), 3));
   return el("div", { class: "cycle-detail", onclick: (e) => e.stopPropagation() },
     el("div", { class: "facts" },
+      fact("Decider", c.decider === "algo" ? "Rule-based algorithm (no LLM)" : "LLM"),
       fact("Brain", shortModel(a.model) + (a.thinking ? " · " + a.thinking : "")),
       fact("Turn", a.turn_status ? pretty(a.turn_status) : "—"),
       fact("Prompt", c.prompt_version || "—"),
       fact("Routes quoted", c.candidate_route_count === null || c.candidate_route_count === undefined ? "—" : String(c.candidate_route_count)),
       fact("Tokens in / cached / out", compactNum(u.input) + " / " + compactNum(u.cache_read) + " / " + compactNum(u.output)),
       fact("Cost", usd(u.cost_usd))),
+    algo ? el("div", { class: "facts" },
+      fact("Rule", algo.rule || "—"),
+      fact("Best candidate", algo.best ? scored(algo.best) : "—"),
+      fact("Held", (algo.held || []).length ? algo.held.map(scored).join(", ") : "nothing"),
+      algo.error ? fact("Could not decide", algo.error) : null) : null,
     attempts.length ? el("div", { class: "grid", style: "gap:4px" }, el("div", { class: "small muted" }, "Brains that failed before this one answered"), attempts) : null,
     tools.length ? el("div", { class: "grid", style: "gap:4px" }, el("div", { class: "small muted" }, tools.length + " tool calls, in order"), el("div", { class: "tool-list" }, tools))
       : el("div", { class: "small muted" }, "No tool calls."),
@@ -1708,6 +1717,48 @@ function signalsPage() {
     tokens, signals, reportBody,
     el("details", { class: "footnote" }, el("summary", null, "What this shows"),
       el("p", null, "Paper evaluation of X chatter as a pre-pump signal (docs/signals/x-insighter-design.md). Traction scores X activity per token; a signal is a token's first hot cycle. Exhaustion flags drive simulated scale-out exits. The gate must pass on a venue before execution can even be proposed; nothing here places orders.")));
+}
+
+// ---------- /biz/ ----------
+function stanceCell(w) {
+  const bull = num(w.bullish) || 0, bear = num(w.bearish) || 0;
+  if (!bull && !bear) return el("span", { class: "muted" }, "—");
+  return el("span", { class: tone(bull - bear) + " num" }, "▲ " + nf(0, 1).format(bull) + " / ▼ " + nf(0, 1).format(bear));
+}
+function bizPage() {
+  const status = ui.data.status;
+  const head = pageHead("/biz/ feed", "What the trader read from /biz/ (biz-app) in its newest cycle. Only the rule-based decider (BOT_SPOT_DECIDER=algo) trades on it.", null);
+  if (!status) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
+  const b = status.biz;
+  if (!b) return el("div", { class: "grid" }, head, card(null, empty("No /biz/ reading yet", "No cycle summary has a biz field; the trader records the feed from Phase 51 on.")));
+  const f = b.feed || {};
+  if (f.status !== "fresh") {
+    return el("div", { class: "grid" }, head,
+      el("div", { class: "grid kpis" }, kpi("Feed", "Unavailable", "cycle " + ago(b.cycle_at), "neg")),
+      card("Why", el("div", { class: "small" }, f.reason || "unknown")));
+  }
+  const win = (w, k) => (w && w[k]) || {};
+  const coins = Object.entries(f.coins || {}).map(([name, w]) => ({ name, w }))
+    .sort((a, z) => (num(win(z.w, "24h").mentions) || 0) - (num(win(a.w, "24h").mentions) || 0) || a.name.localeCompare(z.name));
+  const dropped = f.dropped || [];
+  const kpis = el("div", { class: "grid kpis" },
+    kpi("Feed", "Fresh", "as of " + stamp(f.as_of) + " · " + f.age_minutes + " min old at the cycle", "pos"),
+    kpi("Coins", String(coins.length), dropped.length + " named without a Binance market"),
+    kpi("Reader", f.model || "—", f.prompt_version ? "instructions " + f.prompt_version : ""),
+    kpi("Cycle", ago(b.cycle_at), stamp(b.cycle_at)));
+  const rows = coins.map((c) => el("tr", null,
+    el("td", null, assetLabel(c.name)),
+    ["1h", "6h", "24h"].map((k) => el("td", { class: "r num" }, String(win(c.w, k).mentions || 0))),
+    el("td", { class: "r num" }, String(win(c.w, "6h").posters || 0)),
+    el("td", { class: "r" }, stanceCell(win(c.w, "6h"))),
+    el("td", { class: "r" }, stanceCell(win(c.w, "24h")))));
+  const coinsCard = card("Coins", coins.length
+    ? table([["Coin"], ["Mentions 1h", "r"], ["6h", "r"], ["24h", "r"], ["Posters 6h", "r"], ["Stance 6h", "r"], ["Stance 24h", "r"]], rows)
+    : empty("No tradable coin", "The feed named no coin with an eligible Binance market."), { flush: coins.length > 0, hint: "most mentioned in 24h first" });
+  return el("div", { class: "grid" }, head, kpis, coinsCard,
+    dropped.length ? card("Named without a Binance market", el("div", { class: "small muted" }, dropped.join(", "))) : null,
+    el("details", { class: "footnote" }, el("summary", null, "What this shows"),
+      el("p", null, "biz-app counts every /biz/ post that names a coin (mentions, distinct posters), and its AI tags long posts bullish or bearish, weighted by post quality (1-3). scripts/biz_feed_to_pi.sh copies the feed to the Pi, and the trader records it in each cycle summary (audit field biz). A missing, foreign or stale feed is recorded as unavailable with the reason. The LLM is not shown this feed; with BOT_SPOT_DECIDER=algo the rule-based decider scores coins on its talk and stance.")));
 }
 
 // ---------- data loading ----------

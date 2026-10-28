@@ -164,7 +164,7 @@ pub struct Sample {
 }
 
 /// Spread proxy in bps: half the minute's high-low range, clipped to 1-10.
-fn spread_bps(candle: &Candle) -> f64 {
+pub(crate) fn spread_bps(candle: &Candle) -> f64 {
     let mid = (candle.h + candle.l) / 2.0;
     if mid <= 0.0 {
         return 10.0;
@@ -444,7 +444,7 @@ pub async fn universe(client: &BinanceClient, top: usize) -> Result<Vec<String>>
 }
 
 /// 1m candles for `symbol` in `[start_ms, end_ms]`, from the cache when present.
-async fn candles(
+pub(crate) async fn candles(
     fetcher: &HistoryFetcher,
     symbol: &str,
     start_ms: i64,

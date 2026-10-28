@@ -653,6 +653,58 @@ true); model file `BOT_SPOT_MDP_MODEL_PATH` (default
   steps lose clearly (e.g. a +4% spike within the first hour). Its main
   effect is patience: it argues against selling on a red 15 minutes.
 
+### /biz/ feed (Phase 51)
+
+biz-app (`~/projects/automation/imageboards/biz-app`, on the laptop) writes
+the /biz/ feed `biz-feed-v1`: per coin and per window (1h, 6h, 24h) the
+mentions over every post, the distinct posters, and its AI's bullish and
+bearish tags weighted by post score. `scripts/biz_feed_to_pi.sh` copies it to
+`~/binance-bot/docker-data/biz-feed.json` on the Pi every 5 minutes
+(`--once` for one copy; `PI_HOST`, `PI_DATA_DIR`, `BIZ_FEED`,
+`COPY_SECONDS`). The trader reads `BOT_SPOT_BIZ_FEED_PATH` (default
+`data/biz-feed.json`) every cycle and records it in the cycle summary as
+`biz`: `status` `fresh` with `as_of`, `age_minutes`, `model`,
+`prompt_version`, the coins with an eligible Binance market and the `dropped`
+names, or `unavailable` with the reason (missing or unreadable file, another
+schema, `as_of` older than `BOT_SPOT_BIZ_MAX_AGE_MINUTES` (45) or more than 5
+minutes ahead of the Pi's clock). The LLM prompt never shows it; only the
+rule-based decider (`BOT_SPOT_DECIDER=algo`, below) trades on it. The
+dashboard's /biz/ tab shows the newest recorded feed.
+
+### Rule-based decider (Phase 51)
+
+`BOT_SPOT_DECIDER` picks who decides each cycle: `llm` (default) or `algo`,
+the rule-based decider `crate::decider` (operator decisions in `CODEX.md`,
+"Phase 51"). With `algo` the trader never starts omp. Each cycle it builds the
+usual snapshot (wallet, market breadth, /biz/ feed, long-term value model),
+scores the liquid-top coins with `BOT_SPOT_ALGO_WEIGHTS`
+(`talk,stance,momentum,value,buy_above,sell_below`; stances need
+`BOT_SPOT_ALGO_MIN_POSTERS`, 2), sells a held coin scoring below the sell
+level into USDT and, with nothing held, buys the best coin with all USDT at
+or above the buy level. Every order is quoted for the whole free balance and
+sent through `execute_route`, so the stop file, arming, scope, `order/test`,
+reconciliation and the failed-route halt apply; the first failed order ends
+the cycle's orders. No market view (breadth read failed) means hold.
+
+- **Records.** Every audit row has `decider` (`llm` or `algo`); algo cycle
+  summaries add `algo` (rule, best candidate and score, held coins and
+  scores, orders), `agent.model` `rule-based decider`, cost 0, and
+  `session_id` `algo`. Telegram alerts carry a `Decider:` line; the Bot tab's
+  cycle details show the decider and the rule's scores.
+- **Practice run.** `docker compose --profile algo-paper up -d
+  bot-spot-algo-paper` runs it plan-only next to the live trader with its own
+  files (`bot-spot-algo-paper-{decisions.jsonl,journal.jsonl,state.json}`,
+  lock `bot-spot-algo-paper.lock`) and the shared stop file. Set
+  `BOT_SPOT_ALGO_WEIGHTS` in `.env.docker` first. Plan-only rows do not move
+  the wallet, so it re-decides on the real balances every cycle.
+- **Going live** (after the practice run and the operator's go):
+  `docker tag binance-bot:latest binance-bot:pre-algo-<date>`, set
+  `BOT_SPOT_DECIDER=algo` in `~/binance-bot/.env.docker`, `docker compose up
+  -d bot-spot`, watch the first cycles. With `BOT_SPOT_EXIT_PLANS_LIVE=true`
+  the default exit plan still sells positions between cycles; set it to
+  `false` for the rule's own sells only. Back: `BOT_SPOT_DECIDER=llm` and
+  restart. `touch docker-data/bot-spot.stop` stops either decider.
+
 ### omp authentication
 
 omp needs model credentials once per data directory: either set
@@ -810,6 +862,27 @@ Personas:
 
   The model vetoed 1,515 vote sells and 12 buys and sold twice itself; most
   exits were the exit plans' deadlines. Every variant lost in that window.
+- `biz_algo` (Phase 51, not part of `all`, research only) is the rule-based
+  decider `crate::decider`, no LLM: each liquid-top coin scores
+  `w_talk·talk + w_stance·stance + w_momentum·momentum + w_value·value`
+  (talk: /biz/ 6h mention rate over its 24h rate − 1, from 4 mentions in 24h,
+  capped −1..3; stance: (bullish − bearish) / tagged of the 6h AI tags with
+  `--biz-min-posters` (2) posters; momentum: 1h return / 5%, capped; value:
+  the `--mdp-model` verdict, 0 without one). A held coin scoring below the
+  sell level is sold; with nothing held the best coin at or above the buy
+  level is bought with all cash; no exit plan. `--biz-feeds <dir>` is the
+  hourly `biz-feed-v1` history from biz-app (a feed counts at a step from its
+  `as_of` on, for `--biz-max-age-minutes`, 90); without it the /biz/ terms
+  are 0. Selecting `biz_algo` splits the window: the weights are picked on
+  the older half from a grid (talk and stance −1/0/+1, momentum 0/1, value
+  0/1, buy at 0.5/1, sell below −0.5/0; 72 sets with feeds and no model) by
+  net %, or given with `--biz-weights talk,stance,momentum,value,buy,sell`
+  (e.g. from `bb biz-lead-study`); every persona then runs on both halves as
+  `<persona>@older` and `<persona>@newer`, and the `@newer` row is the
+  out-of-sample result. The report adds a `biz_algo` rule section with the
+  best grid rows, and `_biz_algo@<half>_trace.csv` (time, feed `as_of`, best
+  coin and score, held coin and score, action). Not run on real feeds yet:
+  biz-app does not write the history.
 
 Cost model: fills happen at the next 1m open, with the fee plus slippage
 charged on each side (25 bps per round trip by default, against the measured

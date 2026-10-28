@@ -22,6 +22,7 @@
 #   gui     -> cryptobot-gui read-only dashboard (also in paper/live/all)
 #   x-collector -> x-camoufox read-only X collector (Phase 43, own image, no bot secrets)
 #   x-insighter -> bb x-insighter paper daemon (Phase 43, needs X_INSIGHTER_ENABLED=true)
+#   algo-paper -> bot-spot-algo-paper: the Phase 51 rule-based decider, plan-only (no orders)
 #
 # Model (omp) auth, once per data dir: either set ANTHROPIC_API_KEY in the env file, or
 #   docker compose run --rm -it bot-spot omp      # then /login inside omp, then exit
@@ -77,6 +78,28 @@ services:
     profiles: ["exit-paper"]
     restart: "no"
     command: ["bb", "bot-spot-exit-watch", "--daemon", "--poll-seconds", "5"]
+
+  # Phase 51 practice run of the rule-based decider (BOT_SPOT_DECIDER=algo, no LLM): plan-only,
+  # so it records `planned` routes and places no order, next to the live trader. Its own audit,
+  # journal, state and lock; the emergency stop file is shared, so data/bot-spot.stop stops it
+  # too. Needs BOT_SPOT_ALGO_WEIGHTS (talk,stance,momentum,value,buy_above,sell_below) in the
+  # env file. Plan-only cycles do not move the wallet: it re-decides on the real balances.
+  bot-spot-algo-paper:
+    <<: *base
+    container_name: bot-spot-algo-paper
+    profiles: ["algo-paper"]
+    environment:
+      TZ: UTC
+      BINANCE_BOT_BACKUP_DIR: /app/backups
+      BINANCE_BOT_PROJECT_DIR: /app
+      AIRDROP_DATA_DIR: /app/data
+      BOT_STATUS_DATA_DIR: /app/data
+      BOT_SPOT_DECIDER: algo
+      BOT_SPOT_AUDIT_PATH: /app/data/bot-spot-algo-paper-decisions.jsonl
+      BOT_SPOT_JOURNAL_PATH: /app/data/bot-spot-algo-paper-journal.jsonl
+      BOT_SPOT_STATE_PATH: /app/data/bot-spot-algo-paper-state.json
+      BOT_SPOT_LOCK_PATH: /app/data/bot-spot-algo-paper.lock
+    command: ["bb", "bot-spot", "--plan-only", "--daemon", "--interval-seconds", "1200"]
 
   # ---------- DISABLED / OPT-IN (live) ----------
   # Off since 2026-10-12: Bot Spot is the only live trader on the shared wallet.

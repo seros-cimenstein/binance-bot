@@ -5,6 +5,72 @@ the durable roadmap and use this file for the current working state.
 
 ## Current Status
 
+- 2026-10-29: Phase 51 Level 5, the rule-based decider can decide the
+  cycle (code only; not compiled, tested, built or deployed: no commands
+  allowed). `BOT_SPOT_DECIDER` (default `llm`); `algo` needs
+  `BOT_SPOT_ALGO_WEIGHTS` (config refuses to start without it) and never
+  starts omp. `Trader::run_algo_cycle` builds the usual snapshot (now with
+  `Snapshot.step`, the personas' market view), `Runtime::algo_verdict` runs
+  `crate::decider::decide` on the live book (entry from trade memory, /biz/
+  feed when fresh, MDP model when enabled), `Runtime::run_algo_turn` quotes
+  each order for the whole free balance and sends it through
+  `execute_route`, stopping at the first failure, then writes the usual
+  cycle summary (`agent.model` `rule-based decider`, `session_id` `algo`,
+  audit `algo`). Every audit row now has `decider`; alerts add a `Decider:`
+  line; the Bot tab shows it. Compose: `bot-spot-algo-paper` (profile
+  `algo-paper`, `--plan-only`, own audit/journal/state/lock, shared stop
+  file). Operator decision in `CODEX.md`, "Phase 51". Not live: the live
+  `bot-spot` is still stopped and still `llm`; the weights have no real
+  backtest behind them until biz-app writes the feed history.
+- 2026-10-28 (Level 4): Phase 51 rule-based decider, backtest only (code
+  only; not compiled, tested or run: no commands allowed). `crate::decider`
+  scores each liquid-top coin as w_talk·talk + w_stance·stance +
+  w_momentum·momentum + w_value·value (talk = /biz/ 6h mention rate over the
+  24h rate − 1; stance = (bullish − bearish) / tagged of the 6h AI tags with
+  enough posters; momentum = 1h return / 5%; value = MDP verdict), sells a
+  held coin below `sell_below`, buys the best at `buy_above` with all cash.
+  `biz::parse_raw` split out of `biz::parse`; `persona_backtest::data::
+  BizHistory` loads a feed folder point-in-time (newest `as_of <= t`, within
+  `--biz-max-age-minutes` 90). Persona `biz_algo` (`personas.rs`) with a
+  per-step trace. `report.rs`: `--biz-feeds`, `--biz-weights`,
+  `--biz-min-posters`; selecting `biz_algo` splits the window, tunes the
+  weights on the older half over a grid (or takes `--biz-weights`) and runs
+  every persona on both halves as `@older` / `@newer`; `build_persona` /
+  `run_personas` now take `PersonaInputs`. The weights are not from the lead
+  study yet: no real feed history exists until biz-app's Levels 1-2 are
+  built. The live trader does not use the decider.
+- 2026-10-28 (later): Phase 51 Level 3, the /biz/ feed recorded by the
+  trader (code only; not compiled, tested or deployed: no commands allowed).
+  `crate::biz` (`crates/bb-trader/src/biz.rs`) reads `BOT_SPOT_BIZ_FEED_PATH`
+  (default `data/biz-feed.json`) in `build_snapshot`, refuses another schema,
+  an `as_of` older than `BOT_SPOT_BIZ_MAX_AGE_MINUTES` (45) or over 5 min
+  ahead of the clock, and keeps coins whose base has an eligible market in
+  the view (`dropped` lists the rest). The result is `DecisionContext.biz`
+  (also in `as_payload`, so in `context_hash` and `--evidence-only`) and the
+  cycle summary's `biz` field; the prompt and the order path never read it.
+  `run_config` gained a `biz` block, so the first cycle after deploy starts a
+  new session on the Sessions tab. `scripts/biz_feed_to_pi.sh [--once]`
+  rsyncs the laptop's feed to `docker-data/biz-feed.json` on the Pi.
+  `cryptobot-gui`: `/api/status` has `biz` (newest cycle summary with a feed)
+  and the page a /biz/ tab. biz-app still writes no feed (Levels 1-2 there
+  are not built), so every cycle will record "/biz/ unavailable" until it does.
+- 2026-10-28: Phase 51, /biz/ lead study (operator: "decisions are not taken
+  by an llm but by an algorithm" fed by biz-app's /biz/ readings and Binance
+  data; "exercise on this level first"). Built `bb biz-lead-study`
+  (`crates/bb-strategies/src/biz_lead_study.rs`): reads a folder of
+  `biz-feed-v1` files, enters on paper at the first whole minute after each
+  feed's `as_of` plus `--delay-minutes` (1), measures +1h/+6h/+24h on the
+  `data/entry-study-cache` candles (any cache file covering the window, else
+  a public fetch), buckets by talk rank, 6h-vs-24h talk surge and 6h/24h
+  stance (stance needs `--min-posters` 2), and compares each bucket with the
+  same coin's mean over the period (older half, newer half, whole). Writes
+  `reports/biz_lead_study_<date>.{md,csv}`, prints the pooled +6h rows.
+  `entry_study::candles` and `spread_bps` are now `pub(crate)`. Not compiled
+  or run in this session (no commands allowed); three unit tests added. Not
+  built: the biz-app side (`biz-insights feed` and `--history`), which lives
+  outside this repository, so there are no real feeds to run the study on yet.
+  The feed contract is in `IMPLEMENTATION_PLAN.md`, Phase 51. The live trader
+  is unchanged and still stopped.
 - 2026-10-22 (05:00 UTC): operator: "stop the bot aight" (after "llm picking
   stuff was a bad idea", "i always should have traded via functions", and
   "lets stop right here" on the Markov-trades-the-wallet design, so nothing

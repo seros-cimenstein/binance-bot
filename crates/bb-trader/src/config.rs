@@ -96,6 +96,36 @@ impl FromStr for MarketPickMode {
     }
 }
 
+/// Who decides each cycle (`BOT_SPOT_DECIDER`, Phase 51).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decider {
+    /// The omp LLM session with its host tools (the default).
+    Llm,
+    /// The rule-based decider ([`crate::decider`]); the LLM is never started.
+    Algo,
+}
+
+impl Decider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Llm => "llm",
+            Self::Algo => "algo",
+        }
+    }
+}
+
+impl FromStr for Decider {
+    type Err = TraderError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "llm" => Ok(Self::Llm),
+            "algo" => Ok(Self::Algo),
+            _ => Err(TraderError::config("BOT_SPOT_DECIDER must be llm or algo")),
+        }
+    }
+}
+
 /// One model of the trader's chain: `provider/model-id` plus its thinking level.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelSpec {
@@ -234,6 +264,15 @@ pub struct TraderConfig {
     pub mdp_enabled: bool,
     /// `bb bot-spot-mdp-fit` model file the voice reads every cycle.
     pub mdp_model_path: PathBuf,
+    /// Phase 51: the /biz/ feed (`crate::biz`) recorded every cycle, information only.
+    pub biz_feed_path: PathBuf,
+    /// A feed whose `as_of` is older than this is recorded as unavailable.
+    pub biz_max_age_minutes: u64,
+    /// Phase 51: who decides each cycle.
+    pub decider: Decider,
+    /// The rule of [`Decider::Algo`] (`BOT_SPOT_ALGO_WEIGHTS`, `BOT_SPOT_ALGO_MIN_POSTERS`);
+    /// `None` with the LLM.
+    pub algo_rule: Option<crate::decider::Rule>,
     // operator scope
     pub scope: ScopeConfig,
 }
@@ -307,6 +346,21 @@ impl TraderConfig {
         }
         let exit = crate::exit_book::ExitSettings::from_lookup(|name| env.raw(name))
             .map_err(TraderError::config)?;
+        let decider: Decider = env.string("BOT_SPOT_DECIDER", "llm").parse()?;
+        let algo_rule = match decider {
+            Decider::Llm => None,
+            Decider::Algo => {
+                let spec = env.raw("BOT_SPOT_ALGO_WEIGHTS").ok_or_else(|| {
+                    TraderError::config(
+                        "BOT_SPOT_DECIDER=algo needs BOT_SPOT_ALGO_WEIGHTS (talk,stance,momentum,value,buy_above,sell_below)",
+                    )
+                })?;
+                Some(crate::decider::Rule {
+                    weights: crate::decider::Weights::parse(&spec).map_err(TraderError::config)?,
+                    min_posters: env.integer("BOT_SPOT_ALGO_MIN_POSTERS", 2)?,
+                })
+            }
+        };
         let config = Self {
             api_key,
             api_secret,
@@ -383,6 +437,13 @@ impl TraderConfig {
             gcp2_base_url: env.string("BOT_SPOT_GCP2_BASE_URL", crate::gcp2::DEFAULT_BASE_URL),
             mdp_enabled: env.boolean("BOT_SPOT_MDP_ENABLED", true)?,
             mdp_model_path: env.path("BOT_SPOT_MDP_MODEL_PATH", crate::mdp::DEFAULT_MODEL_PATH),
+            biz_feed_path: env.path("BOT_SPOT_BIZ_FEED_PATH", crate::biz::DEFAULT_FEED_PATH),
+            biz_max_age_minutes: env.integer(
+                "BOT_SPOT_BIZ_MAX_AGE_MINUTES",
+                crate::biz::DEFAULT_MAX_AGE_MINUTES,
+            )?,
+            decider,
+            algo_rule,
             scope,
         };
         config.validate()?;
@@ -416,6 +477,11 @@ impl TraderConfig {
         }
         if self.prompt_version.trim().is_empty() {
             return Err(TraderError::config("prompt_version must not be blank"));
+        }
+        if self.biz_max_age_minutes == 0 {
+            return Err(TraderError::config(
+                "biz_max_age_minutes must be positive",
+            ));
         }
         if !(1..=3).contains(&self.max_route_legs) {
             return Err(TraderError::config(
@@ -562,6 +628,15 @@ impl TraderConfig {
             "mdp": {
                 "enabled": self.mdp_enabled,
                 "model_path": self.mdp_model_path,
+            },
+            "biz": {
+                "feed_path": self.biz_feed_path,
+                "max_age_minutes": self.biz_max_age_minutes,
+            },
+            "decider": {
+                "name": self.decider.as_str(),
+                "rule": self.algo_rule.map(|rule| rule.weights.to_string()),
+                "min_posters": self.algo_rule.map(|rule| rule.min_posters),
             },
             "scope": self.scope,
         })
@@ -973,5 +1048,24 @@ pub(crate) mod tests {
         }
         // Without fallbacks a bare --model pattern stays valid (today's behavior).
         assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_MODEL", "haiku")])).is_ok());
+    }
+
+    #[test]
+    fn the_algo_decider_needs_its_weights_and_the_llm_stays_the_default() {
+        let default = TraderConfig::from_lookup(lookup(&[])).unwrap();
+        assert_eq!((default.decider, default.algo_rule), (Decider::Llm, None));
+        let err = TraderConfig::from_lookup(lookup(&[("BOT_SPOT_DECIDER", "algo")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("BOT_SPOT_ALGO_WEIGHTS"), "{err}");
+        let algo = TraderConfig::from_lookup(lookup(&[
+            ("BOT_SPOT_DECIDER", "ALGO"),
+            ("BOT_SPOT_ALGO_WEIGHTS", "1,0.5,0.5,0,0.5,0"),
+        ]))
+        .unwrap();
+        let rule = algo.algo_rule.unwrap();
+        assert_eq!((algo.decider, rule.min_posters, rule.weights.stance), (Decider::Algo, 2, 0.5));
+        assert_eq!(algo.run_config(None)["decider"]["name"], "algo");
+        assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_DECIDER", "rules")])).is_err());
     }
 }

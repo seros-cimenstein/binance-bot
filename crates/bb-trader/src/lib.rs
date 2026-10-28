@@ -25,6 +25,9 @@
 //!   personas' votes), persisted next to the agent state (Phase 49).
 //! - [`mdp`]: the long-term value voice, a Markov decision process fitted on cached
 //!   candles (Phase 50).
+//! - [`biz`]: the /biz/ feed from biz-app, recorded per cycle, information only (Phase 51).
+//! - [`decider`]: the Phase 51 rule-based decider (no LLM); backtested as persona
+//!   `biz_algo`, and the cycle's decider with `BOT_SPOT_DECIDER=algo`.
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
 //!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `bot-spot-mdp-fit`,
 //!   `bot-spot-persona-backtest`, `gcp2-history`.
@@ -34,11 +37,13 @@
 pub mod agent;
 pub mod alerts;
 pub mod audit;
+pub mod biz;
 pub mod cli;
 pub mod config;
 pub mod context;
 pub mod entry_timing;
 pub mod cycle;
+pub mod decider;
 pub mod error;
 pub mod evidence;
 pub mod executor;

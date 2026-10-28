@@ -228,6 +228,27 @@ driven project.
     hard safety are unchanged.
   - The backtest persona `schizo_mdp` (offline only) lets the model overrule
     the votes; its model must be fitted on data that ends before the window.
+- Phase 51 rule-based decider (operator decisions 2026-10-22 "llm picking
+  stuff was a bad idea", "i always should have traded via functions";
+  2026-10-28 "from now on decisions are not taken by an llm but by an
+  algorithm" fed by /biz/ readings from biz-app and Binance data; Levels 1-5
+  of the Phase 51 plan approved 2026-10-28/29). This replaces the earlier
+  removal of a rules-engine decision mode for this decider only
+  (`BOT_SPOT_DECISION_MODE` stays removed).
+  - `BOT_SPOT_DECIDER` picks who decides each cycle: `llm` (the default, the
+    omp session) or `algo` (`crate::decider`, no LLM is started). The algo
+    needs `BOT_SPOT_ALGO_WEIGHTS`; a missing or bad value refuses to start.
+  - Algo orders go only through `execute_route`, so every hard-safety item
+    below applies unchanged; a failed order stops that cycle's remaining
+    orders. The rule sells on its score only: no stop-loss or take-profit
+    price levels are added (the 2026-10-14 decision stands).
+  - Order of rollout: the `bot-spot-algo-paper` plan-only service first;
+    switching the live `bot-spot` to `algo` needs the operator's go after that
+    practice run, a rollback image tag (`binance-bot:pre-algo-<date>`) and an
+    entry in `PROGRESS.md`. Going back is `BOT_SPOT_DECIDER=llm` and a
+    restart.
+  - The /biz/ feed stays information for the LLM path (recorded, not shown in
+    the prompt); only the algo reads it to decide.
 - Bot Spot hard safety stays always on and fails closed: the live arming
   flags, the emergency stop file checked at cycle start and before every route,
   leg, and order, the exclusive run lock, account READING plus canTrade,

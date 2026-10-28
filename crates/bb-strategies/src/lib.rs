@@ -11,7 +11,9 @@
 //! [`basis_arb_backtest`], [`grid_backtest`], [`news_event_backtest`],
 //! [`stat_arb_backtest`], [`bot_spot_backtest`].
 //!
-//! Research: [`spec_snapshot`] writes a public-data speculation snapshot (CSVs + `SUMMARY.md`).
+//! Research: [`spec_snapshot`] writes a public-data speculation snapshot (CSVs + `SUMMARY.md`);
+//! [`entry_study`] measures entries after costs; [`biz_lead_study`] checks whether /biz/ talk
+//! comes before price moves.
 //!
 //! Shared plumbing lives in [`common`]; [`cli`] exposes the `bb` subcommands.
 
@@ -26,6 +28,7 @@
 )]
 
 pub mod basis_arb_backtest;
+pub mod biz_lead_study;
 pub mod bot_spot_backtest;
 pub mod cli;
 pub mod common;

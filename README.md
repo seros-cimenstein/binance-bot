@@ -58,7 +58,7 @@ defaults and data files.
 | Products / diagnostics | `api-permissions`, `scope-audit`, `product-modules`, `advanced-readiness`, `margin`, `margin-canary`, `futures`, `futures-canary`, `transfers`, `transfer-canary`, `withdrawals`, `prediction`, `spot-canary`, `live-spot-allocator`, `live-probe`, `ops-check` |
 | Legacy runtime | `main` |
 | Signals / Solana / misc | `signals-*`, `sniper-*`, `social-signal`, `polymarket-scanner`, `airdrop-scheduler` |
-| Research | `*-backtest`, `spec-snapshot`, `entry-study`, `gcp2-history` |
+| Research | `*-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study`, `gcp2-history` |
 
 ## Bot agentic Spot trader (`bb bot-spot`)
 
@@ -122,6 +122,15 @@ The bot trades the Spot wallet through omp (the oh-my-pi coding agent, npm
   Offline, `bb bot-spot-persona-backtest --persona schizo_mdp --mdp-model
   <file>` lets the model overrule the schizo votes; the model must be fitted
   on data before the window (`bb bot-spot-mdp-fit --end <time>`).
+- **Rule-based decider (Phase 51).** `crate::decider` picks buy, sell or
+  hold from fixed rules (no LLM) over /biz/ talk and stance, 1h momentum and
+  the long-term value model; `bb bot-spot-persona-backtest --persona
+  biz_algo --biz-feeds <history dir>` tunes it on the older half of the
+  window and judges it on the newer (OPERATIONS.md, "Persona backtest").
+  `BOT_SPOT_DECIDER=algo` (with `BOT_SPOT_ALGO_WEIGHTS`) makes it the
+  cycle's decider instead of the LLM; its orders go through `execute_route`
+  and every hard-safety check. The default stays `llm`; the compose profile
+  `algo-paper` runs it plan-only first (OPERATIONS.md, "Rule-based decider").
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
   - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked at cycle start, before every route, before every leg and before every order;

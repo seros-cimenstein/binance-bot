@@ -1,11 +1,13 @@
 //! Offline 1m candles for the persona backtest, read from the `bb entry-study` cache
-//! (`data/entry-study-cache/1m_<BASE>_USDT_<start>_<end>.json`, rows `{t,o,h,l,c,v}`).
+//! (`data/entry-study-cache/1m_<BASE>_USDT_<start>_<end>.json`, rows `{t,o,h,l,c,v}`), and
+//! the /biz/ feed history the `biz_algo` persona reads ([`BizHistory`]).
 //!
 //! Point-in-time access only: every reader takes a time `t` and sees just the bars that
-//! closed by `t`. A coin without a bar at a time is left out of that time (no forward
-//! fill), so a late listing (HYPE) simply starts with its own first bar.
+//! closed by `t` (and the feeds whose `as_of` is at or before `t`). A coin without a bar
+//! at a time is left out of that time (no forward fill), so a late listing (HYPE) simply
+//! starts with its own first bar.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -13,6 +15,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use crate::biz::CoinWindows;
 use crate::error::{Result, TraderError};
 use crate::gcp2::Gcp2Feed;
 
@@ -275,6 +278,104 @@ fn cache_file_asset(name: &str) -> Option<&str> {
         .then_some(base)
 }
 
+/// One /biz/ feed of the history.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BizFeedAt {
+    /// The newest moment whose posts the feed includes (biz-app's visibility rule).
+    pub as_of_ms: i64,
+    pub coins: BTreeMap<String, CoinWindows>,
+}
+
+/// `biz-feed-v1` files rebuilt for past times by biz-app (`biz-insights feed --history`),
+/// sorted by `as_of`. At time `t` the newest feed with `as_of <= t` is visible, unless it is
+/// older than the age limit (then none is, as the live trader treats a stale feed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BizHistory {
+    feeds: Vec<BizFeedAt>,
+    /// Every `model@prompt_version` seen.
+    readers: BTreeSet<String>,
+    max_age_ms: i64,
+}
+
+impl BizHistory {
+    /// Feeds in any order; of two with the same `as_of` the first is kept.
+    pub fn new(mut feeds: Vec<BizFeedAt>, readers: BTreeSet<String>, max_age_minutes: i64) -> Self {
+        feeds.sort_by_key(|f| f.as_of_ms);
+        feeds.dedup_by_key(|f| f.as_of_ms);
+        Self {
+            feeds,
+            readers,
+            max_age_ms: max_age_minutes * MINUTE_MS,
+        }
+    }
+
+    /// Every `*.json` in `dir` (by file name). Fails on a missing directory, an empty one,
+    /// or any file that is not a `biz-feed-v1` feed.
+    pub fn load_dir(dir: &Path, max_age_minutes: i64) -> Result<Self> {
+        if max_age_minutes <= 0 {
+            return Err(TraderError::config("the /biz/ feed age limit must be positive"));
+        }
+        let entries = std::fs::read_dir(dir).map_err(|e| {
+            TraderError::config(format!("missing /biz/ feed directory {}: {e}", dir.display()))
+        })?;
+        let mut paths = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().is_some_and(|ext| ext == "json") {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        if paths.is_empty() {
+            return Err(TraderError::config(format!(
+                "no /biz/ feeds (*.json) in {}",
+                dir.display()
+            )));
+        }
+        let mut feeds = Vec::with_capacity(paths.len());
+        let mut readers = BTreeSet::new();
+        for path in &paths {
+            let text = std::fs::read_to_string(path)?;
+            let raw = crate::biz::parse_raw(&text).map_err(|e| {
+                TraderError::config(format!("bad /biz/ feed {}: {e}", path.display()))
+            })?;
+            readers.insert(format!("{}@{}", raw.model, raw.prompt_version));
+            feeds.push(BizFeedAt {
+                as_of_ms: raw.as_of_ms,
+                coins: raw.coins,
+            });
+        }
+        Ok(Self::new(feeds, readers, max_age_minutes))
+    }
+
+    /// The feed visible at `t`.
+    pub fn at(&self, t: i64) -> Option<&BizFeedAt> {
+        let i = self.feeds.partition_point(|f| f.as_of_ms <= t);
+        let feed = self.feeds.get(i.checked_sub(1)?)?;
+        (t - feed.as_of_ms <= self.max_age_ms).then_some(feed)
+    }
+
+    pub fn len(&self) -> usize {
+        self.feeds.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.feeds.is_empty()
+    }
+
+    pub fn first_ms(&self) -> Option<i64> {
+        self.feeds.first().map(|f| f.as_of_ms)
+    }
+
+    pub fn last_ms(&self) -> Option<i64> {
+        self.feeds.last().map(|f| f.as_of_ms)
+    }
+
+    pub fn readers(&self) -> &BTreeSet<String> {
+        &self.readers
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,5 +540,28 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("missing cache"), "{err}");
+    }
+
+    #[test]
+    fn a_feed_is_visible_from_its_as_of_until_it_is_too_old() {
+        let feed = |minute: i64| BizFeedAt {
+            as_of_ms: T0 + minute * MINUTE_MS,
+            coins: BTreeMap::new(),
+        };
+        // Hourly feeds at 0 and 60, then a gap until 300; 90 minutes of age allowed.
+        let history = BizHistory::new(vec![feed(60), feed(0), feed(300)], BTreeSet::new(), 90);
+        let at = |minute: i64| history.at(T0 + minute * MINUTE_MS).map(|f| (f.as_of_ms - T0) / MINUTE_MS);
+        assert_eq!(at(-1), None);
+        assert_eq!(at(0), Some(0));
+        assert_eq!(at(59), Some(0));
+        assert_eq!(at(60), Some(60));
+        assert_eq!(at(150), Some(60));
+        assert_eq!(at(151), None);
+        assert_eq!(at(300), Some(300));
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.json"), r#"{"schema":"biz-feed-v2","as_of":"2026-07-19T08:00:00Z"}"#).unwrap();
+        let err = BizHistory::load_dir(dir.path(), 90).unwrap_err().to_string();
+        assert!(err.contains("bad /biz/ feed") && err.contains("biz-feed-v1"), "{err}");
     }
 }

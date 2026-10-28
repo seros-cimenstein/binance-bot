@@ -11,12 +11,13 @@ use std::sync::Arc;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 
-use super::data::{MINUTE_MS, Market};
+use super::data::{BizHistory, MINUTE_MS, Market};
 use super::engine::{Config, LIQUID, Persona, RunResult, run};
 use super::personas::{
-    CONTRARIAN_EXIT_PLAN, Contrarian, Detached, Ensemble, HIGH_VARIANCE_EXIT_PLAN, HighVariance,
-    Rotation, Schizo, SchizoMdp, V13, V13_EXIT_PLAN,
+    BizAlgo, CONTRARIAN_EXIT_PLAN, Contrarian, Detached, Ensemble, HIGH_VARIANCE_EXIT_PLAN,
+    HighVariance, Rotation, Schizo, SchizoMdp, V13, V13_EXIT_PLAN,
 };
+use crate::decider::{Rule, Weights};
 use crate::error::{Result, TraderError};
 use crate::gcp2::Gcp2Feed;
 use crate::mdp::Model;
@@ -30,9 +31,9 @@ pub const ALL_PERSONAS: [&str; 6] = [
     "rotation",
     "ensemble",
 ];
-/// Every persona `--persona` accepts by name (`schizo`, Phase 49, and `schizo_mdp`, Phase 50,
-/// are not part of `all`).
-pub const KNOWN_PERSONAS: [&str; 8] = [
+/// Every persona `--persona` accepts by name (`schizo`, Phase 49, `schizo_mdp`, Phase 50, and
+/// `biz_algo`, Phase 51, are not part of `all`).
+pub const KNOWN_PERSONAS: [&str; 9] = [
     "v13",
     "contrarian",
     "detached",
@@ -41,7 +42,10 @@ pub const KNOWN_PERSONAS: [&str; 8] = [
     "ensemble",
     "schizo",
     "schizo_mdp",
+    "biz_algo",
 ];
+/// `biz_algo` grid rows listed in the report.
+const GRID_ROWS_SHOWN: usize = 5;
 const DAY_MS: i64 = 86_400_000;
 /// History needed before the window start: 24h breadth lookback plus the 22 closed 1h bars
 /// of an hourly ATR (rounded up).
@@ -66,7 +70,8 @@ pub struct PersonaBacktestArgs {
     #[arg(long, default_value_t = 60)]
     pub days: i64,
     /// Persona to run, repeatable: v13, contrarian, detached, high_variance, rotation,
-    /// ensemble, or `all`.
+    /// ensemble, schizo, schizo_mdp, biz_algo, or `all`. With `biz_algo` the window is split
+    /// in an older (tuning) and a newer (judging) half and every persona runs on both.
     #[arg(long = "persona", default_value = "all")]
     pub personas: Vec<String>,
     /// Starting USDT balance of every variant.
@@ -92,6 +97,20 @@ pub struct PersonaBacktestArgs {
     /// before the window starts.
     #[arg(long)]
     pub mdp_model: Option<PathBuf>,
+    /// `biz-feed-v1` history (`biz-insights feed --history`) for `biz_algo`; without it the
+    /// /biz/ terms are 0.
+    #[arg(long)]
+    pub biz_feeds: Option<PathBuf>,
+    /// A feed older than this at a step is not visible (hourly history needs more than 60).
+    #[arg(long, default_value_t = 90)]
+    pub biz_max_age_minutes: i64,
+    /// Fixed `biz_algo` weights `talk,stance,momentum,value,buy_above,sell_below` (e.g. read
+    /// off the `bb biz-lead-study` report) instead of tuning them on the older half.
+    #[arg(long)]
+    pub biz_weights: Option<String>,
+    /// Distinct posters a 6h /biz/ window needs before its stance counts.
+    #[arg(long, default_value_t = 2)]
+    pub biz_min_posters: u64,
 }
 
 /// Expand `all`, drop repeats (first mention wins) and reject unknown names.
@@ -121,7 +140,16 @@ pub fn resolve_personas(names: &[String]) -> Result<Vec<&'static str>> {
     Ok(out)
 }
 
-fn build_persona(name: &str, cfg: Config, mdp: Option<&Arc<Model>>) -> Result<Box<dyn Persona>> {
+/// What some personas need beyond the market: the long-term value model (`schizo_mdp`,
+/// `biz_algo`), the /biz/ feed history and the decider rule (`biz_algo`).
+#[derive(Debug, Clone, Default)]
+pub struct PersonaInputs {
+    pub mdp: Option<Arc<Model>>,
+    pub biz: Option<Arc<BizHistory>>,
+    pub rule: Option<Rule>,
+}
+
+fn build_persona(name: &str, cfg: Config, inputs: &PersonaInputs) -> Result<Box<dyn Persona>> {
     Ok(match name {
         "v13" => Box::new(V13::new()?),
         "contrarian" => Box::new(Contrarian::new()?),
@@ -130,9 +158,16 @@ fn build_persona(name: &str, cfg: Config, mdp: Option<&Arc<Model>>) -> Result<Bo
         "rotation" => Box::new(Rotation::new(cfg)?),
         "ensemble" => Box::new(Ensemble::new()?),
         "schizo" => Box::new(Schizo::new()?),
-        "schizo_mdp" => Box::new(SchizoMdp::new(Arc::clone(mdp.ok_or_else(|| {
-            TraderError::config("schizo_mdp needs --mdp-model")
-        })?))?),
+        "schizo_mdp" => Box::new(SchizoMdp::new(Arc::clone(inputs.mdp.as_ref().ok_or_else(
+            || TraderError::config("schizo_mdp needs --mdp-model"),
+        )?))?),
+        "biz_algo" => Box::new(BizAlgo::new(
+            inputs
+                .rule
+                .ok_or_else(|| TraderError::config("biz_algo needs its rule (tuned or --biz-weights)"))?,
+            inputs.biz.clone(),
+            inputs.mdp.clone(),
+        )),
         other => return Err(TraderError::config(format!("unknown persona {other:?}"))),
     })
 }
@@ -217,6 +252,30 @@ pub struct ReportContext {
     /// Minutes of the window per GCP2 zone (in zone order) and minutes without a reading;
     /// `None` without GCP2 history.
     pub gcp2_zone_minutes: Option<(Vec<(String, usize)>, usize)>,
+    /// The older/newer split and the `biz_algo` rule; `None` unless `biz_algo` ran.
+    pub split: Option<SplitReport>,
+}
+
+/// One `biz_algo` weight set tried on the older half.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridRow {
+    pub weights: Weights,
+    pub net_pnl_pct: f64,
+    pub round_trips: usize,
+    pub max_drawdown_pct: f64,
+}
+
+/// The split of a run with `biz_algo`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitReport {
+    /// First step of the newer half.
+    pub mid_ms: i64,
+    pub rule: Rule,
+    /// Every weight set tried on the older half, in grid order; `None` when the weights
+    /// came from `--biz-weights`.
+    pub grid: Option<Vec<GridRow>>,
+    /// One line describing the /biz/ feed history.
+    pub biz: String,
 }
 
 /// Minutes of `[start_ms, end_ms)` per GCP2 zone (zone order) and without a reading.
@@ -250,16 +309,164 @@ pub fn run_personas(
     market: &Market,
     cfg: &Config,
     names: &[&str],
-    mdp: Option<&Arc<Model>>,
+    inputs: &PersonaInputs,
 ) -> Result<Vec<RunResult>> {
     names
         .iter()
-        .map(|name| run(market, cfg, build_persona(name, *cfg, mdp)?))
+        .map(|name| run(market, cfg, build_persona(name, *cfg, inputs)?))
         .collect()
 }
 
+/// First step of the newer half: the window's middle, rounded down to the step grid.
+pub fn split_point(cfg: &Config) -> Result<i64> {
+    let step_ms = cfg.step_minutes * MINUTE_MS;
+    let half = (cfg.end_ms - cfg.start_ms) / 2;
+    let mid = cfg.start_ms + half - half.rem_euclid(step_ms);
+    if mid <= cfg.start_ms || mid >= cfg.end_ms {
+        return Err(TraderError::config(
+            "the window is too short to split into an older and a newer half",
+        ));
+    }
+    Ok(mid)
+}
+
+/// The weight sets `biz_algo` is tuned over: talk and stance −1/0/+1 (0 only without
+/// feeds), momentum 0/1, value 0/1 (0 only without a model), buy at 0.5/1, sell below
+/// −0.5/0.
+pub fn weight_grid(with_biz: bool, with_mdp: bool) -> Vec<Weights> {
+    let signed: &[f64] = if with_biz { &[-1.0, 0.0, 1.0] } else { &[0.0] };
+    let values: &[f64] = if with_mdp { &[0.0, 1.0] } else { &[0.0] };
+    let mut out = Vec::new();
+    for &talk in signed {
+        for &stance in signed {
+            for momentum in [0.0, 1.0] {
+                for &value in values {
+                    for buy_above in [0.5, 1.0] {
+                        for sell_below in [-0.5, 0.0] {
+                            out.push(Weights {
+                                talk,
+                                stance,
+                                momentum,
+                                value,
+                                buy_above,
+                                sell_below,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Run `biz_algo` with every grid weight set on `older`: the highest net % wins, the
+/// first in grid order on ties.
+pub fn tune(
+    market: &Market,
+    older: &Config,
+    inputs: &PersonaInputs,
+    min_posters: u64,
+) -> Result<(Weights, Vec<GridRow>)> {
+    let mut rows = Vec::new();
+    for weights in weight_grid(inputs.biz.is_some(), inputs.mdp.is_some()) {
+        let persona = BizAlgo::new(
+            Rule {
+                weights,
+                min_posters,
+            },
+            inputs.biz.clone(),
+            inputs.mdp.clone(),
+        );
+        let r = run(market, older, Box::new(persona))?;
+        rows.push(GridRow {
+            weights,
+            net_pnl_pct: r.net_pnl_pct,
+            round_trips: r.round_trips,
+            max_drawdown_pct: r.max_drawdown_pct,
+        });
+    }
+    let mut best: Option<&GridRow> = None;
+    for row in &rows {
+        if best.is_none_or(|b| row.net_pnl_pct > b.net_pnl_pct) {
+            best = Some(row);
+        }
+    }
+    let weights = best
+        .map(|row| row.weights)
+        .ok_or_else(|| TraderError::config("empty biz_algo weight grid"))?;
+    Ok((weights, rows))
+}
+
+/// Tune (or take) the `biz_algo` rule on the older half, then run every persona on the
+/// older and the newer half (`<name>@older`, `<name>@newer`).
+fn run_split(
+    market: &Market,
+    cfg: &Config,
+    names: &[&str],
+    inputs: &mut PersonaInputs,
+    args: &PersonaBacktestArgs,
+) -> Result<(Vec<RunResult>, SplitReport)> {
+    let mid_ms = split_point(cfg)?;
+    let older = Config {
+        end_ms: mid_ms,
+        ..*cfg
+    };
+    let newer = Config {
+        start_ms: mid_ms,
+        ..*cfg
+    };
+    let (weights, grid) = match &args.biz_weights {
+        Some(spec) => (Weights::parse(spec).map_err(TraderError::config)?, None),
+        None => {
+            let (weights, rows) = tune(market, &older, inputs, args.biz_min_posters)?;
+            (weights, Some(rows))
+        }
+    };
+    let rule = Rule {
+        weights,
+        min_posters: args.biz_min_posters,
+    };
+    inputs.rule = Some(rule);
+    let mut results = Vec::new();
+    for (label, half) in [("older", older), ("newer", newer)] {
+        for mut r in run_personas(market, &half, names, inputs)? {
+            r.name = format!("{}@{label}", r.name);
+            results.push(r);
+        }
+    }
+    let split = SplitReport {
+        mid_ms,
+        rule,
+        grid,
+        biz: biz_summary(inputs.biz.as_deref(), args.biz_feeds.as_deref()),
+    };
+    Ok((results, split))
+}
+
+fn biz_summary(history: Option<&BizHistory>, dir: Option<&Path>) -> String {
+    let (Some(history), Some(dir)) = (history, dir) else {
+        return "not loaded (no `--biz-feeds`): the talk and stance terms are 0, so `biz_algo` trades on momentum and the value model alone".to_string();
+    };
+    let span = |ms: Option<i64>| ms.map_or_else(|| "none".to_string(), iso);
+    let readers: Vec<&str> = history.readers().iter().map(String::as_str).collect();
+    format!(
+        "`{}`, {} feeds from {} to {}; AI readers {}{}",
+        dir.display(),
+        history.len(),
+        span(history.first_ms()),
+        span(history.last_ms()),
+        readers.join(", "),
+        if readers.len() > 1 {
+            " (mixed: stances from different models or instructions)"
+        } else {
+            ""
+        }
+    )
+}
+
 fn rules(name: &str) -> String {
-    match name {
+    match name.split('@').next().unwrap_or(name) {
         "v13" => format!(
             "rule proxy of the live v13/v14 guidance (not the LLM): liquid top 10; buy when flat, breadth ≥ +15 and 4h market median ≥ +1%: the best 4h coin with positive 1h and 4h, all cash; exit `{V13_EXIT_PLAN}` or sell at breadth ≤ −15"
         ),
@@ -276,6 +483,7 @@ fn rules(name: &str) -> String {
         ),
         "schizo" => "Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only when the GCP2 zone changes between steps (the mood follows GCP2: an unchanged zone keeps it); the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it; no stop-loss".to_string(),
         "schizo_mdp" => format!("Phase 50: `schizo` with the long-term value voice (`bb bot-spot-mdp-fit`, a Markov model of 20-minute steps, fitted before the window) as the strongest voice: a vote sell goes through only when the model values selling above holding, the model sells on its own when it does, and a buy goes through only when its long-term value after the entry cost is above 0 (cash); a buy whose mood has no exit plan (`detached`) runs the live default plan `{V13_EXIT_PLAN}`"),
+        "biz_algo" => "Phase 51, no LLM: the rule-based decider scores each liquid-top coin as w_talk·talk + w_stance·stance + w_momentum·momentum + w_value·value (talk = the /biz/ 6h mention rate over its 24h rate − 1; stance = (bullish − bearish) / tagged of the 6h AI tags with enough posters; momentum = 1h return / 5%, capped; value = the long-term value model's verdict); a held coin scoring below the sell level is sold, and with nothing held the best coin is bought with all cash at or above the buy level; no exit plan".to_string(),
         other => other.to_string(),
     }
 }
@@ -368,6 +576,17 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         LIQUID.len(),
         LIQUID.join(", ")
     );
+    if let Some(split) = &ctx.split {
+        let _ = writeln!(
+            out,
+            "- Split (`biz_algo` selected): the older half {} → {} tunes `biz_algo`, the newer half {} → {} judges it; every persona runs on both halves (`<persona>@older`, `<persona>@newer`), so the step count above is the older half's.",
+            iso(cfg.start_ms),
+            iso(split.mid_ms),
+            iso(split.mid_ms),
+            iso(cfg.end_ms)
+        );
+        let _ = writeln!(out, "- /biz/ feeds: {}.", split.biz);
+    }
     let _ = writeln!(out, "- GCP2: {}.\n", ctx.gcp2);
     let _ = writeln!(out, "## Results\n");
     let _ = writeln!(
@@ -453,6 +672,42 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         }
         let _ = writeln!(out);
     }
+    if let Some(split) = &ctx.split {
+        let _ = writeln!(out, "## `biz_algo` rule\n");
+        let _ = writeln!(
+            out,
+            "- Rule: {}; stances need {} distinct posters in the 6h window.",
+            split.rule.weights, split.rule.min_posters
+        );
+        match &split.grid {
+            None => {
+                let _ = writeln!(
+                    out,
+                    "- Given with `--biz-weights`, not tuned on this window: both halves are out of sample."
+                );
+            }
+            Some(grid) => {
+                let _ = writeln!(
+                    out,
+                    "- Picked on the older half from {} weight sets by net %; judge it by `biz_algo@newer` (the `@older` row is in-sample). Best {} on the older half:\n",
+                    grid.len(),
+                    GRID_ROWS_SHOWN.min(grid.len())
+                );
+                let mut ranked: Vec<&GridRow> = grid.iter().collect();
+                ranked.sort_by(|a, b| b.net_pnl_pct.total_cmp(&a.net_pnl_pct));
+                let _ = writeln!(out, "| Weights | Net % | Round trips | Max drawdown % |");
+                let _ = writeln!(out, "|---|---:|---:|---:|");
+                for row in ranked.into_iter().take(GRID_ROWS_SHOWN) {
+                    let _ = writeln!(
+                        out,
+                        "| {} | {:.2} | {} | {:.2} |",
+                        row.weights, row.net_pnl_pct, row.round_trips, row.max_drawdown_pct
+                    );
+                }
+            }
+        }
+        let _ = writeln!(out);
+    }
     if let Some((zones, unavailable)) = &ctx.gcp2_zone_minutes {
         let total = zones.iter().map(|(_, n)| n).sum::<usize>() + unavailable;
         let pct = |n: usize| {
@@ -508,7 +763,11 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
             "Costs: {round_trip_bps} bps per round trip, against the measured {MEASURED_ROUND_TRIP_BPS} bps of the 40 live trips (deliberately pessimistic)."
         ),
         window_note.to_string(),
-        "No out-of-sample split: the rules were fixed in `LOOP_SCHIZOID.md` before any real-cache run and not tuned on it, but they are tested on this one period only.".to_string(),
+        if ctx.split.is_some() {
+            "Out of sample: `biz_algo`'s weights were picked on the older half only, so its `@newer` row is the honest result; the other personas' rules were fixed before any run. Each half is about half the window: few trades, a small sample.".to_string()
+        } else {
+            "No out-of-sample split: the rules were fixed in `LOOP_SCHIZOID.md` before any real-cache run and not tuned on it, but they are tested on this one period only.".to_string()
+        },
     ] {
         let _ = writeln!(out, "- {line}");
     }
@@ -581,11 +840,25 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
         }
         None => None,
     };
+    let biz = match &args.biz_feeds {
+        Some(dir) => Some(Arc::new(BizHistory::load_dir(dir, args.biz_max_age_minutes)?)),
+        None => None,
+    };
+    let mut inputs = PersonaInputs {
+        mdp,
+        biz,
+        rule: None,
+    };
     let gcp2 = load_gcp2(&args.gcp2_cache_dir)?;
     let gcp2_line = gcp2_summary(gcp2.as_ref(), &args.gcp2_cache_dir);
     let market = Market::load_dir(&args.cache_dir)?.with_gcp2(gcp2);
     check_coverage(&market, start_ms, end_ms)?;
-    let results = run_personas(&market, &cfg, &names, mdp.as_ref())?;
+    let (results, split) = if names.contains(&"biz_algo") {
+        let (results, split) = run_split(&market, &cfg, &names, &mut inputs, args)?;
+        (results, Some(split))
+    } else {
+        (run_personas(&market, &cfg, &names, &inputs)?, None)
+    };
     let zone_minutes = market
         .gcp2()
         .map(|feed| gcp2_zone_minutes(feed, start_ms, end_ms));
@@ -599,6 +872,7 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
         gcp2: gcp2_line,
         stem: stem.clone(),
         gcp2_zone_minutes: zone_minutes,
+        split,
     };
     std::fs::create_dir_all(&args.output_dir)?;
     let mut paths = vec![
@@ -742,7 +1016,63 @@ mod tests {
             output_dir: out.to_path_buf(),
             gcp2_cache_dir: cache.join("no-gcp2"),
             mdp_model: None,
+            biz_feeds: None,
+            biz_max_age_minutes: 90,
+            biz_weights: None,
+            biz_min_posters: 2,
         }
+    }
+
+    /// Hourly /biz/ feeds over the window and the day before it, all about SOL.
+    fn biz_feeds() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for hour in 0..48_i64 {
+            let as_of = T_END - 2 * DAY_MS + hour * 3_600_000;
+            let m6 = 2 + hour % 7;
+            let body = format!(
+                r#"{{"schema":"biz-feed-v1","as_of":"{}","model":"m","prompt_version":"p","coins":{{"SOL":{{"6h":{{"mentions":{m6},"posters":3,"bullish":2.0,"bearish":{}}},"24h":{{"mentions":12,"posters":5,"bullish":3.0,"bearish":1.0}}}}}}}}"#,
+                iso(as_of),
+                hour % 3
+            );
+            std::fs::write(dir.path().join(format!("{hour:02}.json")), body).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn biz_algo_is_tuned_on_the_older_half_and_judged_on_the_newer() {
+        let cache = cache_dir();
+        let feeds = biz_feeds();
+        let out = tempfile::tempdir().unwrap();
+        let mut a = args(cache.path(), out.path());
+        a.personas = names(&["v13", "biz_algo"]);
+        a.biz_feeds = Some(feeds.path().to_path_buf());
+        let (results, paths) = run_backtest(&a).unwrap();
+        assert_eq!(
+            results.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["v13@older", "biz_algo@older", "v13@newer", "biz_algo@newer"]
+        );
+        let md = std::fs::read_to_string(&paths[0]).unwrap();
+        for needle in ["## `biz_algo` rule", "from 72 weight sets", "48 feeds", "biz_algo@newer"] {
+            assert!(md.contains(needle), "missing {needle:?}: {md}");
+        }
+        // Every newer step sees a feed, and never one from after the step.
+        let newer = &results[3];
+        let trace = newer.trace.as_ref().unwrap();
+        assert_eq!(trace.rows.len(), newer.steps);
+        for row in &trace.rows {
+            let cols: Vec<&str> = row.split(',').collect();
+            assert!(!cols[1].is_empty() && cols[1] <= cols[0], "{row}");
+        }
+        assert!(paths.contains(&out.path().join("schizoid_backtest_2026-07-23_biz_algo@newer_trace.csv")));
+
+        // Fixed weights skip the tuning.
+        a.biz_weights = Some("1,1,1,0,0.5,0".into());
+        let (_, paths) = run_backtest(&a).unwrap();
+        let md = std::fs::read_to_string(&paths[0]).unwrap();
+        assert!(md.contains("Given with `--biz-weights`"), "{md}");
+        a.biz_weights = Some("1,1".into());
+        assert!(run_backtest(&a).unwrap_err().to_string().contains("need 6 numbers"));
     }
 
     #[test]

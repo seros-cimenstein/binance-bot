@@ -138,10 +138,19 @@ pub fn eli5(row: &AuditRow) -> String {
     }
 }
 
+/// Who decided the row, in words (rows before Phase 51 carry no `decider` and were the LLM's).
+pub fn decider_label(decider: &str) -> &'static str {
+    match decider {
+        "algo" => "rule-based algorithm (no LLM)",
+        _ => "LLM",
+    }
+}
+
 fn lines(row: &AuditRow, explain: bool, reason_chars: usize, include_why: bool) -> Vec<String> {
     let mut lines = vec![
         "<b>BOT SPOT BRAIN</b>".to_owned(),
         format!("Status: {}", code(row.status.as_str())),
+        format!("Decider: {}", code(decider_label(&row.decider))),
         format!("Action: {}", code(&row.decision.action)),
         format!("Route: {}", code(&route_label(row))),
     ];
@@ -426,6 +435,16 @@ mod tests {
         );
         assert!(message.contains("Route: <code>USDT-&gt;ETH (USDT-&gt;ETH:abc)</code>"));
         assert!(message.contains("Audit: <code>data/bot-spot-decisions.jsonl</code>"));
+    }
+
+    #[test]
+    fn alert_names_the_decider() {
+        let mut planned = row(RowStatus::Planned, rebalance("score"));
+        let llm = format_messages(&planned, true, 0).join("\n");
+        assert!(llm.contains("Decider: <code>LLM</code>"), "{llm}");
+        planned.decider = "algo".into();
+        let algo = format_messages(&planned, true, 0).join("\n");
+        assert!(algo.contains("Decider: <code>rule-based algorithm (no LLM)</code>"), "{algo}");
     }
 
     #[test]

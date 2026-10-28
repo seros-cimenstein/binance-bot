@@ -2087,6 +2087,7 @@ mod tests {
             gcp2: None,
             schizo: None,
             mdp: None,
+            biz: None,
         };
         let last = LastCycle {
             cycle_id: "c0".into(),
@@ -2161,6 +2162,7 @@ mod tests {
             gcp2: None,
             schizo: None,
             mdp: None,
+            biz: None,
         };
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
         for i in 0..8 {
@@ -2259,6 +2261,7 @@ mod tests {
             gcp2: Some(gcp2),
             schizo: Some(schizo),
             mdp: None,
+            biz: None,
         }
     }
 
@@ -2473,6 +2476,7 @@ mod tests {
             gcp2: None,
             schizo: None,
             mdp: None,
+            biz: None,
         };
         let prompt = cycle_prompt(&config, CycleMode::PlanOnly, 1, "c1", &context, None, &[]);
         assert!(prompt.contains("- by hold time (all time): <30m: 11 trips, 2 wins (18%), net -0.594 USDT | 30-60m: 9 trips, 3 wins (33%), net 0.017 USDT | >=60m: 10 trips, 7 wins (70%), net 0.692 USDT"));
