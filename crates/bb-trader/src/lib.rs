@@ -14,7 +14,7 @@
 //! - [`context`]: decision context, `context_hash`, `route_id`.
 //! - [`tools`]: omp host tools. [`agent`]: omp session lifecycle and prompts.
 //! - [`executor`]: live route execution. [`audit`]: rows, halt, review marker.
-//! - [`alerts`]: Telegram ELI5. [`journal`]: notebook + agent state.
+//! - [`journal`]: notebook + agent state.
 //! - [`exit_plan`]: the Phase 45 sell-plan menu. [`exit_replay`]: its historical replay.
 //!   [`exit_book`]: plans set by `set_exit_plan`. [`exit_watch`]: the paper watcher.
 //!   [`exit_guard`]: live exit plans inside the trader daemon.
@@ -35,7 +35,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod agent;
-pub mod alerts;
 pub mod audit;
 pub mod biz;
 pub mod book;

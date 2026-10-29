@@ -271,18 +271,14 @@ version = "0.2.0"
 dependencies = [
  "chrono",
  "dotenvy",
- "html-escape",
- "reqwest",
  "rust_decimal",
  "rust_decimal_macros",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
- "tokio",
  "tracing",
  "tracing-subscriber",
- "wiremock",
 ]
 
 [[package]]
@@ -380,7 +376,6 @@ dependencies = [
  "clap",
  "futures",
  "hex",
- "html-escape",
  "parking_lot",
  "pretty_assertions",
  "reqwest",
@@ -1086,12 +1081,6 @@ checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest",
 ]
-
-[[package]]
-name = "html-escape"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9356095b4b41197bba32173600e1582792cda618f65d12f68e2e77d273413c5"
 
 [[package]]
 name = "http"

@@ -1,6 +1,6 @@
 [package]
 name = "bb-core"
-description = "Shared foundation: env config, money, audit JSONL, Telegram alerts, file safety, logging."
+description = "Shared foundation: env config, money, audit JSONL, file safety, logging."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-tokio.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rust_decimal.workspace = true
@@ -20,9 +18,7 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 dotenvy.workspace = true
-html-escape.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-wiremock.workspace = true
 rust_decimal_macros.workspace = true

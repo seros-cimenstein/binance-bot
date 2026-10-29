@@ -72,7 +72,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
-html-escape = "0.2"
 
 # testing
 tempfile = "3"

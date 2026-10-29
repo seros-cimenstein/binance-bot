@@ -14,7 +14,7 @@ Polymarket, airdrop, funding arb, trend filter, mean reversion) were moved to
 
 | Crate | Purpose |
 |---|---|
-| `bb-core` | env config, `Decimal` money helpers, fsync'd JSONL audit, Telegram alerts (persisted 429 cooldown), run locks, stop files |
+| `bb-core` | env config, `Decimal` money helpers, fsync'd JSONL audit, run locks, stop files |
 | `bb-binance` | native Binance Spot REST client: HMAC/Ed25519 signing, time sync, rate-limit tracking, exchange rules, spot market data and orders, wallet balance totals, klines history |
 | `bb-omp` | omp RPC client (LLM sessions with persistent context + host tools) |
 | `bb-trader` | `bot-spot`: the agentic Spot trader, exit plans, persona backtests, the Markov value model, the rule-based decider |
@@ -133,9 +133,10 @@ The bot trades the Spot wallet through omp (the oh-my-pi coding agent, npm
   - a failed-route halt, cleared only by `bb bot-spot --mark-failed-route-reviewed`;
   - operator scope (allow/block lists, blocked quotes, fiat blocking);
   - Spot MARKET orders only, at most `BOT_SPOT_MAX_ROUTE_LEGS` legs.
-- **Audit.** Each route or cycle is one fsync'd row in `BOT_SPOT_AUDIT_PATH`,
-  written before any Telegram alert. It uses the Python schema plus agent
-  fields: tool calls, tokens and cost.
+- **Audit.** Each route or cycle is one fsync'd row in `BOT_SPOT_AUDIT_PATH`.
+  It uses the Python schema plus agent fields: tool calls, tokens and cost.
+  There are no Telegram or phone alerts (operator decision 2026-10-29); watch
+  the dashboard and the audit log.
 
 ```bash
 bb bot-spot --evidence-only                 # decision context, no LLM call, no orders
@@ -206,10 +207,10 @@ exist) or already recorded `end_cycle`; a failed compaction also moves to the
 next model. After `BOT_SPOT_FALLBACK_COOLDOWN_SECONDS` (1800) the next
 cycle returns to the primary, compacting first if the context exceeds the
 primary's window threshold. Cycle rows record the model that produced the
-outcome, the failed `attempts` and `fallback_active`. Telegram gets one
-message per switch to a fallback (also when omp switched by itself), one when
-back on the primary, and one when `BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3)
-consecutive cycles failed on every model (counter persisted in the agent state
+outcome, the failed `attempts` and `fallback_active`. Switches to a fallback
+and back are logged as warnings, and an error is logged when
+`BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3) consecutive cycles failed on every
+model (counter persisted in the agent state
 file).
 
 omp needs model credentials: either `ANTHROPIC_API_KEY`, or a one-time

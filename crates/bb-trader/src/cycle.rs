@@ -14,8 +14,7 @@ use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::agent::{TraderAgent, cycle_prompt};
-use crate::alerts::{Alerter, BRAIN_UNAVAILABLE};
+use crate::agent::{BRAIN_UNAVAILABLE, TraderAgent, cycle_prompt};
 use crate::audit::{
     AgentRecord, AttemptEntry, AuditLog, AuditRow, Decision, EndCycle, RowStatus, RowType,
     ToolCallEntry, UsageEntry, failed_route_halt,
@@ -96,8 +95,6 @@ pub struct CycleState {
     pub end_cycle: Option<EndCycle>,
     /// Set when a live route failed: no further routes this cycle.
     pub halted: Option<String>,
-    /// Route ids whose Telegram alert was delivered (alerts follow the durable write).
-    pub telegram_sent_routes: Vec<String>,
     /// Algo cycles (Phase 51): the rule's verdict, recorded on the cycle summary.
     pub algo: Option<Value>,
 }
@@ -120,7 +117,6 @@ pub struct Runtime {
     pub mode: CycleMode,
     pub client: BinanceClient,
     pub audit: AuditLog,
-    pub alerter: Alerter,
     pub journal: Journal,
     pub evidence: EvidenceService,
     pub social: Option<SocialSettings>,
@@ -139,7 +135,6 @@ impl Runtime {
         config: Arc<TraderConfig>,
         mode: CycleMode,
         client: BinanceClient,
-        alerter: Alerter,
         social: Option<SocialSettings>,
     ) -> Self {
         let evidence = EvidenceService::new(
@@ -153,7 +148,6 @@ impl Runtime {
             evidence,
             mode,
             client,
-            alerter,
             social,
             gcp2: config.gcp2_enabled.then(|| {
                 crate::gcp2::Gcp2LiveReader::new(&config.gcp2_base_url, crate::gcp2::LIVE_TIMEOUT)
@@ -697,7 +691,6 @@ impl Runtime {
             executions: Vec::new(),
             end_cycle: None,
             halted: None,
-            telegram_sent_routes: Vec::new(),
             algo: None,
         });
         context
@@ -753,7 +746,6 @@ impl Runtime {
             attempts: report.attempts.clone(),
             fallback_active: report.fallback_active,
         });
-        row.telegram_sent_routes = Some(state.telegram_sent_routes.clone());
         row.run_config = self.run_config.get().cloned();
         row.schizo = match &state.context.schizo {
             Some(schizo) => Some(serde_json::to_value(schizo)?),
@@ -768,9 +760,6 @@ impl Runtime {
             None => None,
         };
         row.algo = state.algo.clone();
-        let route_alerts = state.executions.len();
-        row.telegram_sent = route_alerts > 0 && state.telegram_sent_routes.len() == route_alerts;
-        // Durable first; the cycle's own alert (only when no route alerted) follows the write.
         self.audit.append(&row)?;
         // The mood the audit row records is the one the next cycle starts from.
         if let Some(schizo) = &state.context.schizo {
@@ -778,10 +767,6 @@ impl Runtime {
             if let Err(error) = schizo.memory.save(&path) {
                 tracing::error!(%error, path = %path.display(), "schizo memory not saved; the next cycle starts from the previous one");
             }
-        }
-        if route_alerts == 0 || report.error.is_some() {
-            let sent = self.alerter.send(&row).await;
-            row.telegram_sent = sent && (route_alerts == 0 || row.telegram_sent);
         }
         Ok((row, state.executions))
     }
@@ -813,15 +798,12 @@ impl Runtime {
             fallback_active: false,
         });
         row.run_config = self.run_config.get().cloned();
-        // Durable first: the halt / cost-cap record must survive a crash during the alert.
         self.audit.append(&row)?;
-        row.telegram_sent = self.alerter.send(&row).await;
         Ok(row)
     }
 
-    /// Durably append a route row, then alert. The row is on disk (fsync'd) before any
-    /// Telegram call, so a crash during the alert never loses a failed-route halt marker.
-    /// Delivery is recorded on the cycle summary (`telegram_sent_routes`).
+    /// Durably append (fsync'd) a route row, so a crash right after never loses a
+    /// failed-route halt marker.
     async fn write_route_row(&self, state: &mut CycleState, mut row: AuditRow) -> Result<AuditRow> {
         row.context_hash = state.context_hash.clone();
         row.candidate_route_count = state.context.candidate_routes.len();
@@ -833,12 +815,6 @@ impl Runtime {
             status: row.status.as_str().into(),
             error: row.error.clone(),
         });
-        row.telegram_sent = self.alerter.send(&row).await;
-        if row.telegram_sent {
-            state
-                .telegram_sent_routes
-                .push(row.decision.route_id.clone());
-        }
         Ok(row)
     }
 
@@ -1129,7 +1105,7 @@ impl Runtime {
     }
 
     /// The order half of [`Self::exit_sell`] on a given market view and balances. Every
-    /// executor run is one durable route row (`cycle_id` `exit-plan`) before its alert.
+    /// executor run is one durable route row (`cycle_id` `exit-plan`).
     pub(crate) async fn sell_into_usdt(
         &self,
         view: &MarketView,
@@ -1206,7 +1182,6 @@ impl Runtime {
                 submission_attempted: true,
             });
         }
-        row.telegram_sent = self.alerter.send(&row).await;
         result
     }
 }
@@ -1448,7 +1423,9 @@ impl Trader {
         let agent = self.agent().await?;
         agent.prepare_cycle().await;
         let report = agent.run_turn(&prompt, shutdown).await;
-        let notices = agent.take_notices();
+        for notice in agent.take_notices() {
+            tracing::warn!(%notice, "trader model notice");
+        }
         if shutdown.is_cancelled() {
             runtime.begin_shutdown();
         }
@@ -1471,23 +1448,12 @@ impl Trader {
         if let Err(error) = state.save(&config.state_path) {
             tracing::warn!(%error, "agent state not saved");
         }
-        // Observability only, after the durable audit row: model switches and brain outages.
-        for notice in &notices {
-            runtime.alerter.send_notice(notice).await;
-        }
         if brain_down {
             tracing::error!(
                 cycles = state.brain_down_cycles,
-                "trader brain unavailable on every model"
+                error = %summary.error,
+                "{BRAIN_UNAVAILABLE}; no orders are being placed"
             );
-            runtime
-                .alerter
-                .send_notice(&format!(
-                    "{BRAIN_UNAVAILABLE} for {} consecutive cycles; no orders are being placed. Last error: {}",
-                    state.brain_down_cycles,
-                    summary.error
-                ))
-                .await;
         }
         let failed = summary.status == RowStatus::Failed && runtime.mode == CycleMode::Live;
         Ok(CycleOutcome { summary, failed })
@@ -1594,15 +1560,6 @@ mod tests {
     }
 
     async fn runtime(server: &MockServer, config: TraderConfig, mode: CycleMode) -> Arc<Runtime> {
-        runtime_with(server, config, mode, Alerter::new(None, true, 0)).await
-    }
-
-    async fn runtime_with(
-        server: &MockServer,
-        config: TraderConfig,
-        mode: CycleMode,
-        alerter: Alerter,
-    ) -> Arc<Runtime> {
         let client = BinanceClient::new(
             bb_binance::BinanceConfig::new(false)
                 .with_credentials(bb_binance::Credentials::new("key", "secret").unwrap())
@@ -1615,7 +1572,6 @@ mod tests {
             Arc::clone(&config),
             mode,
             client,
-            alerter,
             None,
         ));
         let view = Arc::new(view(&config));
@@ -2127,28 +2083,8 @@ mod tests {
         assert_eq!(book.plans.keys().collect::<Vec<_>>(), ["SOL"]);
     }
 
-    /// Alert sink that snapshots the audit file at the moment it is invoked.
-    #[derive(Debug)]
-    struct AuditSnooper {
-        audit: std::path::PathBuf,
-        seen: parking_lot::Mutex<Vec<Vec<Value>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl crate::alerts::AlertSink for AuditSnooper {
-        async fn send(&self, _html: &str) -> bool {
-            let rows = std::fs::read_to_string(&self.audit)
-                .unwrap_or_default()
-                .lines()
-                .map(|line| serde_json::from_str(line).unwrap())
-                .collect();
-            self.seen.lock().push(rows);
-            true
-        }
-    }
-
     #[tokio::test]
-    async fn failed_live_route_is_durable_before_the_alert_is_sent() {
+    async fn a_failed_live_route_is_on_disk_and_halts_before_execute_route_returns() {
         let server = MockServer::start().await;
         let account = json!({"canTrade": true, "balances": [{"asset": "USDT", "free": "100", "locked": "0"}]});
         for (verb, route, response) in [
@@ -2192,16 +2128,7 @@ mod tests {
                 ("CONFIRM_LIVE_TRADING", "yes"),
             ],
         );
-        let snooper = Arc::new(AuditSnooper {
-            audit: dir.path().join("audit.jsonl"),
-            seen: parking_lot::Mutex::new(Vec::new()),
-        });
-        let alerter = Alerter::new(
-            Some(Arc::clone(&snooper) as Arc<dyn crate::alerts::AlertSink>),
-            true,
-            0,
-        );
-        let runtime = runtime_with(&server, config, CycleMode::Live, alerter).await;
+        let runtime = runtime(&server, config, CycleMode::Live).await;
         let route_id = first_route(&runtime, "SOL").await;
 
         let error = runtime
@@ -2209,14 +2136,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.contains("order failed for ETH/USDT"), "{error}");
-        let seen = snooper.seen.lock().clone();
-        assert_eq!(seen.len(), 1, "one alert for the failed route");
-        let on_disk = seen[0]
-            .last()
-            .expect("failed row already on disk when the alert ran");
+        // The row is fsync'd before execute_route returns: read the file, not the runtime.
+        let rows = audit_rows(dir.path());
+        let on_disk = rows.last().expect("failed row on disk");
         assert_eq!(on_disk["status"], "failed");
         assert_eq!(on_disk["submission_attempted"], true);
-        assert_eq!(on_disk["telegram_sent"], false);
         assert_eq!(
             on_disk["audit_path"],
             json!(dir.path().join("audit.jsonl").display().to_string())
@@ -2226,19 +2150,14 @@ mod tests {
             "halt marker is durable"
         );
 
+        // A second route in the same cycle is refused without another order call.
+        let orders = order_calls(&server).await;
+        let again = runtime.execute_route(&route_id, "again", None).await.unwrap_err();
+        assert!(again.contains("halted"), "{again}");
+        assert_eq!(order_calls(&server).await, orders);
+
         let (summary, _) = runtime.finish_cycle(&TurnReport::default()).await.unwrap();
         assert_eq!(summary.status, RowStatus::Failed);
-        let rows = audit_rows(dir.path());
-        assert_eq!(
-            rows.last().unwrap()["telegram_sent_routes"],
-            json!([route_id])
-        );
-        assert_eq!(rows.last().unwrap()["telegram_sent"], true);
-        assert_eq!(
-            snooper.seen.lock().len(),
-            1,
-            "no extra cycle alert after a route alert"
-        );
     }
 
     fn live_pairs() -> [(&'static str, &'static str); 5] {
@@ -2380,7 +2299,6 @@ mod tests {
         };
         let (summary, _) = runtime.finish_cycle(&report).await.unwrap();
         assert_eq!(summary.status, RowStatus::Held);
-        assert!(crate::alerts::eli5(&summary).contains("unavailable on every configured model"));
         runtime
             .record_skipped("cycle-2", RowStatus::Held, "halt", "")
             .await

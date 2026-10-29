@@ -15,7 +15,6 @@ use bb_omp::{
 use rust_decimal::Decimal;
 use serde_json::Value;
 
-use crate::alerts::BRAIN_UNAVAILABLE;
 use crate::audit::{AttemptEntry, ToolCallEntry, UsageEntry};
 use crate::config::{ModelSpec, TraderConfig};
 use crate::context::{DecisionContext, MISSION, execution_invariants};
@@ -23,6 +22,9 @@ use crate::cycle::{CycleMode, TurnReport};
 use crate::error::{Result, TraderError};
 use crate::journal::{JournalEntry, LastCycle};
 use crate::tools::tool_definitions;
+
+/// Marker of a cycle turn that failed on every configured model (no orders were placed).
+pub const BRAIN_UNAVAILABLE: &str = "brain unavailable on all models";
 
 /// The only order path; a failed turn that called it is never retried on another model.
 const ROUTE_TOOL: &str = "execute_route";

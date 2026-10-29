@@ -221,8 +221,8 @@ primary per-attempt timeout while fallbacks exist),
 `BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3, 0 = never). A failed turn is retried
 on the next model only when the failed attempt made no `execute_route` call
 and recorded no `end_cycle`; a failed compaction moves to the next model and
-compacts there. Model switches and brain outages are Telegram notices sent
-after the cycle's audit row; they change nothing in the hard-safety list
+compacts there. Model switches and brain outages are logged (warning,
+error) after the cycle's audit row; they change nothing in the hard-safety list
 below. A turn that failed on every model holds with
 `brain unavailable on all models (no orders placed)` as its reason.
 
@@ -249,8 +249,8 @@ below. A turn that failed on every model holds with
 - Margin, futures, transfer, withdrawal, and prediction writes are unavailable.
 
 Each route or cycle is one fsync'd row in `BOT_SPOT_AUDIT_PATH` (default
-`data/bot-spot-decisions.jsonl`), written before any Telegram alert, with
-tool calls, tokens and cost.
+`data/bot-spot-decisions.jsonl`), with tool calls, tokens and cost. There
+are no Telegram or phone alerts (operator decision 2026-10-29).
 
 ### Commands
 
@@ -299,7 +299,7 @@ and sell fees at the trip's fee rate), so it cannot sell a fee-negative
   between cycles `bot-spot` checks each planned position's bid every
   `BOT_SPOT_EXIT_POLL_SECONDS` (5) and sells it into USDT when its plan
   fires, through the same hard safety as the bot's routes. Each sell is a
-  route row with `cycle_id` `exit-plan` in the audit and a Telegram alert;
+  route row with `cycle_id` `exit-plan` in the audit;
   the watch log records `would_sell`, `sold`, `sell_failed` and
   `sell_abandoned`. The emergency stop file stops these sells too. To turn
   live plans off, set `BOT_SPOT_EXIT_PLANS_LIVE=false` and recreate
@@ -493,8 +493,8 @@ is left out of that cycle.
 - **Records.** Every audit row has `decider` (`llm` or `algo`); algo cycle
   summaries add `algo` (rule, best candidate and score, held coins and
   scores, orders), `agent.model` `rule-based decider`, cost 0, and
-  `session_id` `algo`. Telegram alerts carry a `Decider:` line; the Bot tab's
-  cycle details show the decider and the rule's scores.
+  `session_id` `algo`. The Bot tab's cycle details show the decider and the
+  rule's scores.
 - **Practice run.** `docker compose --profile algo-paper up -d
   bot-spot-algo-paper` runs it plan-only next to the live trader with its own
   files (`bot-spot-algo-paper-{decisions.jsonl,journal.jsonl,state.json}`,

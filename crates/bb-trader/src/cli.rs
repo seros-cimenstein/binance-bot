@@ -9,7 +9,6 @@ use bb_omp::CancellationToken;
 use bb_social::SocialSettings;
 use serde_json::json;
 
-use crate::alerts::Alerter;
 use crate::audit::{DEFAULT_REVIEW_REASON, mark_failed_route_reviewed};
 use crate::config::TraderConfig;
 use crate::cycle::{CycleMode, Runtime, Trader};
@@ -163,18 +162,10 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
         config.check_live_arming()?;
     }
     let social = SocialSettings::from_env()?;
-    let alerter = Alerter::new(
-        bb_core::telegram::Telegram::from_env()
-            .filter(|_| !args.evidence_only)
-            .map(|telegram| Arc::new(telegram) as Arc<dyn crate::alerts::AlertSink>),
-        config.telegram_explain,
-        config.telegram_reason_chars,
-    );
     let runtime = Arc::new(Runtime::new(
         Arc::clone(&config),
         mode,
         binance_client(&config)?,
-        alerter,
         Some(social),
     ));
     let _ = runtime

@@ -196,11 +196,6 @@ pub struct AuditRow {
     pub error: String,
     pub audit_path: String,
     /// Route rows: always `false` on disk (the alert is sent after the durable write).
-    /// Cycle summaries: every route alert of the cycle was delivered.
-    pub telegram_sent: bool,
-    /// Cycle summaries only: route ids whose alert was delivered.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub telegram_sent_routes: Option<Vec<String>>,
     pub row_type: RowType,
     pub cycle_id: String,
     pub session_id: String,
@@ -253,8 +248,6 @@ impl AuditRow {
             submission_attempted: false,
             error: String::new(),
             audit_path: config.audit_path.display().to_string(),
-            telegram_sent: false,
-            telegram_sent_routes: None,
             row_type,
             cycle_id: String::new(),
             session_id: String::new(),

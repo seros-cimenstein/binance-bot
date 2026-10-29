@@ -44,9 +44,9 @@ pub const DEFAULT_STATE_PATH: &str = "data/bot-spot-agent-state.json";
 /// Default `BOT_SPOT_STOP_PATH`.
 pub const DEFAULT_STOP_PATH: &str = "data/bot-spot.stop";
 
-/// Guardrail variables of the Python trader that no longer exist. Setting them has no
-/// effect; [`TraderConfig::from_lookup`] reports them once.
-pub const REMOVED_VARS: [&str; 14] = [
+/// Settings that no longer exist (Python-era guardrails; Phase 52 removals). Setting them
+/// has no effect; [`TraderConfig::from_lookup`] reports them once.
+pub const REMOVED_VARS: &[&str] = &[
     "BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS",
     "BOT_SPOT_REQUIRE_MARKET_EVIDENCE_FOR_LIVE",
     "BOT_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS",
@@ -62,6 +62,12 @@ pub const REMOVED_VARS: [&str; 14] = [
     "BOT_SPOT_MAX_BUDGET_USD",
     // The failed-route halt is hard safety now: always on, cleared only by operator review.
     "BOT_SPOT_HALT_AFTER_FAILED_SUBMISSION",
+    // Phase 52 (operator 2026-10-29): no Telegram or phone alerts.
+    "BOT_SPOT_TELEGRAM_EXPLAIN",
+    "BOT_SPOT_TELEGRAM_REASON_CHARS",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_COOLDOWN_PATH",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -233,9 +239,6 @@ pub struct TraderConfig {
     pub exit_paths: crate::exit_book::ExitPaths,
     /// Phase 45 exit plans: live or paper, default plan, poll interval.
     pub exit: crate::exit_book::ExitSettings,
-    // telegram
-    pub telegram_explain: bool,
-    pub telegram_reason_chars: usize,
     // universe / routing
     pub max_route_legs: usize,
     pub max_route_expansions: usize,
@@ -294,7 +297,7 @@ impl TraderConfig {
         if !removed.is_empty() {
             tracing::warn!(
                 vars = %removed.join(","),
-                "ignoring removed Bot Spot guardrail settings (the bot sees costs and evidence as information)"
+                "ignoring removed Bot Spot settings"
             );
         }
         let api_key = env
@@ -400,8 +403,6 @@ impl TraderConfig {
             stop_path: env.path("BOT_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
             exit_paths: crate::exit_book::ExitPaths::from_lookup(|name| env.raw(name)),
             exit,
-            telegram_explain: env.boolean("BOT_SPOT_TELEGRAM_EXPLAIN", true)?,
-            telegram_reason_chars: env.integer("BOT_SPOT_TELEGRAM_REASON_CHARS", 0)?,
             max_route_legs: env.integer("BOT_SPOT_MAX_ROUTE_LEGS", 3)?,
             max_route_expansions: env.integer("BOT_SPOT_MAX_ROUTE_EXPANSIONS", 10_000)?,
             max_candidate_routes: env.integer("BOT_SPOT_MAX_CANDIDATE_ROUTES", 1)?,
