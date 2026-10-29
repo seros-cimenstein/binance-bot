@@ -220,9 +220,15 @@ live arming variables in `.env` and the stop file.
 ### /biz/ feed (Phase 51)
 
 biz-app (`~/projects/automation/imageboards/biz-app`, on the laptop) writes
-the /biz/ feed `biz-feed-v1`: per coin and per window (1h, 6h, 24h) the
-mentions over every post, the distinct posters, and its AI's bullish and
-bearish tags weighted by post score. `scripts/biz_feed_to_pi.sh` copies it to
+the /biz/ feed `biz-feed-v1` with `uv run --directory
+biz-app/biz_insights biz-insights feed` (`--at <UTC>` for a past moment): per
+Binance spot coin and per window (1h, 6h, 24h) the posts naming it (no AI),
+the distinct posters among them (a lower bound: /biz/ shows poster IDs only on
+some posts), and its AI's bullish and bearish tags on every post, weighted by
+the post's 1-3 score. `as_of` is the scraper's last fetch, so a stopped
+scraper makes the feed go stale. The real output of 2026-10-25T13:00Z is the
+test fixture `crates/bb-trader/tests/fixtures/biz-feed-v1.json`.
+`scripts/biz_feed_to_pi.sh` copies it to
 `~/binance-bot/docker-data/biz-feed.json` on the Pi every 5 minutes
 (`--once` for one copy; `PI_HOST`, `PI_DATA_DIR`, `BIZ_FEED`,
 `COPY_SECONDS`). The trader reads `BOT_SPOT_BIZ_FEED_PATH` (default

@@ -218,4 +218,18 @@ mod tests {
         assert_eq!(value["status"], "unavailable");
         assert!(value["reason"].as_str().unwrap().contains("/nonexistent/biz-feed.json"));
     }
+
+    #[test]
+    fn a_real_biz_app_feed_parses_with_its_extra_fields() {
+        // `biz-insights feed --at 2026-10-25T13:00:00Z` on the real archive (biz-app `feed.py`).
+        let text = include_str!("../tests/fixtures/biz-feed-v1.json");
+        let raw = parse_raw(text).unwrap();
+        assert_eq!(raw.as_of_ms, 1_792_933_200_000);
+        assert_eq!(raw.prompt_version, "stance-1");
+        let btc = raw.coins["BTC"];
+        assert_eq!((btc.h24.mentions, btc.h24.posters), (34, 32));
+        assert!(btc.h6.mentions <= btc.h24.mentions && btc.h1.mentions <= btc.h6.mentions);
+        let feed = parse(text, raw.as_of_ms + 10 * 60_000, 45, |c| c != "QNT").unwrap();
+        assert!(feed.coins.contains_key("XRP") && feed.dropped == ["QNT"]);
+    }
 }
