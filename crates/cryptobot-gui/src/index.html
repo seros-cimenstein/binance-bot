@@ -123,11 +123,6 @@
   .bar-track { width: 80px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; flex: none; }
   .bar-fill { height: 100%; border-radius: 3px; background: var(--accent); }
   .bar-fill.pos { background: var(--pos); } .bar-fill.neg { background: var(--neg); }
-  .mood-gauge { display: flex; justify-content: center; }
-  .mood-rows { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 7px 10px; align-items: center; font-size: 12px; margin-top: 10px; }
-  .mood-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
-  .mood-bar i { display: block; height: 100%; }
-  .mood-bar .up { background: var(--pos); } .mood-bar .flat { background: var(--faint); opacity: .45; } .mood-bar .down { background: var(--neg); }
 
   .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
   .empty b { display: block; color: var(--fg); font-weight: 600; margin-bottom: 2px; }
@@ -138,9 +133,6 @@
   .chart .grid-line { stroke: var(--border); stroke-dasharray: 2 4; }
   .chart .zero { stroke: var(--faint); }
   .chart .axis { fill: var(--faint); font-size: 11px; }
-  .chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-  .chart .line.pos { stroke: var(--pos); } .chart .line.neg { stroke: var(--neg); }
-  .chart .area.pos { fill: var(--pos-soft); } .chart .area.neg { fill: var(--neg-soft); }
   .chart .dot { stroke: var(--surface); stroke-width: 1.5; fill: var(--faint); }
   .chart .dot.pos { fill: var(--pos); } .chart .dot.neg { fill: var(--neg); } .chart .dot.accent { fill: var(--accent); }
   .chart .coin-tag { fill: var(--muted); font-size: 10px; font-weight: 600; pointer-events: none; }
@@ -162,7 +154,6 @@
   .chart .bar.accent { fill: var(--accent); }
   .chart .bar:hover { opacity: .8; }
   .chart .guide { stroke: var(--faint); stroke-dasharray: 3 3; }
-  .chart .line.accent { stroke: var(--accent); }
 
   .donut { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: center; }
   .donut svg circle.seg-arc { transition: stroke-width .15s; cursor: default; }
@@ -261,7 +252,7 @@
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
 const TABS = ["overview", "history", "wallet", "bot", "biz"];
-const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", market: "/api/market" };
+const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
@@ -442,56 +433,6 @@ function frame(svg, W, H, P, ticks, Y, fmt) {
     svg.append(sv("line", { x1: P.l, x2: W - P.r, y1: Y(t), y2: Y(t), class: t === 0 ? "zero" : "grid-line" }));
     svg.append(sv("text", { x: P.l - 8, y: Y(t) + 4, class: "axis", "text-anchor": "end" }, label(t)));
   }
-}
-let clipSeq = 0;
-// Points are evenly spaced; x labels mark each new point `label` (its day), kept apart.
-function lineChart(points, opts = {}) {
-  const host = el("div", { class: "chart" });
-  host.draw = (W) => {
-    const H = opts.height || 240, P = { l: opts.left || 62, r: 14, t: 12, b: 26 };
-    const iw = Math.max(20, W - P.l - P.r), ih = H - P.t - P.b;
-    const ys = points.map((p) => p.y);
-    const { lo, hi, ticks } = opts.scale || niceTicks(Math.min(0, ...ys), Math.max(0, ...ys));
-    const n = points.length;
-    const X = (i) => P.l + (n === 1 ? iw / 2 : (i * iw) / (n - 1));
-    const Y = (v) => P.t + ((hi - v) / (hi - lo)) * ih;
-    const svg = sv("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
-    frame(svg, W, H, P, ticks, Y, opts.fmt);
-    const id = "clip" + ++clipSeq, zero = Y(0);
-    svg.append(sv("defs", null,
-      sv("clipPath", { id: id + "p" }, sv("rect", { x: 0, y: 0, width: W, height: zero })),
-      sv("clipPath", { id: id + "n" }, sv("rect", { x: 0, y: zero, width: W, height: Math.max(0, H - zero) }))));
-    const pts = points.map((p, i) => X(i).toFixed(1) + "," + Y(p.y).toFixed(1));
-    const path = pts.join(" L");
-    const line = "M" + path;
-    const area = `M${X(0).toFixed(1)},${zero.toFixed(1)} L${path} L${X(n - 1).toFixed(1)},${zero.toFixed(1)} Z`;
-    for (const [clip, cls] of [[id + "p", "pos"], [id + "n", "neg"]]) {
-      svg.append(sv("g", { "clip-path": `url(#${clip})` }, sv("path", { d: area, class: "area " + cls }), sv("path", { d: line, class: "line " + cls })));
-    }
-    const r = n > 60 ? 2 : 3.5;
-    if (opts.dots !== false) points.forEach((p, i) => svg.append(sv("circle", { cx: X(i), cy: Y(p.y), r, class: "dot " + (p.tone || "") })));
-    let lastX = -Infinity, lastLabel = null;
-    points.forEach((p, i) => {
-      const x = X(i);
-      if (!p.label || p.label === lastLabel || x - lastX < 56) return;
-      svg.append(sv("text", { x, y: H - 6, class: "axis", "text-anchor": n === 1 ? "middle" : i === 0 ? "start" : W - P.r - x < 24 ? "end" : "middle" }, p.label));
-      lastX = x; lastLabel = p.label;
-    });
-    const guide = sv("line", { y1: P.t, y2: P.t + ih, class: "guide", visibility: "hidden" });
-    svg.append(guide);
-    const hit = sv("rect", { x: P.l - 6, y: P.t, width: iw + 12, height: ih, fill: "transparent" });
-    hit.addEventListener("mousemove", (e) => {
-      const mx = e.clientX - svg.getBoundingClientRect().left;
-      let i = 0;
-      for (let k = 1; k < n; k++) if (Math.abs(X(k) - mx) < Math.abs(X(i) - mx)) i = k;
-      guide.setAttribute("x1", X(i)); guide.setAttribute("x2", X(i)); guide.setAttribute("visibility", "visible");
-      showTip(e, points[i].tip);
-    });
-    hit.addEventListener("mouseleave", () => { guide.setAttribute("visibility", "hidden"); hideTip(); });
-    svg.append(hit);
-    host.replaceChildren(svg);
-  };
-  return host;
 }
 // Time-axis ticks on round local hours/days, at most `max` of them.
 function timeTicks(t0, t1, max) {
@@ -857,62 +798,8 @@ function overviewPage() {
     : botEmpty("No trades yet", "Trades appear here as soon as the bot executes one."), { flush: recent.length > 0,
     action: el("a", { href: "#history", class: "small", style: "color:var(--accent);text-decoration:none" }, "Full history →") });
 
-  return el("div", { class: "grid" }, kpis, el("div", { class: "grid split" }, equity, marketMoodCard()),
+  return el("div", { class: "grid" }, kpis, equity,
     el("div", { class: "grid thirds" }, thinking, recentCard, allocation));
-}
-// Bearish (-100) to bullish (+100) from how many of the most-traded USDT coins rise or fall
-// over each horizon (`/api/market`), with the score over the last 24 hours.
-function marketMoodCard() {
-  const m = ui.data.market;
-  if (!m) return card("Market mood", ui.errors.market ? errorBox(ui.errors.market) : el("div", { class: "skeleton", style: "border:0" }));
-  if (m.error || m.score === null) return card("Market mood", errorBox(m.error || "Not enough candles to score the market yet."));
-  const coins = m.coins.length;
-  const rows = m.horizons.map((h) => {
-    const n = h.up + h.down + h.flat || 1;
-    const tip = [h.name + " · " + h.up + " up, " + h.down + " down, " + h.flat + " flat", "median move " + pct(h.median_return_pct), "weight " + Math.round(h.weight * 100) + "%"];
-    const bar = el("div", { class: "mood-bar" },
-      el("i", { class: "up", style: "width:" + (h.up / n) * 100 + "%" }), el("i", { class: "flat", style: "width:" + (h.flat / n) * 100 + "%" }),
-      el("i", { class: "down", style: "width:" + (h.down / n) * 100 + "%" }));
-    bar.addEventListener("mousemove", (e) => showTip(e, tip));
-    bar.addEventListener("mouseleave", hideTip);
-    return [el("span", { class: "muted" }, h.name), bar,
-      el("span", { class: "num" }, el("b", { class: "pos" }, h.up + "↑"), " ", el("b", { class: "neg" }, h.down + "↓")),
-      el("span", { class: "num r " + tone(h.median_return_pct), title: "median move" }, pct(h.median_return_pct))];
-  });
-  const points = m.history.map((p) => {
-    const d = new Date(p.t + 15 * 60e3);
-    return { y: p.score, label: d.getMinutes() === 0 ? d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : null,
-      tip: [d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }), signedScore(p.score) + " · " + moodLabel(p.score)] };
-  });
-  return card("Market mood", el("div", null,
-    el("div", { class: "mood-gauge" }, moodGauge(m.score, m.label)),
-    el("div", { class: "mood-rows" }, rows),
-    points.length > 1 ? el("div", { style: "margin-top:12px" }, el("div", { class: "small muted", style: "margin-bottom:2px" }, "Last 24 hours"),
-      lineChart(points, { height: 130, left: 40, fmt: signedScore, dots: false, scale: { lo: -100, hi: 100, ticks: [-100, -50, 0, 50, 100] } })) : null,
-    el("details", { class: "footnote", style: "margin-top:8px" }, el("summary", null, "How the mood is scored"),
-      el("p", null, "The " + coins + " USDT coins with the most 24h trading volume on Binance (stablecoins, fiat and tokenized stocks left out), from 15-minute candles. For each horizon: coins up minus coins down, divided by all coins; moves under " + pct(m.flat_band_pct, { sign: false, dp: 1 }) + " count as flat. The score weighs 15m 15%, 1h 25%, 4h 30% and 24h 30%: +100 is everything rising everywhere, −100 everything falling. Bullish from +15, strongly from +50; bearish from −15, strongly from −50. The newest candle is still forming."
-        + (m.missing.length ? " Left out (no candles): " + m.missing.join(", ") + "." : "")))),
-    { hint: "top " + coins + " coins · " + ago(m.fetched_at) });
-}
-function signedScore(v) { return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.round(Math.abs(v)); }
-// Same thresholds as the server's `market::label`.
-function moodLabel(v) { return v >= 50 ? "Strongly bullish" : v >= 15 ? "Bullish" : v > -15 ? "Neutral" : v > -50 ? "Bearish" : "Strongly bearish"; }
-function moodGauge(score, label) {
-  const W = 220, H = 128, cx = W / 2, cy = 112, r = 88, stroke = 14;
-  const at = (s, rr = r) => { const a = Math.PI * (1 - (s + 100) / 200); return [cx + rr * Math.cos(a), cy - rr * Math.sin(a)]; };
-  const arc = (a, b) => { const [x0, y0] = at(a), [x1, y1] = at(b); return `M${x0.toFixed(1)},${y0.toFixed(1)} A${r},${r} 0 0 1 ${x1.toFixed(1)},${y1.toFixed(1)}`; };
-  const svg = sv("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Market mood " + signedScore(score) + ", " + label });
-  const zones = [[-100, -50, "var(--neg)"], [-50, -15, "var(--neg-soft)"], [-15, 15, "var(--surface-2)"], [15, 50, "var(--pos-soft)"], [50, 100, "var(--pos)"]];
-  for (const [a, b, color] of zones) svg.append(sv("path", { d: arc(a + 0.6, b - 0.6), fill: "none", stroke: color, "stroke-width": stroke }));
-  const clamped = Math.max(-100, Math.min(100, score)), [nx, ny] = at(clamped, r - stroke);
-  svg.append(sv("line", { x1: cx, y1: cy, x2: nx, y2: ny, stroke: "var(--fg)", "stroke-width": 3, "stroke-linecap": "round" }));
-  svg.append(sv("circle", { cx, cy, r: 5, fill: "var(--fg)" }));
-  svg.append(sv("text", { x: 8, y: H - 2, fill: "var(--faint)", "font-size": 11 }, "Bearish"));
-  svg.append(sv("text", { x: W - 8, y: H - 2, fill: "var(--faint)", "font-size": 11, "text-anchor": "end" }, "Bullish"));
-  const color = score >= 15 ? "var(--pos)" : score <= -15 ? "var(--neg)" : "var(--muted)";
-  return el("div", { style: "text-align:center" }, svg,
-    el("div", { class: "num", style: "font-size:22px;font-weight:650;color:" + color }, signedScore(score)),
-    el("div", { style: "font-weight:600;color:" + color }, label));
 }
 function allocationDonut(wallet) {
   const rows = wallet.holdings.filter((h) => num(h.value_usdt) > 0);

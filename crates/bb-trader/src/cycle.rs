@@ -79,8 +79,7 @@ pub struct Snapshot {
     pub context: DecisionContext,
     pub view: Arc<MarketView>,
     pub balances: Balances,
-    /// The rule's point-in-time market view (`None` when the breadth read failed or
-    /// market evidence is off); the rule-based decider reads it.
+    /// The rule's point-in-time market view (`None` in tests that skip the market read).
     pub step: Option<crate::book::Snapshot>,
 }
 
@@ -178,7 +177,6 @@ impl Runtime {
             execution_invariants: execution_invariants(&self.config),
             route_scope: route_scope(&self.config),
             trade_memory,
-            market_mood: None,
             biz,
         };
         Ok(Snapshot {
@@ -996,7 +994,6 @@ mod tests {
             execution_invariants: execution_invariants(&config),
             route_scope: route_scope(&config),
             trade_memory: runtime.trade_memory(&balances, &view, 8),
-            market_mood: None,
             biz: None,
         };
         runtime
@@ -1176,7 +1173,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_algo_view_is_the_feed_coins_plus_held_coins_without_a_breadth_read() {
+    async fn the_algo_view_is_the_feed_coins_plus_held_coins_from_klines_only() {
         use wiremock::matchers::query_param;
         let server = MockServer::start().await;
         let now = bb_core::time::now_ms();
@@ -1226,9 +1223,8 @@ mod tests {
         assert_eq!(step.coins.keys().collect::<Vec<_>>(), vec!["BTC", "ETH"]);
         let eth = step.coin("ETH").unwrap();
         assert!((eth.ret_1h.unwrap() - (106.0 / 100.0 - 1.0) * 100.0).abs() < 1e-9, "{eth:?}");
-        assert_eq!(step.score, None);
         let requests = server.received_requests().await.unwrap_or_default();
-        assert!(requests.iter().all(|r| r.url.path() == "/api/v3/klines"), "no breadth or ticker read");
+        assert!(requests.iter().all(|r| r.url.path() == "/api/v3/klines"), "klines only, no ticker read");
 
         // Without a fresh feed only the held coin is read and nothing is a buy candidate.
         let unavailable = crate::biz::BizNow::Unavailable { reason: "stale".into() };

@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::market_mood::HorizonBreadth;
 use crate::universe::Balances;
 
 /// One coin at a step: returns of the close at `T` over 15m/1h/4h and its trailing 24h
@@ -24,22 +23,16 @@ pub struct CoinView {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     pub t: i64,
-    /// 20-coin breadth score (−100..100), as the live `## Market breadth` section.
-    pub score: Option<f64>,
-    pub horizons: Vec<HorizonBreadth>,
     pub coins: BTreeMap<String, CoinView>,
     /// The [`LIQUID`] coins present at `T`, top [`CANDIDATE_LIMIT`] by 24h quote volume.
     pub liquid_top: Vec<String>,
 }
 
 impl Snapshot {
-    /// The live algorithm's view: the coins it read prices for and the coins it may buy,
-    /// with no market-wide breadth score.
+    /// The live algorithm's view: the coins it read prices for and the coins it may buy.
     pub fn live(t: i64, coins: BTreeMap<String, CoinView>, candidates: Vec<String>) -> Self {
         Self {
             t,
-            score: None,
-            horizons: Vec::new(),
             coins,
             liquid_top: candidates,
         }
@@ -47,14 +40,6 @@ impl Snapshot {
 
     pub fn coin(&self, asset: &str) -> Option<&CoinView> {
         self.coins.get(asset)
-    }
-
-    /// Median coin return over a breadth horizon (`15m`, `1h`, `4h`, `24h`).
-    pub fn median_return_pct(&self, horizon: &str) -> Option<f64> {
-        self.horizons
-            .iter()
-            .find(|h| h.name == horizon)
-            .and_then(|h| h.median_return_pct)
     }
 }
 
@@ -158,27 +143,10 @@ pub mod tests {
     /// `(asset, 15m, 1h, 4h, 24h quote volume)`.
     pub type Row<'a> = (&'a str, f64, f64, f64, f64);
 
-    /// A snapshot with the given breadth score, 4h median and coins; every coin is a liquid
-    /// candidate in the given order.
-    pub fn snap(score: f64, median_4h: f64, rows: &[Row<'_>]) -> Snapshot {
-        let horizon = |name: &'static str, median: Option<f64>| HorizonBreadth {
-            name,
-            weight: 0.25,
-            up: 0,
-            down: 0,
-            flat: 0,
-            breadth: 0.0,
-            median_return_pct: median,
-        };
+    /// A snapshot of the given coins; every coin is a liquid candidate in the given order.
+    pub fn snap(rows: &[Row<'_>]) -> Snapshot {
         Snapshot {
             t: T0,
-            score: Some(score),
-            horizons: vec![
-                horizon("15m", None),
-                horizon("1h", None),
-                horizon("4h", Some(median_4h)),
-                horizon("24h", None),
-            ],
             coins: rows
                 .iter()
                 .map(|&(a, r15, r1, r4, qv)| {

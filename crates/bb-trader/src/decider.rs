@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn buys_the_best_scored_candidate_only_above_the_buy_level() {
         // SOL leads on 1h, ETH is surging and bullish on /biz/.
-        let snap = snap(10.0, 1.0, &[("BTC", 0.0, 0.5, 1.0, 9e9), ("ETH", 0.0, 0.2, 1.0, 5e9), ("SOL", 0.0, 2.5, 1.0, 1e9)]);
+        let snap = snap(&[("BTC", 0.0, 0.5, 1.0, 9e9), ("ETH", 0.0, 0.2, 1.0, 5e9), ("SOL", 0.0, 2.5, 1.0, 1e9)]);
         let biz = BTreeMap::from([("ETH".to_string(), windows(6, 12, 3, 3.0, 1.0))]);
         let book = flat_book();
         let inputs = Inputs { snap: &snap, book: &book, biz: Some(&biz) };
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn a_held_coin_is_sold_below_the_sell_level_and_otherwise_blocks_buys() {
-        let snap = snap(10.0, 1.0, &[("BTC", 0.0, -2.5, 1.0, 9e9), ("SOL", 0.0, 4.0, 1.0, 1e9)]);
+        let snap = snap(&[("BTC", 0.0, -2.5, 1.0, 9e9), ("SOL", 0.0, 4.0, 1.0, 1e9)]);
         let book = holding(&["BTC"]);
         let inputs = Inputs { snap: &snap, book: &book, biz: None };
         // BTC scores −0.5: sold, and SOL (0.8) is bought in the same step.

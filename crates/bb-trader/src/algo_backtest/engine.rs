@@ -13,10 +13,9 @@
 
 use std::collections::BTreeMap;
 
-use super::data::{Bar, MINUTE_MS, Market, Series};
+use super::data::{Bar, MINUTE_MS, Market};
 use crate::error::{Result, TraderError};
 use crate::book::{Book, CoinView, Holding, Snapshot};
-use crate::market_mood::breadth_score_at;
 
 /// The 20-coin liquid universe: the `bb entry-study` top 20 by quote volume on 2026-10-18
 /// (the Phase 47 basket). Fixed, so the backtest has survivorship bias.
@@ -26,9 +25,6 @@ pub const LIQUID: [&str; 20] = [
 ];
 /// Candidates per step, as the live `BOT_SPOT_CANDIDATE_LIMIT=10`.
 pub const CANDIDATE_LIMIT: usize = 10;
-/// Breadth bars, as `market_mood` (15m bars, 24h = 96 bars back).
-const BREADTH_BAR_MINUTES: i64 = 15;
-const BREADTH_LOOKBACK_BARS: usize = 96;
 const MINUTES_PER_YEAR: f64 = 525_600.0;
 const DAY_MINUTES: i64 = 1_440;
 
@@ -94,13 +90,6 @@ impl Snapshot {
                 (s.asset().to_string(), view)
             })
             .collect();
-        let closes: Vec<_> = LIQUID
-            .iter()
-            .filter_map(|a| market.get(a))
-            .map(|s| s.closes_by_open(t, BREADTH_BAR_MINUTES, BREADTH_LOOKBACK_BARS))
-            .collect();
-        let (horizons, score) =
-            breadth_score_at(&closes, Series::newest_bucket_open(t, BREADTH_BAR_MINUTES));
         let mut liquid: Vec<(&str, f64)> = LIQUID
             .iter()
             .filter_map(|a| coins.get(*a).map(|c| (*a, c.quote_volume_24h)))
@@ -113,8 +102,6 @@ impl Snapshot {
             .collect();
         Self {
             t,
-            score,
-            horizons,
             coins,
             liquid_top,
         }
@@ -580,6 +567,7 @@ pub fn run(market: &Market, cfg: &Config, rule: Box<dyn StepRule>) -> Result<Run
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::algo_backtest::data::Series;
 
     pub use crate::book::tests::T0;
 
@@ -803,7 +791,6 @@ pub(crate) mod tests {
         };
         assert_eq!(upto(&full).len(), 41);
         assert!(full.iter().any(|(_, i)| !i.is_empty()));
-        assert!(full.iter().all(|(s, _)| s.score.is_some()));
         assert_eq!(upto(&full), upto(&cut));
     }
 

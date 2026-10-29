@@ -36,7 +36,6 @@ pub mod cycle;
 pub mod decider;
 pub mod error;
 pub mod executor;
-pub mod market_mood;
 pub mod memory;
 pub mod scope;
 pub mod state;

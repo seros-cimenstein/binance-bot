@@ -163,8 +163,6 @@ pub struct DecisionContext {
     pub execution_invariants: Vec<String>,
     pub route_scope: Value,
     pub trade_memory: TradeMemory,
-    /// 20-coin liquid USDT crypto market breadth (`None` when disabled or unavailable).
-    pub market_mood: Option<crate::market_mood::MarketView>,
     /// The /biz/ feed (`None` in tests; the cycle always reads it); the rule scores on it.
     pub biz: Option<crate::biz::BizNow>,
 }
@@ -182,7 +180,6 @@ impl DecisionContext {
             "execution_invariants": self.execution_invariants,
             "route_scope": self.route_scope,
             "trade_memory": self.trade_memory,
-            "market_mood": self.market_mood,
             "biz": self.biz,
         })
     }

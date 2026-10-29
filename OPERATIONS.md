@@ -106,9 +106,7 @@ Docker: `docker compose ps` and `docker compose logs -f <service>`.
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
 profiles `gui`/`live`/`all`) serves the Bot Spot trades, cycles (the rule's
 verdicts; cycles from before Phase 52 show their decision only), the /biz/
-feed the trader read (/biz/ tab), a market mood
-gauge on the Overview (bearish to bullish breadth of the 20 most-traded USDT
-crypto markets over 15m/1h/4h/24h, from public Binance data), stop-file and
+feed the trader read (/biz/ tab), stop-file and
 failed-route-halt state at `http://localhost:8787` on the Docker host. It is
 published on `127.0.0.1` only and mounts the data dir read-only. From another
 machine: `ssh -L 8787:localhost:8787 <host>`. On a systemd host,
@@ -311,6 +309,8 @@ move to +20/+60/+90/+120 minutes. It then reports the mean net return (after
 `--fee-bps`, default 15 per round trip, plus a spread proxy) per bucket,
 train period vs the last `--test-days` (default 30). `--audit` also measures
 the bot's real entries with the same candles. Public data only, no order path.
+Its breadth feature is offline research over cached candles; the trader and
+the dashboard no longer read market breadth (Phase 52).
 
 ```bash
 bb entry-study --audit docker-data/bot-spot-decisions.jsonl \

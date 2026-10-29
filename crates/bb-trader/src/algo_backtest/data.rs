@@ -7,7 +7,7 @@
 //! at a time is left out of that time (no forward fill), so a late listing (HYPE) simply
 //! starts with its own first bar.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -162,27 +162,6 @@ impl Series {
         let start = end - span * i64::try_from(n).unwrap_or(i64::MAX / span);
         let bars = &self.bars[self.lower(start)..self.lower(end)];
         aggregate(bars, minutes)
-    }
-
-    /// Open time of the newest `minutes` bucket at `t`: the bucket holding the last minute
-    /// closed by `t` (still forming, or just completed when `t` is on a boundary).
-    pub fn newest_bucket_open(t: i64, minutes: i64) -> i64 {
-        floor_to(t - MINUTE_MS, minutes * MINUTE_MS)
-    }
-
-    /// Closes of the `minutes` buckets by bucket open time: the newest bucket at `t` (see
-    /// [`Self::newest_bucket_open`]; its close is the newest 1m close by `t`) and the `n`
-    /// before it. This is the point-in-time view the live trader gets from klines whose
-    /// newest bar is still in progress.
-    pub fn closes_by_open(&self, t: i64, minutes: i64, n: usize) -> HashMap<i64, f64> {
-        let span = minutes * MINUTE_MS;
-        let end = Self::newest_bucket_open(t, minutes) + span;
-        let start = end - span * i64::try_from(n + 1).unwrap_or(i64::MAX / span);
-        let bars = &self.bars[self.lower(start)..self.lower(t - MINUTE_MS + 1)];
-        aggregate(bars, minutes)
-            .into_iter()
-            .map(|b| (b.open_ms, b.close))
-            .collect()
     }
 }
 
@@ -465,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn closed_bars_skip_the_forming_bucket_and_closes_include_it() {
+    fn closed_bars_skip_the_forming_bucket() {
         let bars = (0..40).map(|m| flat(m, 100.0 + m as f64)).collect();
         let s = Series::new("SOL", bars);
         let t = T0 + 37 * MINUTE_MS; // bucket 30..45 is forming, 36 is its newest closed minute
@@ -475,20 +454,6 @@ mod tests {
             vec![T0, T0 + 15 * MINUTE_MS]
         );
         assert!(close(closed[1].close, 129.0));
-        let closes = s.closes_by_open(t, 15, 1);
-        assert_eq!(closes.len(), 2);
-        assert!(close(closes[&(T0 + 30 * MINUTE_MS)], 136.0));
-        assert!(close(closes[&(T0 + 15 * MINUTE_MS)], 129.0));
-        // On a boundary (t = minute 30) the newest bucket is the one that just completed.
-        let boundary = T0 + 30 * MINUTE_MS;
-        assert_eq!(
-            Series::newest_bucket_open(boundary, 15),
-            T0 + 15 * MINUTE_MS
-        );
-        let closes = s.closes_by_open(boundary, 15, 1);
-        assert_eq!(closes.len(), 2);
-        assert!(close(closes[&(T0 + 15 * MINUTE_MS)], 129.0));
-        assert!(close(closes[&T0], 114.0));
     }
 
     #[test]

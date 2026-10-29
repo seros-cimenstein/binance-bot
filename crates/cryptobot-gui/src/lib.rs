@@ -10,8 +10,6 @@
 //! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
-//! - `GET /api/market`: market mood, bearish to bullish, from the breadth of the most-traded
-//!   USDT coins, with its last 24 hours ([`market`]; public market data).
 //!
 //! Every request must address `localhost`, `127.0.0.1` or `[::1]` in its `Host` header, so a
 //! web page that rebinds its DNS name to 127.0.0.1 cannot read the data.
@@ -19,7 +17,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod history;
-pub mod market;
 pub mod wallet;
 
 use std::path::PathBuf;
@@ -40,15 +37,12 @@ use serde_json::{Value, json};
 
 use crate::history::{ParsedAudit, parse_audit};
 use bb_trader::trades::build_trades;
-use crate::market::MarketView;
 use crate::wallet::WalletView;
 
 /// Newest cycle summaries sent to the page.
 pub const CYCLE_LIMIT: usize = 120;
 /// How long one Binance wallet read is reused (the page polls every 30 s).
 pub const WALLET_TTL: Duration = Duration::from_secs(20);
-/// How long one market-mood read is reused (it moves on 15m candles).
-pub const MARKET_TTL: Duration = Duration::from_secs(60);
 
 const INDEX_HTML: &str = include_str!("index.html");
 
@@ -85,11 +79,8 @@ pub struct AppState {
     bot_spot: BotSpotFiles,
     /// Mainnet read client; `None` leaves the wallet empty.
     client: Option<BinanceClient>,
-    /// Client for public market data: the wallet client, or an unauthenticated one.
-    market_client: Option<BinanceClient>,
     /// Held across the Binance read so concurrent requests share one fetch.
     wallet_cache: tokio::sync::Mutex<Option<(Instant, Arc<WalletView>)>>,
-    market_cache: tokio::sync::Mutex<Option<(Instant, Arc<MarketView>)>>,
     audit_cache: Mutex<Option<AuditCache>>,
 }
 
@@ -97,10 +88,8 @@ impl AppState {
     pub fn new(bot_spot: BotSpotFiles, client: Option<BinanceClient>) -> Self {
         Self {
             bot_spot,
-            market_client: client.clone().or_else(public_client),
             client,
             wallet_cache: tokio::sync::Mutex::new(None),
-            market_cache: tokio::sync::Mutex::new(None),
             audit_cache: Mutex::new(None),
         }
     }
@@ -113,18 +102,6 @@ impl AppState {
             return view.clone();
         }
         let view = Arc::new(wallet::fetch(self.client.as_ref()).await);
-        *cache = Some((Instant::now(), view.clone()));
-        view
-    }
-
-    async fn market(&self) -> Arc<MarketView> {
-        let mut cache = self.market_cache.lock().await;
-        if let Some((at, view)) = cache.as_ref()
-            && at.elapsed() < MARKET_TTL
-        {
-            return view.clone();
-        }
-        let view = Arc::new(market::fetch(self.market_client.as_ref()).await);
         *cache = Some((Instant::now(), view.clone()));
         view
     }
@@ -154,13 +131,6 @@ impl AppState {
     }
 }
 
-/// Mainnet client without credentials, for public market data.
-fn public_client() -> Option<BinanceClient> {
-    BinanceClient::new(bb_binance::BinanceConfig::new(false))
-        .inspect_err(|error| tracing::warn!(%error, "public Binance client unavailable"))
-        .ok()
-}
-
 /// Mainnet client from `BINANCE_API_KEY`/`BINANCE_API_SECRET` for the signed wallet reads;
 /// `None` (with a warning on bad input) when credentials are missing or invalid.
 pub fn wallet_client() -> Option<BinanceClient> {
@@ -188,7 +158,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(status))
         .route("/api/history", get(history_handler))
         .route("/api/wallet", get(wallet_handler))
-        .route("/api/market", get(market_handler))
         .layer(middleware::from_fn(localhost_only))
         .with_state(Arc::new(state))
 }
@@ -245,11 +214,6 @@ async fn history_handler(State(app): State<Arc<AppState>>) -> Response {
 
 async fn wallet_handler(State(app): State<Arc<AppState>>) -> Response {
     let view = app.wallet().await;
-    json_response(json!(*view))
-}
-
-async fn market_handler(State(app): State<Arc<AppState>>) -> Response {
-    let view = app.market().await;
     json_response(json!(*view))
 }
 
