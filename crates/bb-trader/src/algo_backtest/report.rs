@@ -1,5 +1,6 @@
-//! `bb bot-spot-persona-backtest`: run the personas over the offline cache and write the
-//! report (`.md`), the summary (`.csv`) and the trade list (`_trades.csv`).
+//! `bb algo-backtest`: tune the trader's algorithm on the older half of a window of the
+//! offline cache, judge it on the newer half, and write the report (`.md`), the summary
+//! (`.csv`), the trade list (`_trades.csv`) and the per-step traces.
 //!
 //! The output is deterministic: the same cache and flags give byte-identical files (no run
 //! time or wall clock in them).
@@ -12,49 +13,23 @@ use std::sync::Arc;
 use chrono::{DateTime, SecondsFormat, Utc};
 
 use super::data::{BizHistory, MINUTE_MS, Market};
-use super::engine::{Config, LIQUID, Persona, RunResult, run};
-use super::personas::{
-    BizAlgo, CONTRARIAN_EXIT_PLAN, Contrarian, Detached, Ensemble, HIGH_VARIANCE_EXIT_PLAN,
-    HighVariance, Rotation, V13, V13_EXIT_PLAN,
-};
+use super::engine::{Config, LIQUID, RunResult, run};
+use super::rule::BizAlgo;
 use crate::decider::{Rule, Weights};
 use crate::error::{Result, TraderError};
 
-/// The Phase 48 variants `all` expands to, in report order.
-pub const ALL_PERSONAS: [&str; 6] = [
-    "v13",
-    "contrarian",
-    "detached",
-    "high_variance",
-    "rotation",
-    "ensemble",
-];
-/// Every persona `--persona` accepts by name (`biz_algo` is not part of `all`).
-pub const KNOWN_PERSONAS: [&str; 7] = [
-    "v13",
-    "contrarian",
-    "detached",
-    "high_variance",
-    "rotation",
-    "ensemble",
-    "biz_algo",
-];
 /// `biz_algo` grid rows listed in the report.
 const GRID_ROWS_SHOWN: usize = 5;
 const DAY_MS: i64 = 86_400_000;
-/// History needed before the window start: 24h breadth lookback plus the 22 closed 1h bars
-/// of an hourly ATR (rounded up).
+/// History needed before the window start (24h of bars, with margin).
 const WARM_UP_MS: i64 = 48 * 3_600_000;
 /// Binance minimum order value the engine enforces on buys.
 const MIN_NOTIONAL_USDT: f64 = 5.0;
 /// Measured live cost per round trip (40 trips, `docs/archive/loops/LOOP_MONEY.md`).
 const MEASURED_ROUND_TRIP_BPS: f64 = 14.8;
-/// Phase 47 (`bot-spot-v13-agentic`) went live at 2026-10-18T14:02:04Z.
-const PHASE_47_DEPLOY_MS: i64 = 1_792_332_124_000;
-
-/// Run the Phase 48 personas on cached 1m candles (offline, research only, no orders).
+/// Backtest the trader's algorithm on cached 1m candles (offline, research only, no orders).
 #[derive(clap::Args, Debug, Clone)]
-pub struct PersonaBacktestArgs {
+pub struct AlgoBacktestArgs {
     /// Directory of `1m_<BASE>_USDT_<start>_<end>.json` files (the `bb entry-study` cache).
     #[arg(long, default_value = "data/entry-study-cache")]
     pub cache_dir: PathBuf,
@@ -64,12 +39,7 @@ pub struct PersonaBacktestArgs {
     /// Window length in days.
     #[arg(long, default_value_t = 60)]
     pub days: i64,
-    /// Persona to run, repeatable: v13, contrarian, detached, high_variance, rotation,
-    /// ensemble, biz_algo, or `all`. With `biz_algo` the window is split
-    /// in an older (tuning) and a newer (judging) half and every persona runs on both.
-    #[arg(long = "persona", default_value = "all")]
-    pub personas: Vec<String>,
-    /// Starting USDT balance of every variant.
+    /// Starting USDT balance of each half.
     #[arg(long, default_value_t = 1000.0)]
     pub starting_balance: f64,
     /// Fee per side in bps.
@@ -84,14 +54,14 @@ pub struct PersonaBacktestArgs {
     /// Where the three report files go.
     #[arg(long, default_value = "reports")]
     pub output_dir: PathBuf,
-    /// `biz-feed-v1` history (`biz-insights feed --history`) for `biz_algo`; without it the
+    /// `biz-feed-v1` history (`biz-insights feed --history`); without it the
     /// /biz/ terms are 0.
     #[arg(long)]
     pub biz_feeds: Option<PathBuf>,
     /// A feed older than this at a step is not visible (hourly history needs more than 60).
     #[arg(long, default_value_t = 90)]
     pub biz_max_age_minutes: i64,
-    /// Fixed `biz_algo` weights `talk,stance,momentum,buy_above,sell_below` (e.g. read
+    /// Fixed weights `talk,stance,momentum,buy_above,sell_below` (e.g. read
     /// off the `bb biz-lead-study` report) instead of tuning them on the older half.
     #[arg(long)]
     pub biz_weights: Option<String>,
@@ -100,56 +70,10 @@ pub struct PersonaBacktestArgs {
     pub biz_min_posters: u64,
 }
 
-/// Expand `all`, drop repeats (first mention wins) and reject unknown names.
-pub fn resolve_personas(names: &[String]) -> Result<Vec<&'static str>> {
-    let mut out: Vec<&'static str> = Vec::new();
-    for name in names {
-        let expanded: Vec<&'static str> = if name == "all" {
-            ALL_PERSONAS.to_vec()
-        } else {
-            let known = KNOWN_PERSONAS.iter().find(|p| **p == name).ok_or_else(|| {
-                TraderError::config(format!(
-                    "unknown persona {name:?}; use one of {} or all",
-                    KNOWN_PERSONAS.join(", ")
-                ))
-            })?;
-            vec![*known]
-        };
-        for p in expanded {
-            if !out.contains(&p) {
-                out.push(p);
-            }
-        }
-    }
-    if out.is_empty() {
-        return Err(TraderError::config("no persona selected"));
-    }
-    Ok(out)
-}
-
-/// What `biz_algo` needs beyond the market: the /biz/ feed history and the decider rule.
+/// What the algorithm needs beyond the market: the /biz/ feed history.
 #[derive(Debug, Clone, Default)]
-pub struct PersonaInputs {
+pub struct AlgoInputs {
     pub biz: Option<Arc<BizHistory>>,
-    pub rule: Option<Rule>,
-}
-
-fn build_persona(name: &str, cfg: Config, inputs: &PersonaInputs) -> Result<Box<dyn Persona>> {
-    Ok(match name {
-        "v13" => Box::new(V13::new()?),
-        "contrarian" => Box::new(Contrarian::new()?),
-        "detached" => Box::new(Detached),
-        "high_variance" => Box::new(HighVariance::new()?),
-        "rotation" => Box::new(Rotation::new(cfg)?),
-        "ensemble" => Box::new(Ensemble::new()?),
-        "biz_algo" => Box::new(BizAlgo::new(
-            inputs
-                .rule
-                .ok_or_else(|| TraderError::config("biz_algo needs its rule (tuned or --biz-weights)"))?,
-            inputs.biz.clone(),
-        )),
-        other => return Err(TraderError::config(format!("unknown persona {other:?}"))),
-    })
 }
 
 /// Fail unless the cache holds every liquid coin, reaches the window end, and has the warm-up
@@ -227,8 +151,8 @@ pub struct ReportContext {
     pub coins: usize,
     /// The report's file stem, for naming the per-variant trace files.
     pub stem: String,
-    /// The older/newer split and the `biz_algo` rule; `None` unless `biz_algo` ran.
-    pub split: Option<SplitReport>,
+    /// The older/newer split and the rule.
+    pub split: SplitReport,
 }
 
 /// One `biz_algo` weight set tried on the older half.
@@ -240,7 +164,7 @@ pub struct GridRow {
     pub max_drawdown_pct: f64,
 }
 
-/// The split of a run with `biz_algo`.
+/// The older/newer split of a run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplitReport {
     /// First step of the newer half.
@@ -251,19 +175,6 @@ pub struct SplitReport {
     pub grid: Option<Vec<GridRow>>,
     /// One line describing the /biz/ feed history.
     pub biz: String,
-}
-
-/// Run the selected personas; one result per persona, in the order given.
-pub fn run_personas(
-    market: &Market,
-    cfg: &Config,
-    names: &[&str],
-    inputs: &PersonaInputs,
-) -> Result<Vec<RunResult>> {
-    names
-        .iter()
-        .map(|name| run(market, cfg, build_persona(name, *cfg, inputs)?))
-        .collect()
 }
 
 /// First step of the newer half: the window's middle, rounded down to the step grid.
@@ -309,19 +220,19 @@ pub fn weight_grid(with_biz: bool) -> Vec<Weights> {
 pub fn tune(
     market: &Market,
     older: &Config,
-    inputs: &PersonaInputs,
+    inputs: &AlgoInputs,
     min_posters: u64,
 ) -> Result<(Weights, Vec<GridRow>)> {
     let mut rows = Vec::new();
     for weights in weight_grid(inputs.biz.is_some()) {
-        let persona = BizAlgo::new(
+        let rule = BizAlgo::new(
             Rule {
                 weights,
                 min_posters,
             },
             inputs.biz.clone(),
         );
-        let r = run(market, older, Box::new(persona))?;
+        let r = run(market, older, Box::new(rule))?;
         rows.push(GridRow {
             weights,
             net_pnl_pct: r.net_pnl_pct,
@@ -341,14 +252,13 @@ pub fn tune(
     Ok((weights, rows))
 }
 
-/// Tune (or take) the `biz_algo` rule on the older half, then run every persona on the
-/// older and the newer half (`<name>@older`, `<name>@newer`).
+/// Tune (or take) the rule on the older half, then run it on the older and the newer half
+/// (`biz_algo@older`, `biz_algo@newer`).
 fn run_split(
     market: &Market,
     cfg: &Config,
-    names: &[&str],
-    inputs: &mut PersonaInputs,
-    args: &PersonaBacktestArgs,
+    inputs: &AlgoInputs,
+    args: &AlgoBacktestArgs,
 ) -> Result<(Vec<RunResult>, SplitReport)> {
     let mid_ms = split_point(cfg)?;
     let older = Config {
@@ -370,13 +280,11 @@ fn run_split(
         weights,
         min_posters: args.biz_min_posters,
     };
-    inputs.rule = Some(rule);
     let mut results = Vec::new();
     for (label, half) in [("older", older), ("newer", newer)] {
-        for mut r in run_personas(market, &half, names, inputs)? {
-            r.name = format!("{}@{label}", r.name);
-            results.push(r);
-        }
+        let mut r = run(market, &half, Box::new(BizAlgo::new(rule, inputs.biz.clone())))?;
+        r.name = format!("{}@{label}", r.name);
+        results.push(r);
     }
     let split = SplitReport {
         mid_ms,
@@ -389,7 +297,7 @@ fn run_split(
 
 fn biz_summary(history: Option<&BizHistory>, dir: Option<&Path>) -> String {
     let (Some(history), Some(dir)) = (history, dir) else {
-        return "not loaded (no `--biz-feeds`): the talk and stance terms are 0, so `biz_algo` trades on momentum alone".to_string();
+        return "not loaded (no `--biz-feeds`): the talk and stance terms are 0, so the rule trades on momentum alone".to_string();
     };
     let span = |ms: Option<i64>| ms.map_or_else(|| "none".to_string(), iso);
     let readers: Vec<&str> = history.readers().iter().map(String::as_str).collect();
@@ -408,26 +316,8 @@ fn biz_summary(history: Option<&BizHistory>, dir: Option<&Path>) -> String {
     )
 }
 
-fn rules(name: &str) -> String {
-    match name.split('@').next().unwrap_or(name) {
-        "v13" => format!(
-            "rule proxy of the live v13/v14 guidance (not the LLM): liquid top 10; buy when flat, breadth ≥ +15 and 4h market median ≥ +1%: the best 4h coin with positive 1h and 4h, all cash; exit `{V13_EXIT_PLAN}` or sell at breadth ≤ −15"
-        ),
-        "contrarian" => format!(
-            "fades breadth: liquid top 10; buy when flat and breadth ≤ −15: the worst 4h coin, all cash; exit `{CONTRARIAN_EXIT_PLAN}`, or sell at a step on a +1.5% 1h bounce or breadth ≥ +15"
-        ),
-        "detached" => "raw price action only (no breadth, volume, liquid filter or exit plan): all cached coins; buy when flat: the best 1h coin above +0.25% with a rising 15m, all cash; sell when 15m and 1h are both negative; rotate when another coin leads on 1h by more than 0.5 points".to_string(),
-        "high_variance" => format!(
-            "liquid top 10; every step buys each coin not held that is up ≥ +0.5% over 1h, strongest first, up to 3 positions, sized clamp(|1h| / 2%, 0.25, 1.0) of equity capped by cash; exit `{HIGH_VARIANCE_EXIT_PLAN}` only"
-        ),
-        "rotation" => "shadow-runs the four base personas; at the first step of each UTC day follows the one with the best trailing-72h shadow return (v13 on ties and before 72h exist)".to_string(),
-        "ensemble" => format!(
-            "the four base personas vote on its own book; buys the coin with ≥ 2 buy votes (most votes, then 24h volume), all cash; sells on ≥ 2 sell votes or when `{V13_EXIT_PLAN}` fires"
-        ),
-        "biz_algo" => "the trader's algorithm, no LLM: scores each liquid-top coin as w_talk·talk + w_stance·stance + w_momentum·momentum (talk = the /biz/ 6h mention rate over its 24h rate − 1; stance = (bullish − bearish) / tagged of the 6h AI tags with enough posters; momentum = 1h return / 5%, capped); a held coin scoring below the sell level is sold, and with nothing held the best coin is bought with all cash at or above the buy level; no exit plan".to_string(),
-        other => other.to_string(),
-    }
-}
+/// What the backtested rule does, in words.
+const RULE_TEXT: &str = "the trader's algorithm, no LLM: scores each liquid-top coin as w_talk·talk + w_stance·stance + w_momentum·momentum (talk = the /biz/ 6h mention rate over its 24h rate − 1; stance = (bullish − bearish) / tagged of the 6h AI tags with enough posters; momentum = 1h return / 5%, capped); a held coin scoring below the sell level is sold, and with nothing held the best coin is bought with all cash at or above the buy level; no exit plan";
 
 /// The summary CSV: one row per variant.
 pub fn summary_csv(results: &[RunResult]) -> String {
@@ -487,13 +377,13 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "# Persona backtest ({} → {})\n",
+        "# Algorithm backtest ({} → {})\n",
         iso(cfg.start_ms),
         iso(cfg.end_ms)
     );
     let _ = writeln!(
         out,
-        "Research only: `bb bot-spot-persona-backtest`, offline on `{}` ({} coins), no network, no orders. Phase 48, `docs/archive/implementation-plan-phases-1-50.md`.\n",
+        "Research only: `bb algo-backtest`, offline on `{}` ({} coins), no network, no orders.\n",
         ctx.cache_dir, ctx.coins
     );
     let _ = writeln!(out, "## Settings\n");
@@ -508,7 +398,7 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
     );
     let _ = writeln!(
         out,
-        "- Each variant starts with {:.2} USDT. Costs per side: fee {} bps + slippage {} bps ({} bps per round trip).",
+        "- Each half starts with {:.2} USDT. Costs per side: fee {} bps + slippage {} bps ({} bps per round trip).",
         cfg.starting_balance, ctx.fee_bps, ctx.slippage_bps, round_trip_bps
     );
     let _ = writeln!(
@@ -517,17 +407,16 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         LIQUID.len(),
         LIQUID.join(", ")
     );
-    if let Some(split) = &ctx.split {
-        let _ = writeln!(
-            out,
-            "- Split (`biz_algo` selected): the older half {} → {} tunes `biz_algo`, the newer half {} → {} judges it; every persona runs on both halves (`<persona>@older`, `<persona>@newer`), so the step count above is the older half's.",
-            iso(cfg.start_ms),
-            iso(split.mid_ms),
-            iso(split.mid_ms),
-            iso(cfg.end_ms)
-        );
-        let _ = writeln!(out, "- /biz/ feeds: {}.", split.biz);
-    }
+    let split = &ctx.split;
+    let _ = writeln!(
+        out,
+        "- Split: the older half {} → {} tunes the rule, the newer half {} → {} judges it (`biz_algo@older`, `biz_algo@newer`); the step count above is the older half's.",
+        iso(cfg.start_ms),
+        iso(split.mid_ms),
+        iso(split.mid_ms),
+        iso(cfg.end_ms)
+    );
+    let _ = writeln!(out, "- /biz/ feeds: {}.", split.biz);
     let _ = writeln!(out);
     let _ = writeln!(out, "## Results\n");
     let _ = writeln!(
@@ -554,10 +443,8 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         out,
         "\nNet = ending equity − starting balance after every fee and slippage; positions still open at the end are marked at their last close. Win rate counts closed round trips with a positive net. Sharpe = mean / population std of step-equity returns × √(525600 / step minutes). Full numbers: the `.csv`; every trade: `_trades.csv`.\n"
     );
-    let _ = writeln!(out, "## Personas\n");
-    for r in results {
-        let _ = writeln!(out, "- `{}`: {}.", r.name, rules(&r.name));
-    }
+    let _ = writeln!(out, "## Rule\n");
+    let _ = writeln!(out, "- `biz_algo`: {RULE_TEXT}.");
     let _ = writeln!(out, "\n## Per-variant details\n");
     for r in results {
         let skips = if r.skip_reasons.is_empty() {
@@ -613,7 +500,7 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         }
         let _ = writeln!(out);
     }
-    if let Some(split) = &ctx.split {
+    {
         let _ = writeln!(out, "## `biz_algo` rule\n");
         let _ = writeln!(
             out,
@@ -653,33 +540,18 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
     for line in [
         "Decisions see only bars closed by the step time; intents fill at the open of the 1m bar that opens at the step, sells before buys.".to_string(),
         format!("The {MIN_NOTIONAL_USDT} USDT minimum applies to buys only; a held position can always be sold."),
-        "A buy whose exit plan cannot start (e.g. no hourly ATR yet) is skipped and counted (`exit_plan_unavailable`); a buy with no cash left is counted as `no_cash`.".to_string(),
+        "A buy with no cash left is counted as `no_cash`.".to_string(),
         "Equity, drawdown and positions still open at the end are marked at the last close without exit costs.".to_string(),
-        "At an exact 15-minute boundary, breadth uses the bucket that holds the last closed minute.".to_string(),
-        "The `stretch` exit counts break-even with fees only (as the live rule does), not slippage.".to_string(),
-        "Exit plans read each 1m bar low before high (the pessimistic order `bb bot-spot-exit-replay` uses); ATR comes from the closed 1h bars before entry and stretch/slowdown get 60 minutes of 1m warm-up.".to_string(),
-        "`rotation` scores its shadows at the first scheduled step of each new UTC day (00:03 in the default window, keeping the step cadence). A switch step only sells the old book; the new persona trades from the next step on a flat book.".to_string(),
     ] {
         let _ = writeln!(out, "- {line}");
     }
     let _ = writeln!(out, "\n## Caveats\n");
-    let window_note = if cfg.end_ms <= PHASE_47_DEPLOY_MS {
-        "The window ends before the Phase 47 (v13) deploy at 2026-10-18T14:02:04Z, so the `v13` row cannot be compared with live v13 trades on the same dates."
-    } else {
-        "The window reaches past the Phase 47 (v13) deploy at 2026-10-18T14:02:04Z; live v13 trades exist only after that time."
-    };
     for line in [
-        "The `v13` row is a deterministic rule proxy of the v13/v14 guidance, not the LLM trader, which cannot be replayed (cost, quota, live-only tools).".to_string(),
         "Survivorship: the liquid universe is the top 20 by volume as of 2026-10-18, applied to the whole window.".to_string(),
         format!(
             "Costs: {round_trip_bps} bps per round trip, against the measured {MEASURED_ROUND_TRIP_BPS} bps of the 40 live trips (deliberately pessimistic)."
         ),
-        window_note.to_string(),
-        if ctx.split.is_some() {
-            "Out of sample: `biz_algo`'s weights were picked on the older half only, so its `@newer` row is the honest result; the other personas' rules were fixed before any run. Each half is about half the window: few trades, a small sample.".to_string()
-        } else {
-            "No out-of-sample split: the personas' rules were fixed before any real-cache run and not tuned on it, but they are tested on this one period only.".to_string()
-        },
+        "Out of sample: when the weights were picked on the older half, the `@newer` row is the honest result. Each half is about half the window: few trades, a small sample.".to_string(),
     ] {
         let _ = writeln!(out, "- {line}");
     }
@@ -712,13 +584,12 @@ pub fn trace_csv(trace: &super::engine::Trace) -> String {
 
 /// Load, run and write; returns the paths written (`.md`, `.csv`, `_trades.csv`, then one
 /// `_<variant>_trace.csv` per variant that keeps a trace).
-pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<PathBuf>)> {
+pub fn run_backtest(args: &AlgoBacktestArgs) -> Result<(Vec<RunResult>, Vec<PathBuf>)> {
     if args.days <= 0 {
         return Err(TraderError::config("--days must be positive"));
     }
     let end_ms = parse_end(&args.end)?;
     let start_ms = end_ms - args.days * DAY_MS;
-    let names = resolve_personas(&args.personas)?;
     let cfg = Config {
         start_ms,
         end_ms,
@@ -733,15 +604,10 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
         Some(dir) => Some(Arc::new(BizHistory::load_dir(dir, args.biz_max_age_minutes)?)),
         None => None,
     };
-    let mut inputs = PersonaInputs { biz, rule: None };
+    let inputs = AlgoInputs { biz };
     let market = Market::load_dir(&args.cache_dir)?;
     check_coverage(&market, start_ms, end_ms)?;
-    let (results, split) = if names.contains(&"biz_algo") {
-        let (results, split) = run_split(&market, &cfg, &names, &mut inputs, args)?;
-        (results, Some(split))
-    } else {
-        (run_personas(&market, &cfg, &names, &inputs)?, None)
-    };
+    let (results, split) = run_split(&market, &cfg, &inputs, args)?;
     let stem = file_stem(end_ms);
     let ctx = ReportContext {
         cfg,
@@ -776,8 +642,8 @@ fn write(path: &Path, body: &str) -> Result<()> {
     Ok(())
 }
 
-/// `bb bot-spot-persona-backtest`.
-pub fn run_cli(args: &PersonaBacktestArgs) -> Result<ExitCode> {
+/// `bb algo-backtest`.
+pub fn run_cli(args: &AlgoBacktestArgs) -> Result<ExitCode> {
     let (results, paths) = run_backtest(args)?;
     print!("{}", summary_csv(&results));
     for path in paths {
@@ -789,30 +655,6 @@ pub fn run_cli(args: &PersonaBacktestArgs) -> Result<ExitCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn names(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn persona_names_expand_dedupe_and_reject_unknowns() {
-        assert_eq!(
-            resolve_personas(&names(&["all"])).unwrap(),
-            ALL_PERSONAS.to_vec()
-        );
-        assert_eq!(
-            resolve_personas(&names(&["detached", "v13", "detached"])).unwrap(),
-            vec!["detached", "v13"]
-        );
-        assert_eq!(
-            resolve_personas(&names(&["ensemble", "all"])).unwrap()[..2],
-            ["ensemble", "v13"]
-        );
-        let err = resolve_personas(&names(&["chaos"]))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("unknown persona \"chaos\""), "{err}");
-    }
 
     const T_END: i64 = 1_784_448_000_000 + 4 * DAY_MS; // 2026-07-23T08:00Z
 
@@ -850,12 +692,11 @@ mod tests {
         dir
     }
 
-    fn args(cache: &Path, out: &Path) -> PersonaBacktestArgs {
-        PersonaBacktestArgs {
+    fn args(cache: &Path, out: &Path) -> AlgoBacktestArgs {
+        AlgoBacktestArgs {
             cache_dir: cache.to_path_buf(),
             end: "2026-07-23T08:00:00Z".into(),
             days: 1,
-            personas: names(&["all"]),
             starting_balance: 1000.0,
             fee_bps: 7.5,
             slippage_bps: 5.0,
@@ -890,19 +731,18 @@ mod tests {
         let feeds = biz_feeds();
         let out = tempfile::tempdir().unwrap();
         let mut a = args(cache.path(), out.path());
-        a.personas = names(&["v13", "biz_algo"]);
         a.biz_feeds = Some(feeds.path().to_path_buf());
         let (results, paths) = run_backtest(&a).unwrap();
         assert_eq!(
             results.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
-            ["v13@older", "biz_algo@older", "v13@newer", "biz_algo@newer"]
+            ["biz_algo@older", "biz_algo@newer"]
         );
         let md = std::fs::read_to_string(&paths[0]).unwrap();
         for needle in ["## `biz_algo` rule", "from 72 weight sets", "48 feeds", "biz_algo@newer"] {
             assert!(md.contains(needle), "missing {needle:?}: {md}");
         }
         // Every newer step sees a feed, and never one from after the step.
-        let newer = &results[3];
+        let newer = &results[1];
         let trace = newer.trace.as_ref().unwrap();
         assert_eq!(trace.rows.len(), newer.steps);
         for row in &trace.rows {
@@ -921,30 +761,24 @@ mod tests {
     }
 
     #[test]
-    fn writes_all_six_variants_deterministically() {
+    fn writes_both_halves_deterministically() {
         let cache = cache_dir();
         let out = tempfile::tempdir().unwrap();
         let (results, paths) = run_backtest(&args(cache.path(), out.path())).unwrap();
         assert_eq!(
             results.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
-            ALL_PERSONAS.to_vec()
+            ["biz_algo@older", "biz_algo@newer"]
         );
         assert!(paths[0].ends_with("algo_backtest_2026-07-23.md"));
         let csv = std::fs::read_to_string(&paths[1]).unwrap();
         let rows: Vec<&str> = csv.lines().skip(1).collect();
-        assert_eq!(rows.len(), 6);
+        assert_eq!(rows.len(), 2);
         assert!(
             rows.iter()
                 .all(|r| r.split(',').count() == 8 && !r.contains(",,"))
         );
         let md = std::fs::read_to_string(&paths[0]).unwrap();
-        for needle in [
-            "rule proxy",
-            "Survivorship",
-            "25 bps per round trip",
-            "out-of-sample",
-            "first scheduled step of each new UTC day",
-        ] {
+        for needle in ["Survivorship", "25 bps per round trip", "Out of sample", "not loaded (no `--biz-feeds`)"] {
             assert!(md.contains(needle), "missing {needle:?}");
         }
         let trades = std::fs::read_to_string(&paths[2]).unwrap();

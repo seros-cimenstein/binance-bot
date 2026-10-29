@@ -79,7 +79,7 @@ pub struct Snapshot {
     pub context: DecisionContext,
     pub view: Arc<MarketView>,
     pub balances: Balances,
-    /// The personas' point-in-time market view (`None` when the breadth read failed or
+    /// The rule's point-in-time market view (`None` when the breadth read failed or
     /// market evidence is off); the rule-based decider reads it.
     pub step: Option<crate::book::Snapshot>,
 }

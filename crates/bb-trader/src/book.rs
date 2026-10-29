@@ -20,7 +20,7 @@ pub struct CoinView {
     pub quote_volume_24h: f64,
 }
 
-/// What every persona may see at step time `T`.
+/// What the rule may see at step time `T`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     pub t: i64,
@@ -58,7 +58,7 @@ impl Snapshot {
     }
 }
 
-/// One holding as the persona sees it.
+/// One holding as the rule sees it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Holding {
     pub qty: f64,
@@ -68,7 +68,7 @@ pub struct Holding {
     pub entry: Option<(f64, i64)>,
 }
 
-/// The persona's account at a step.
+/// The rule's account at a step.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Book {
     pub t: i64,
@@ -109,7 +109,7 @@ fn float(value: Decimal) -> f64 {
     value.to_f64().unwrap_or(0.0)
 }
 
-/// The live book the personas vote on: USDT cash, the portfolio value, and every free
+/// The live book the rule decides on: USDT cash, the portfolio value, and every free
 /// balance worth at least its USDT market's minimum order (`min_notional`), leaving out
 /// USDT itself and cash-like coins (`assets::is_low_upside`). Dust a market order could
 /// not sell is not a position.

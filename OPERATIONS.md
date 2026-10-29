@@ -368,66 +368,43 @@ bb entry-study --audit docker-data/bot-spot-decisions.jsonl \
   --output data/entry-study.json --markdown docs/research/entry-study.md
 ```
 
-#### Persona backtest
+#### Algorithm backtest
 
-`bb bot-spot-persona-backtest` (Phase 48) backtests deterministic rule
-personas on the same 1m cache. It is offline and research only: it reads only
-`--cache-dir` (and `--biz-feeds`), never fetches or calls Binance, has no
-order path, and leaves the live `bot-spot` untouched. If the cache is missing
-a liquid coin, ends before `--end`, or lacks 48h of history before the window
-start, it exits 1 with `missing cache`.
+`bb algo-backtest` backtests the trader's algorithm (`crate::decider`, as
+`biz_algo`) on the same 1m cache. It is offline and research only: it reads
+only `--cache-dir` (and `--biz-feeds`), never fetches or calls Binance, has
+no order path, and leaves the live `bot-spot` untouched. If the cache is
+missing a liquid coin, ends before `--end`, or lacks 48h of history before
+the window start, it exits 1 with `missing cache`.
 
 ```bash
-cargo run --release -p bb-cli --bin bb -- bot-spot-persona-backtest \
-  --cache-dir data/entry-study-cache \
-  --end 2026-10-18T10:43:00Z --days 60 --persona all
+cargo run --release -p bb-cli --bin bb -- algo-backtest \
+  --cache-dir data/entry-study-cache --biz-feeds <history dir> \
+  --end 2026-10-18T10:43:00Z --days 60
 ```
 
 The other flags are `--starting-balance` (1000), `--fee-bps` (7.5),
 `--slippage-bps` (5), `--step-minutes` (20) and `--output-dir` (`reports`).
-`--persona` repeats and defaults to `all` (the six Phase 48 variants;
-`biz_algo` is named on its own).
 
-Personas:
-
-- `v13` is a rule proxy of the live v13/v14 guidance, not the LLM. It trades
-  the liquid top 10 and buys when flat, breadth is at least +15 and the 4h
-  market median is at least +1%. Exits use `atr=3.5:1h,deadline=360`, or a
-  sell when breadth falls to −15 or below.
-- `contrarian` buys the worst 4h coin when breadth is −15 or below. It sells
-  on `stretch=2:1,deadline=360`, a +1.5% 1h bounce, or breadth of +15 or more.
-- `detached` trades all cached coins on 1h/15m price only, with no breadth,
-  volume filter or exit plan. It buys the best 1h coin above +0.25% while its
-  15m is rising, sells when 15m and 1h are both negative, and rotates when
-  another coin leads by more than 0.5 points.
-- `high_variance` holds up to 3 positions, buying any coin with a 1h move of
-  at least +0.5%. Each position is sized `clamp(|1h| / 2%, 0.25, 1.0)` of
-  equity and exits only on `atr=6:1h,deadline=1440`.
-- `rotation` shadow-runs the four base personas and, at the first step of
-  each UTC day, follows the best trailing-72h shadow (`v13` on ties or with
-  less than 72h of history). A switch step only sells.
-- `ensemble` buys the coin with at least 2 of 4 base-persona buy votes. It
-  sells on 2 sell votes or the `v13` exit plan.
-- `biz_algo` (not part of `all`, research only) is the trader's algorithm
-  `crate::decider`, no LLM: each liquid-top coin scores
-  `w_talk·talk + w_stance·stance + w_momentum·momentum`
-  (talk: /biz/ 6h mention rate over its 24h rate − 1, from 4 mentions in 24h,
-  capped −1..3; stance: (bullish − bearish) / tagged of the 6h AI tags with
-  `--biz-min-posters` (2) posters; momentum: 1h return / 5%, capped). A held coin scoring below the
-  sell level is sold; with nothing held the best coin at or above the buy
-  level is bought with all cash; no exit plan. `--biz-feeds <dir>` is the
-  hourly `biz-feed-v1` history from biz-app (a feed counts at a step from its
-  `as_of` on, for `--biz-max-age-minutes`, 90); without it the /biz/ terms
-  are 0. Selecting `biz_algo` splits the window: the weights are picked on
-  the older half from a grid (talk and stance −1/0/+1, momentum 0/1, buy at
-  0.5/1, sell below −0.5/0; 72 sets with feeds) by net %, or given with
-  `--biz-weights talk,stance,momentum,buy,sell`
-  (e.g. from `bb biz-lead-study`); every persona then runs on both halves as
-  `<persona>@older` and `<persona>@newer`, and the `@newer` row is the
-  out-of-sample result. The report adds a `biz_algo` rule section with the
-  best grid rows, and `_biz_algo@<half>_trace.csv` (time, feed `as_of`, best
-  coin and score, held coin and score, action). Not run on real feeds yet:
-  biz-app does not write the history.
+The rule: each liquid-top coin scores
+`w_talk·talk + w_stance·stance + w_momentum·momentum`
+(talk: /biz/ 6h mention rate over its 24h rate − 1, from 4 mentions in 24h,
+capped −1..3; stance: (bullish − bearish) / tagged of the 6h AI tags with
+`--biz-min-posters` (2) posters; momentum: 1h return / 5%, capped). A held
+coin scoring below the sell level is sold; with nothing held the best coin at
+or above the buy level is bought with all cash. `--biz-feeds <dir>` is the
+hourly `biz-feed-v1` history from biz-app (a feed counts at a step from its
+`as_of` on, for `--biz-max-age-minutes`, 90); without it the /biz/ terms are
+0. The window is split: the weights are picked on the older half from a grid
+(talk and stance −1/0/+1, momentum 0/1, buy at 0.5/1, sell below −0.5/0; 72
+sets with feeds) by net %, or given with
+`--biz-weights talk,stance,momentum,buy,sell` (e.g. from
+`bb biz-lead-study`). The rule then runs on both halves as `biz_algo@older`
+and `biz_algo@newer`; the `@newer` row is the out-of-sample result. The
+report has a `biz_algo` rule section with the best grid rows, and
+`_biz_algo@<half>_trace.csv` (time, feed `as_of`, best coin and score, held
+coin and score, action). Not run on real feeds yet: biz-app does not write
+the history.
 
 Cost model: fills happen at the next 1m open, with the fee plus slippage
 charged on each side (25 bps per round trip by default, against the measured
@@ -435,8 +412,8 @@ live 14.8 bps). Buys under 5 USDT are skipped. Equity is marked at the last
 close with no exit costs.
 
 Output: `reports/algo_backtest_<end-date>.md` (settings, results,
-per-variant exit and skip reasons, assumptions, caveats), `.csv` (one row per
-variant), `_trades.csv` (one row per trade) and `_biz_algo@<half>_trace.csv`
+per-half exit and skip reasons, assumptions, caveats), `.csv` (one row per
+half), `_trades.csv` (one row per trade) and `_biz_algo@<half>_trace.csv`
 (one row per step). The files are byte-identical
 across reruns. The cache comes from `bb entry-study` (`data/` is gitignored).
 The liquid universe is the 2026-10-18 top 20, so results carry survivorship

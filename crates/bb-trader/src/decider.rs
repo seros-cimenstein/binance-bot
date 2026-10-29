@@ -1,6 +1,6 @@
 //! The trader's algorithm: buy, sell or hold from the operator's fixed rule, no LLM.
 //!
-//! One plain function, [`decide`], used by the `biz_algo` backtest persona and by every
+//! One plain function, [`decide`], used by the `biz_algo` backtest rule and by every
 //! trader cycle (`Runtime::algo_verdict`). It reads the step's market
 //! [`Snapshot`], the account [`Book`] and the /biz/ feed visible at that time, and scores
 //! each coin:

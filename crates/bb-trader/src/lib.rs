@@ -17,17 +17,17 @@
 //! - [`exit_plan`]: the Phase 45 sell-plan menu. [`exit_replay`]: its historical replay.
 //!   [`exit_book`]: plans set by `set_exit_plan`. [`exit_watch`]: the paper watcher.
 //!   [`exit_guard`]: live exit plans inside the trader daemon.
-//! - [`persona_backtest`]: Phase 48 offline backtest of deterministic rule personas
-//!   (research only, no network, no order path).
+//! - [`algo_backtest`]: offline backtest of the algorithm on cached 1m candles, tuned on
+//!   the older half and judged on the newer (research only, no network, no order path).
 //! - [`biz`]: the /biz/ feed from biz-app, recorded per cycle, information only (Phase 51).
-//! - [`decider`]: the operator's rule (no LLM); backtested as persona `biz_algo`.
+//! - [`decider`]: the operator's rule (no LLM); backtested as `biz_algo`.
 //! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
-//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`,
-//!   `bot-spot-persona-backtest`.
+//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `algo-backtest`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod algo_backtest;
 pub mod assets;
 pub mod audit;
 pub mod biz;
@@ -46,7 +46,6 @@ pub mod exit_replay;
 pub mod exit_watch;
 pub mod market_mood;
 pub mod memory;
-pub mod persona_backtest;
 pub mod scope;
 pub mod state;
 pub mod trades;

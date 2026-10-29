@@ -1,15 +1,11 @@
-//! The persona backtest engine: one USDT account per persona, stepped on a fixed clock over
-//! cached 1m bars.
+//! The backtest engine: one USDT account per rule, stepped on a fixed clock over cached 1m
+//! bars.
 //!
-//! - Every `step_minutes` the persona sees a point-in-time [`Snapshot`] (only bars closed
+//! - Every `step_minutes` the rule sees a point-in-time [`Snapshot`] (only bars closed
 //!   by the step time `T`) and its [`Book`], and returns [`Intent`]s.
 //! - Intents fill at the open of the 1m bar that opens at `T`: sells first, then buys. A buy
 //!   pays `price × (1 + slippage)` plus the fee; a sell receives `price × (1 − slippage)`
 //!   minus the fee. Buys under `min_notional` USDT are skipped.
-//! - A position bought under a persona with an exit plan gets an [`ExitWatch`] (ATR from the
-//!   closed 1h bars before entry, 60 minutes of 1m warm-up as `bb bot-spot-exit-replay`
-//!   does). Its sells fill at the [`crate::exit_plan::ExitFill`] price minus slippage and
-//!   fee.
 //! - Equity (cash plus holdings at their last close, no exit costs) is marked at every 1m
 //!   close; open positions at the window end are marked the same way.
 //!
@@ -17,12 +13,8 @@
 
 use std::collections::BTreeMap;
 
-use rust_decimal::Decimal;
-use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
-
 use super::data::{Bar, MINUTE_MS, Market, Series};
 use crate::error::{Result, TraderError};
-use crate::exit_plan::{ATR_PERIODS, ExitPlan, ExitWatch, PriceBar, average_true_range};
 use crate::book::{Book, CoinView, Holding, Snapshot};
 use crate::market_mood::breadth_score_at;
 
@@ -37,12 +29,10 @@ pub const CANDIDATE_LIMIT: usize = 10;
 /// Breadth bars, as `market_mood` (15m bars, 24h = 96 bars back).
 const BREADTH_BAR_MINUTES: i64 = 15;
 const BREADTH_LOOKBACK_BARS: usize = 96;
-/// 1m bars before entry fed to the exit watch (`bb bot-spot-exit-replay --history-minutes`).
-const HISTORY_MINUTES: i64 = 60;
 const MINUTES_PER_YEAR: f64 = 525_600.0;
 const DAY_MINUTES: i64 = 1_440;
 
-/// Run settings shared by every persona.
+/// Run settings of one backtest run.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
     /// First step (inclusive); bars that open in `[start_ms, end_ms)` are simulated.
@@ -131,7 +121,7 @@ impl Snapshot {
     }
 }
 
-/// What a persona asks for at a step.
+/// What a rule asks for at a step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Intent {
     /// Spend `equity_fraction` of the step's equity (capped by cash) on `asset`.
@@ -141,19 +131,11 @@ pub enum Intent {
 }
 
 /// A deterministic trading rule set.
-pub trait Persona {
+pub trait StepRule {
     fn name(&self) -> &str;
     /// Intents at `snap.t`. Must use only `snap` and `book`.
     fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent>;
-    /// The exit plan attached to a position bought now; `None` holds until a `Sell`.
-    fn exit_plan(&self) -> Option<ExitPlan> {
-        None
-    }
-    /// Called before [`Self::decide`] at each step (multi-persona shadows step here).
-    fn before_step(&mut self, _market: &Market, _snap: &Snapshot) {}
-    /// Called after the account has processed minute `m` (multi-persona shadows advance).
-    fn after_minute(&mut self, _market: &Market, _m: i64) {}
-    /// Lines for the report about how the persona behaved (e.g. multi-persona switches).
+    /// Lines for the report about how the rule behaved.
     fn notes(&self) -> Vec<String> {
         Vec::new()
     }
@@ -163,7 +145,7 @@ pub trait Persona {
     }
 }
 
-/// A persona's per-step record: a CSV header and one row per step.
+/// A rule's per-step record: a CSV header and one row per step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trace {
     pub header: String,
@@ -193,7 +175,7 @@ pub struct Trade {
     pub open_at_end: bool,
 }
 
-/// Result of one persona over the window.
+/// Result of one rule over the window.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunResult {
     pub name: String,
@@ -210,13 +192,13 @@ pub struct RunResult {
     pub fees_usdt: f64,
     pub steps: usize,
     /// Intents that could not fill, in total and by reason (`no_cash`, `under_min_notional`,
-    /// `exit_plan_unavailable`, `buy_no_bar`, `sell_no_bar`, `unknown_asset`).
+    /// `buy_no_bar`, `sell_no_bar`, `unknown_asset`).
     pub skipped_orders: usize,
     pub skip_reasons: BTreeMap<&'static str, usize>,
     pub trades: Vec<Trade>,
-    /// [`Persona::notes`] at the end of the run.
+    /// [`StepRule::notes`] at the end of the run.
     pub notes: Vec<String>,
-    /// [`Persona::trace`] at the end of the run.
+    /// [`StepRule::trace`] at the end of the run.
     pub trace: Option<Trace>,
 }
 
@@ -233,12 +215,11 @@ struct Position {
     last_ms: i64,
     last_close: f64,
     reasons: Vec<&'static str>,
-    watch: Option<ExitWatch>,
 }
 
-/// One persona's account, advanced step by step and minute by minute.
+/// One rule's account, advanced step by step and minute by minute.
 pub struct Account {
-    persona: Box<dyn Persona>,
+    rule: Box<dyn StepRule>,
     cfg: Config,
     cash: f64,
     positions: BTreeMap<String, Position>,
@@ -250,25 +231,10 @@ pub struct Account {
     skips: BTreeMap<&'static str, usize>,
 }
 
-fn decimal(value: f64) -> Option<Decimal> {
-    Decimal::from_f64(value).filter(|_| value.is_finite())
-}
-
-fn price_bar(bar: &Bar) -> Option<PriceBar> {
-    Some(PriceBar {
-        open_ms: bar.open_ms,
-        close_ms: bar.open_ms + MINUTE_MS - 1,
-        open: decimal(bar.open)?,
-        high: decimal(bar.high)?,
-        low: decimal(bar.low)?,
-        close: decimal(bar.close)?,
-    })
-}
-
 impl Account {
-    pub fn new(persona: Box<dyn Persona>, cfg: Config) -> Self {
+    pub fn new(rule: Box<dyn StepRule>, cfg: Config) -> Self {
         Self {
-            persona,
+            rule,
             cfg,
             cash: cfg.starting_balance,
             positions: BTreeMap::new(),
@@ -282,7 +248,7 @@ impl Account {
     }
 
     pub fn name(&self) -> &str {
-        self.persona.name()
+        self.rule.name()
     }
 
     /// Cash plus holdings at their last close.
@@ -320,16 +286,15 @@ impl Account {
         }
     }
 
-    /// Run the step at `snap.t`: record equity, ask the persona, fill its intents at the
+    /// Run the step at `snap.t`: record equity, ask the rule, fill its intents at the
     /// open of the bar that opens at `snap.t`. Returns the intents (for tests and votes).
     pub fn step(&mut self, market: &Market, snap: &Snapshot) -> Vec<Intent> {
         let t = snap.t;
         self.steps += 1;
         let equity = self.equity();
         self.step_equity.push((t, equity));
-        self.persona.before_step(market, snap);
         let book = self.book(t);
-        let intents = self.persona.decide(snap, &book);
+        let intents = self.rule.decide(snap, &book);
         for intent in &intents {
             if let Intent::Sell { asset, reason } = intent {
                 self.sell_intent(market, asset, t, reason);
@@ -375,10 +340,10 @@ impl Account {
             return;
         }
         let notional = wanted.min(self.cash);
-        let Some(series) = market.get(asset) else {
+        if market.get(asset).is_none() {
             self.skip("unknown_asset");
             return;
-        };
+        }
         let Some(bar) = Self::fill_bar(market, asset, t) else {
             self.skip("buy_no_bar");
             return;
@@ -392,16 +357,6 @@ impl Account {
             return;
         }
         let fill = bar.open * (1.0 + self.cfg.slippage);
-        let watch = match self.persona.exit_plan() {
-            None => None,
-            Some(plan) => match Self::watch(series, &plan, fill, t, self.cfg.fee_rate) {
-                Some(watch) => Some(watch),
-                None => {
-                    self.skip("exit_plan_unavailable");
-                    return;
-                }
-            },
-        };
         let qty = notional / (fill * (1.0 + self.cfg.fee_rate));
         let fee = qty * fill * self.cfg.fee_rate;
         self.cash -= notional;
@@ -420,53 +375,12 @@ impl Account {
                 last_ms: t,
                 last_close: bar.open,
                 reasons: Vec::new(),
-                watch,
             },
         );
     }
 
     fn skip(&mut self, reason: &'static str) {
         *self.skips.entry(reason).or_default() += 1;
-    }
-
-    /// The exit watch for a buy at `entry_ms`: ATR from the closed bars of the plan's
-    /// timeframe before entry, then 60 minutes of 1m warm-up. `None` when it cannot start.
-    fn watch(
-        series: &Series,
-        plan: &ExitPlan,
-        entry_price: f64,
-        entry_ms: i64,
-        fee_rate: f64,
-    ) -> Option<ExitWatch> {
-        let atr = match plan.atr_timeframe() {
-            None => None,
-            Some(tf) => {
-                let bars: Vec<PriceBar> = series
-                    .closed_bars(entry_ms, tf.millis() / MINUTE_MS, ATR_PERIODS + 1)
-                    .iter()
-                    .filter_map(price_bar)
-                    .collect();
-                Some(average_true_range(&bars)?)
-            }
-        };
-        let mut watch = ExitWatch::new(
-            plan,
-            decimal(entry_price)?,
-            entry_ms,
-            atr,
-            decimal(fee_rate)?,
-        )
-        .ok()?;
-        let history = series.closed_by(entry_ms);
-        let from = history.len().saturating_sub(HISTORY_MINUTES as usize);
-        for bar in history[from..]
-            .iter()
-            .filter(|b| b.open_ms >= entry_ms - HISTORY_MINUTES * MINUTE_MS)
-            .filter_map(price_bar)
-        {
-            watch.warm_up_before_entry(&bar);
-        }
-        Some(watch)
     }
 
     fn sell_qty(
@@ -498,12 +412,10 @@ impl Account {
     }
 
     fn close_if_done(&mut self, asset: &str) {
-        let done = self.positions.get(asset).is_some_and(|p| {
-            p.qty <= p.original_qty * 1e-12
-                || p.watch
-                    .as_ref()
-                    .is_some_and(|w| w.remaining() <= Decimal::ZERO)
-        });
+        let done = self
+            .positions
+            .get(asset)
+            .is_some_and(|p| p.qty <= p.original_qty * 1e-12);
         if done && let Some(mut position) = self.positions.remove(asset) {
             position.qty = 0.0;
             self.trades.push(Self::trade(asset, &position, false));
@@ -541,7 +453,7 @@ impl Account {
         }
     }
 
-    /// Process the 1m bar that opens at `m`: exit-plan sells, then the mark at its close.
+    /// Process the 1m bar that opens at `m`: the mark at its close.
     pub fn minute(&mut self, market: &Market, m: i64) {
         let assets: Vec<String> = self.positions.keys().cloned().collect();
         for asset in assets {
@@ -551,32 +463,12 @@ impl Account {
             let Some(position) = self.positions.get_mut(&asset) else {
                 continue;
             };
-            if let (Some(watch), Some(minute_bar)) = (position.watch.as_mut(), price_bar(bar)) {
-                for fill in watch.on_bar(&minute_bar) {
-                    let (Some(price), Some(fraction)) =
-                        (fill.price.to_f64(), fill.fraction.to_f64())
-                    else {
-                        continue;
-                    };
-                    let qty = fraction * position.original_qty;
-                    Self::sell_qty(
-                        &mut self.cash,
-                        &self.cfg,
-                        position,
-                        qty,
-                        price,
-                        fill.ts_ms,
-                        fill.reason.as_str(),
-                    );
-                }
-            }
             position.last_close = bar.close;
             if position.qty > 0.0 {
                 position.last_ms = bar.open_ms + MINUTE_MS;
             }
             self.close_if_done(&asset);
         }
-        self.persona.after_minute(market, m);
         let equity = self.equity();
         self.peak_equity = self.peak_equity.max(equity);
         if self.peak_equity > 0.0 {
@@ -610,7 +502,7 @@ impl Account {
         let start = self.cfg.starting_balance;
         let equities: Vec<f64> = self.step_equity.iter().map(|(_, e)| *e).collect();
         RunResult {
-            name: self.persona.name().to_string(),
+            name: self.rule.name().to_string(),
             starting_balance: start,
             final_equity,
             net_pnl_usdt: final_equity - start,
@@ -629,8 +521,8 @@ impl Account {
             skipped_orders: self.skips.values().sum(),
             skip_reasons: self.skips,
             trades,
-            notes: self.persona.notes(),
-            trace: self.persona.trace(),
+            notes: self.rule.notes(),
+            trace: self.rule.trace(),
         }
     }
 }
@@ -669,10 +561,10 @@ pub fn sharpe(equity: &[f64], step_minutes: i64) -> f64 {
     mean / std * (MINUTES_PER_YEAR / step_minutes as f64).sqrt()
 }
 
-/// Run one persona over the window.
-pub fn run(market: &Market, cfg: &Config, persona: Box<dyn Persona>) -> Result<RunResult> {
+/// Run one rule over the window.
+pub fn run(market: &Market, cfg: &Config, rule: Box<dyn StepRule>) -> Result<RunResult> {
     cfg.validate()?;
-    let mut account = Account::new(persona, *cfg);
+    let mut account = Account::new(rule, *cfg);
     let mut m = cfg.start_ms;
     while m < cfg.end_ms {
         if cfg.is_step(m) {
@@ -721,13 +613,12 @@ pub(crate) mod tests {
         Series::new(asset, bars)
     }
 
-    /// Plays a fixed script: `(step time, intents)`; optional exit plan.
+    /// Plays a fixed script: `(step time, intents)`.
     struct Script {
-        plan: Option<ExitPlan>,
         script: Vec<(i64, Vec<Intent>)>,
     }
 
-    impl Persona for Script {
+    impl StepRule for Script {
         fn name(&self) -> &str {
             "script"
         }
@@ -737,9 +628,6 @@ pub(crate) mod tests {
                 .filter(|(t, _)| *t == snap.t)
                 .flat_map(|(_, i)| i.clone())
                 .collect()
-        }
-        fn exit_plan(&self) -> Option<ExitPlan> {
-            self.plan
         }
     }
 
@@ -753,7 +641,7 @@ pub(crate) mod tests {
     fn sell(asset: &str) -> Intent {
         Intent::Sell {
             asset: asset.into(),
-            reason: "persona",
+            reason: "rule",
         }
     }
 
@@ -767,14 +655,13 @@ pub(crate) mod tests {
         let market =
             Market::from_series([coin("SOL", 200, |m| if m < 75 { 100.0 } else { 110.0 })]);
         let c = cfg(60, 100, 20);
-        let persona = Script {
-            plan: None,
+        let rule = Script {
             script: vec![
                 (c.start_ms, vec![buy("SOL", 1.0)]),
                 (c.start_ms + 20 * MINUTE_MS, vec![sell("SOL")]),
             ],
         };
-        let r = run(&market, &c, Box::new(persona)).unwrap();
+        let r = run(&market, &c, Box::new(rule)).unwrap();
         // qty = 1000 / (100 × 1.0005 × 1.00075); proceeds = qty × 110 × 0.9995 × 0.99925.
         let expected = 97.253_434_237_165_72;
         assert_eq!(r.trades.len(), 1);
@@ -789,55 +676,22 @@ pub(crate) mod tests {
         assert!(near(r.fees_usdt, fees, 1e-9));
         assert_eq!((r.round_trips, r.wins), (1, 1));
         assert!(near(r.win_rate_pct, 100.0, 1e-12));
-        assert_eq!(r.trades[0].reason, "persona");
+        assert_eq!(r.trades[0].reason, "rule");
         assert_eq!(r.steps, 2);
     }
 
     #[test]
-    fn an_exit_plan_sells_at_its_fill_price_minus_fee_and_slippage() {
-        // deadline=30: bought at minute 60 (100), sold at the open of minute 90 (105).
-        let market =
-            Market::from_series([coin("SOL", 200, |m| if m < 90 { 100.0 } else { 105.0 })]);
-        let c = cfg(60, 150, 120);
-        let persona = Script {
-            plan: Some(ExitPlan::parse_spec("deadline=30").unwrap()),
-            script: vec![(c.start_ms, vec![buy("SOL", 1.0)])],
-        };
-        let r = run(&market, &c, Box::new(persona)).unwrap();
-        assert_eq!(r.trades.len(), 1);
-        let trade = &r.trades[0];
-        assert_eq!(trade.reason, "deadline");
-        assert_eq!(trade.exit_ms, c.start_ms + 30 * MINUTE_MS);
-        assert!(!trade.open_at_end);
-        assert!(
-            near(trade.net_pnl_usdt, 47.378_278_135_476_42, 1e-9),
-            "{trade:?}"
-        );
-    }
-
-    #[test]
-    fn small_buys_missing_atr_and_spent_cash_are_skipped_by_reason() {
+    fn small_buys_and_spent_cash_are_skipped_by_reason() {
         let market = Market::from_series([coin("SOL", 200, |_| 100.0), coin("ETH", 200, |_| 10.0)]);
         let c = cfg(60, 100, 20);
         let tiny = Script {
-            plan: None,
             script: vec![(c.start_ms, vec![buy("SOL", 0.004)])],
         };
         let r = run(&market, &c, Box::new(tiny)).unwrap();
         assert_eq!((r.trades.len(), r.skipped_orders), (0, 1));
         assert_eq!(r.skip_reasons.get("under_min_notional"), Some(&1));
-        // An hourly ATR needs closed 1h bars; a flat price has a zero range.
-        let atr = Script {
-            plan: Some(ExitPlan::parse_spec("atr=3.5:1h").unwrap()),
-            script: vec![(c.start_ms, vec![buy("SOL", 1.0)])],
-        };
-        let r = run(&market, &c, Box::new(atr)).unwrap();
-        assert_eq!((r.trades.len(), r.skipped_orders), (0, 1));
-        assert_eq!(r.skip_reasons.get("exit_plan_unavailable"), Some(&1));
-        assert!(near(r.final_equity, 1000.0, 1e-12));
         // The first buy spends all cash, so the second one in the same step has none.
         let all_in = Script {
-            plan: None,
             script: vec![(c.start_ms, vec![buy("ETH", 1.0), buy("SOL", 1.0)])],
         };
         let r = run(&market, &c, Box::new(all_in)).unwrap();
@@ -860,11 +714,10 @@ pub(crate) mod tests {
             _ => 88.0,
         })]);
         let c = cfg(60, 100, 60);
-        let persona = Script {
-            plan: None,
+        let rule = Script {
             script: vec![(c.start_ms, vec![buy("SOL", 1.0)])],
         };
-        let r = run(&market, &c, Box::new(persona)).unwrap();
+        let r = run(&market, &c, Box::new(rule)).unwrap();
         assert!(
             near(r.max_drawdown_pct, 20.0, 1e-9),
             "{}",
@@ -880,7 +733,7 @@ pub(crate) mod tests {
         seen: Seen,
     }
 
-    impl Persona for Recorder {
+    impl StepRule for Recorder {
         fn name(&self) -> &str {
             "recorder"
         }
@@ -964,7 +817,7 @@ pub(crate) mod tests {
             last_step: i64,
             inner: Recorder,
         }
-        impl Persona for Churn {
+        impl StepRule for Churn {
             fn name(&self) -> &str {
                 "churn"
             }

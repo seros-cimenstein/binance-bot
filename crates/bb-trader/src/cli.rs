@@ -22,8 +22,8 @@ pub enum Command {
     BotSpotExitReplay(crate::exit_replay::ExitReplayArgs),
     /// Paper exit-plan watcher: follows bids between cycles, records would-be sells (no orders).
     BotSpotExitWatch(crate::exit_watch::ExitWatchArgs),
-    /// Backtest the Phase 48 rule personas offline on cached 1m candles (no network, no orders).
-    BotSpotPersonaBacktest(crate::persona_backtest::report::PersonaBacktestArgs),
+    /// Backtest the algorithm offline on cached 1m candles (no network, no orders).
+    AlgoBacktest(crate::algo_backtest::report::AlgoBacktestArgs),
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -73,15 +73,13 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
                 ExitCode::FAILURE
             }
         }),
-        Command::BotSpotPersonaBacktest(args) => {
-            Ok(match crate::persona_backtest::report::run_cli(&args) {
-                Ok(code) => code,
-                Err(error) => {
-                    eprintln!("Persona backtest failed: {error}");
-                    ExitCode::FAILURE
-                }
-            })
-        }
+        Command::AlgoBacktest(args) => Ok(match crate::algo_backtest::report::run_cli(&args) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("Algorithm backtest failed: {error}");
+                ExitCode::FAILURE
+            }
+        }),
     }
 }
 

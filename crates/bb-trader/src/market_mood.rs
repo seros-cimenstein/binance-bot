@@ -262,7 +262,7 @@ fn score(horizons: &[HorizonBreadth]) -> Option<f64> {
 
 /// Every horizon's breadth and the weighted score at 15m bar open time `t`, from each
 /// coin's 15m closes keyed by open time: the same numbers [`mood`] reports for its newest
-/// bar, at any time. The Phase 48 persona backtest scores past times with it.
+/// bar, at any time. The algorithm backtest scores past times with it.
 pub fn breadth_score_at(
     closes: &[HashMap<i64, f64>],
     t: i64,

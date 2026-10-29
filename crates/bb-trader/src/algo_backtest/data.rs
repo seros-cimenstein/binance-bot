@@ -1,6 +1,6 @@
-//! Offline 1m candles for the persona backtest, read from the `bb entry-study` cache
+//! Offline 1m candles for the algorithm backtest, read from the `bb entry-study` cache
 //! (`data/entry-study-cache/1m_<BASE>_USDT_<start>_<end>.json`, rows `{t,o,h,l,c,v}`), and
-//! the /biz/ feed history the `biz_algo` persona reads ([`BizHistory`]).
+//! the /biz/ feed history the `biz_algo` rule reads ([`BizHistory`]).
 //!
 //! Point-in-time access only: every reader takes a time `t` and sees just the bars that
 //! closed by `t` (and the feeds whose `as_of` is at or before `t`). A coin without a bar
