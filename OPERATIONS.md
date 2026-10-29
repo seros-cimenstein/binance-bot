@@ -233,7 +233,14 @@ hour into `biz_insights/out/biz-feed-history/<as_of>.json` (from 2026-10-01;
 590 files to 2026-10-25T13:00Z), the input of `bb biz-lead-study --feeds`
 and `bb algo-backtest --biz-feeds`. Every post is tagged once (cache
 `out/feed.sqlite3`), so a rerun makes no model call.
-`scripts/biz_feed_to_pi.sh` copies it to
+
+Live, three laptop processes keep the Pi's feed fresh: the scraper
+(`biz-watch`, the operator's), `biz-feed` (`biz-insights feed --watch`, a
+round every 900 s: it tags the new posts and replaces `out/biz-feed.json` by
+rename, so the copier never sees half a file; a failed round keeps the old
+file, which then ages) and `scripts/biz_feed_to_pi.sh`. `as_of` is the start
+of the scraper's newest sync pass, so it advances only while the scraper
+runs. `scripts/biz_feed_to_pi.sh` copies `out/biz-feed.json` to
 `~/binance-bot/docker-data/biz-feed.json` on the Pi every 5 minutes
 (`--once` for one copy; `PI_HOST`, `PI_DATA_DIR`, `BIZ_FEED`,
 `COPY_SECONDS`). The trader reads `BOT_SPOT_BIZ_FEED_PATH` (default
