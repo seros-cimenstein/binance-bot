@@ -73,8 +73,6 @@ mirror
 # /app/data/...); map them onto the mirror. Unset ones use the trader's defaults.
 declare -A paths=(
     [BOT_SPOT_AUDIT_PATH]=bot-spot-decisions.jsonl
-    [BOT_SPOT_JOURNAL_PATH]=bot-spot-journal.jsonl
-    [BOT_SPOT_STATE_PATH]=bot-spot-agent-state.json
     [BOT_SPOT_STOP_PATH]=bot-spot.stop
     [BOT_SPOT_EXIT_PLANS_PATH]=bot-spot-exit-plans.json
     [BOT_SPOT_EXIT_WATCH_STATE_PATH]=bot-spot-exit-watch-state.json
@@ -83,7 +81,7 @@ declare -A paths=(
 for name in "${!paths[@]}"; do
     export "$name=$MIRROR_DIR/${paths[$name]}"
 done
-settings_pattern='^BOT_SPOT_(EXIT_PLANS_LIVE|DEFAULT_EXIT_PLAN|DEFAULT_EXIT_PLAN_FROM|EXIT_POLL_SECONDS|AUDIT_PATH|JOURNAL_PATH|STATE_PATH|STOP_PATH|EXIT_PLANS_PATH|EXIT_WATCH_STATE_PATH|EXIT_WATCH_LOG_PATH)='
+settings_pattern='^BOT_SPOT_(EXIT_PLANS_LIVE|DEFAULT_EXIT_PLAN|DEFAULT_EXIT_PLAN_FROM|EXIT_POLL_SECONDS|AUDIT_PATH|STOP_PATH|EXIT_PLANS_PATH|EXIT_WATCH_STATE_PATH|EXIT_WATCH_LOG_PATH)='
 if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "grep -E '$settings_pattern' $PI_ENV_FILE" 2>/dev/null)"; then
     while IFS='=' read -r name value; do
         [[ "$name" =~ ^BOT_SPOT_[A-Z_]+$ ]] || continue

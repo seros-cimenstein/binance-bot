@@ -105,8 +105,8 @@ journalctl --user -u binance-bot-spot.service -f
 Docker: `docker compose ps` and `docker compose logs -f <service>`.
 
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
-profiles `gui`/`live`/`all`) serves the Bot Spot trades, cycles (brain, tools,
-cost per cycle), journal, exit plans (Exits tab), results per session
+profiles `gui`/`live`/`all`) serves the Bot Spot trades, cycles (the rule's
+verdicts; older LLM cycles keep brain, tools and cost), exit plans (Exits tab), results per session
 (Sessions tab: each setup ranked by realized P&L, the winner, and the
 session's configuration from the `run_config` the trader writes on every
 cycle summary), the /biz/ feed the trader read (/biz/ tab), a market mood
@@ -443,7 +443,7 @@ is left out of that cycle.
   rule's scores.
 - **Practice run.** `docker compose --profile algo-paper up -d
   bot-spot-algo-paper` runs it plan-only with its own files
-  (`bot-spot-algo-paper-{decisions.jsonl,journal.jsonl,state.json}`, lock
+  (`bot-spot-algo-paper-{decisions.jsonl,state.json}`, lock
   `bot-spot-algo-paper.lock`) and the shared stop file. Plan-only rows do not
   move the wallet, so it re-decides on the real balances every cycle.
 - **Going live** (after the practice run and the operator's go):
@@ -620,9 +620,9 @@ bias.
 ## Bot Spot Data Backups
 
 Bot Spot's record is files: the decisions
-audit (the only record of every trade), journal, agent state, exit-plan book
-and watch files (the old omp session directory and entry-timing cache are no
-longer archived; earlier archives keep them).
+audit (the only record of every trade), trader state, exit-plan book and
+watch files (the old journal, omp session directory and entry-timing cache are
+no longer archived; earlier archives keep them).
 `scripts/backup_bot_data.sh` archives them into
 `backups/bot-spot-data-<UTC>-<pid>.tar.gz`. It keeps 14
 (`BINANCE_BOT_BACKUP_RETENTION`) and resolves each path from the trader's

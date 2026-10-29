@@ -162,8 +162,8 @@ A read-only web page for the trader, in seven tabs that refresh every 30 s:
 - **Wallet:** spot balances (free and in orders) with price, 24h change, value
   and share, Simple Earn positions, Binance wallet totals, account fees and an
   API-key safety check (withdrawals, IP restriction, extra permissions).
-- **The bot:** cycles with the bot's summaries, tool calls and cost, and its
-  journal.
+- **The bot:** cycles with the rule's verdicts (older LLM cycles keep their
+  tool calls and cost).
 - **Exits:** the Phase 45 exit plans: run settings, the plan book, running
   plans with their sell lines, and the newest watch-log events.
 - **/biz/:** the /biz/ feed the trader read in its newest cycle (mentions,
@@ -186,7 +186,7 @@ ssh -L 8787:localhost:8787 <bot-host>          # view a remote box from your lap
 ```
 
 - **Read-only.** GET routes only. It reads the Bot Spot files
-  (`BOT_SPOT_AUDIT_PATH`, `_JOURNAL_PATH`, `_STATE_PATH`, `_STOP_PATH`, the
+  (`BOT_SPOT_AUDIT_PATH`, `BOT_SPOT_STOP_PATH`, the
   exit-plan files, relative to the working directory like the trader) and
   Binance through signed GETs (account, 24h tickers, wallet totals, API-key
   restrictions; one read is reused for 20 s).

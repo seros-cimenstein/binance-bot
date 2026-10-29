@@ -192,7 +192,7 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
     // one (exit plans keep running meanwhile), so restarts do not add cycles.
     if args.daemon
         && let Some(wait) = cadence_wait(
-            &crate::journal::AgentState::load(&config.state_path),
+            &crate::state::TraderState::load(&config.state_path),
             interval,
             bb_core::time::now(),
         )
@@ -258,7 +258,7 @@ async fn pause(
 /// How long a restarted daemon waits before its first cycle: the rest of the interval since
 /// the last finished cycle, if any is left.
 fn cadence_wait(
-    state: &crate::journal::AgentState,
+    state: &crate::state::TraderState,
     interval: Duration,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<Duration> {
@@ -303,7 +303,7 @@ fn spawn_signal_listener(token: CancellationToken, runtime: Arc<Runtime>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::{AgentState, LastCycle};
+    use crate::state::{LastCycle, TraderState};
 
     #[test]
     fn restart_waits_out_the_rest_of_the_interval_since_the_last_cycle() {
@@ -311,17 +311,16 @@ mod tests {
         let now = chrono::DateTime::parse_from_rfc3339("2026-10-17T13:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let state = |finished_at: &str| AgentState {
+        let state = |finished_at: &str| TraderState {
             last_cycle: Some(LastCycle {
                 cycle_id: "c".into(),
                 finished_at: finished_at.into(),
                 status: "held".into(),
-                turn_status: "completed".into(),
                 end_cycle: None,
                 executions: Vec::new(),
                 error: String::new(),
             }),
-            ..AgentState::default()
+            ..TraderState::default()
         };
         assert_eq!(
             cadence_wait(&state("2026-10-17T12:55:00+00:00"), interval, now),
@@ -329,7 +328,7 @@ mod tests {
         );
         // A whole interval ago, no record or an unreadable time: cycle at once.
         assert_eq!(cadence_wait(&state("2026-10-17T12:30:00+00:00"), interval, now), None);
-        assert_eq!(cadence_wait(&AgentState::default(), interval, now), None);
+        assert_eq!(cadence_wait(&TraderState::default(), interval, now), None);
         assert_eq!(cadence_wait(&state("yesterday"), interval, now), None);
     }
 

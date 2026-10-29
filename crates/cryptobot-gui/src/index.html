@@ -662,12 +662,13 @@ function botState() {
   if (noBotData()) return { label: "No data", tone: "warn", detail: "No bot audit log at " + st.source.audit_path };
   if (st.stop_active) return { label: "Stopped", tone: "neg", detail: "Emergency stop file present: " + st.stop_path };
   if (st.halt) return { label: "Halted", tone: "neg", detail: st.halt };
-  const last = st.agent && st.agent.last_cycle ? st.agent.last_cycle.finished_at : null;
+  // Liveness: the newest cycle summary in the audit log.
+  const last = st.cycles && st.cycles[0] ? st.cycles[0].timestamp : null;
   if (!last) return { label: "Waiting", tone: "", detail: "No bot cycle recorded yet" };
   const age = (Date.now() - ms(last)) / 1000;
-  const every = cycleInterval(st.cycles || []) ?? 1200;
-  const detail = "Last cycle " + ago(last) + " · every ~" + duration(every);
-  if (age <= every * 1.5 + 120) return { label: "Running", tone: "pos", detail };
+  const every = cycleInterval(st.cycles || []);
+  const detail = "Last cycle " + ago(last) + (every === null ? "" : " · every ~" + duration(every));
+  if (every !== null && age <= every * 1.5 + 120) return { label: "Running", tone: "pos", detail };
   return { label: "Idle", tone: "warn", detail };
 }
 const RANGES = [["24h", "24h", 864e5], ["7d", "7d", 6048e5], ["30d", "30d", 2592e6], ["all", "All", Infinity]];
@@ -841,7 +842,6 @@ function overviewPage() {
   const openTrade = [...trades].reverse().find((t) => t.status === "open");
   const openPlan = openTrade && ui.data.exits ? ui.data.exits.active.find((a) => a.asset === openTrade.destination_asset) : null;
   const lastCycle = status && status.cycles && status.cycles[0];
-  const agent = status ? status.agent || {} : {};
   const change = wallet && !wallet.error ? num(wallet.change_24h_usdt) : null;
   const total = wallet && !wallet.error ? num(wallet.total_usdt) : null;
   const changePct = change !== null && total ? (change / (total - change)) * 100 : null;
@@ -857,8 +857,7 @@ function overviewPage() {
         openPlan ? el("span", null, " · ", el("a", { href: "#exits", style: "color:var(--accent);text-decoration:none" },
           num(openPlan.sell_line) !== null ? "sell line " + px(openPlan.sell_line) : "exit plan " + openPlan.spec)) : "")
         : noBotData() ? "no bot data here" : "The bot is in cash or between trades"),
-    kpi("Bot", state.label, el("span", null, state.detail, agent.cycle_count ? " · " + agent.cycle_count + " cycles" : "",
-      num(agent.llm_cost_usd) ? " · " + usd(agent.llm_cost_usd) + " LLM today" : ""), state.tone || null));
+    kpi("Bot", state.label, state.detail, state.tone || null));
 
   const timeline = equityTimeline(s);
   const equity = card("Cumulative P&L", timeline ? tradeChart(timeline, { height: 330 })
@@ -871,10 +870,7 @@ function overviewPage() {
   const thinking = card("Bot's latest call", lastCycle ? el("div", { class: "grid", style: "gap:10px" },
       el("div", { class: "feed-meta" }, actionChip(lastCycle), el("span", null, ago(lastCycle.timestamp)), el("span", { class: "sep" }, "·"), el("span", null, stamp(lastCycle.timestamp))),
       el("div", { class: "quote" }, cycleSummary(lastCycle) || "No summary for this cycle."),
-      lastCycle.error ? el("div", { class: "neg small" }, lastCycle.error) : null,
-      status.journal && status.journal[0] ? el("div", { class: "grid", style: "gap:4px;margin-top:4px" },
-        el("div", { class: "small muted" }, "Latest journal note · " + ago(status.journal[0].timestamp)),
-        longText("journal:" + status.journal[0].timestamp, status.journal[0].text)) : null)
+      lastCycle.error ? el("div", { class: "neg small" }, lastCycle.error) : null)
     : botEmpty("No cycles yet", "The bot's reasoning shows up here after its first cycle."), { action: el("a", { href: "#bot", class: "small", style: "color:var(--accent);text-decoration:none" }, "All cycles →") });
 
   const recent = coinTrades(trades).slice(0, 5);
@@ -1243,7 +1239,6 @@ function botPage() {
   if (!st) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
   if (noBotData()) return el("div", { class: "grid" }, head, card(null, empty(...NO_DATA)));
   const state = botState();
-  const agent = st.agent || {};
   const latest = st.cycles[0];
   const model = latest && latest.agent ? latest.agent.model : "";
   const traded = st.cycles.filter((c) => ["traded", "rebalance"].includes(cycleAction(c))).length;
@@ -1251,10 +1246,10 @@ function botPage() {
 
   const kpis = el("div", { class: "grid kpis" },
     kpi("Status", state.label, state.detail, state.tone || null),
-    kpi("Cycles", agent.cycle_count ? String(agent.cycle_count) : "0", latest ? "since the fresh start · last " + ago(latest.timestamp) : "since the fresh start"),
+    kpi("Cycles", String(st.cycles.length), latest ? "newest " + st.cycles.length + " · last " + ago(latest.timestamp) : "none yet"),
     kpi("Trade decisions", st.cycles.length ? pct((traded / st.cycles.length) * 100, { sign: false, dp: 0 }) : "—",
       el("span", null, traded + " of the last " + st.cycles.length + " cycles traded", failed ? el("span", null, " · ", el("b", { class: "neg" }, failed + " failed")) : "")),
-    kpi("LLM cost today", usd(agent.llm_cost_usd), model ? shortModel(model) + (latest.agent.thinking ? " · " + latest.agent.thinking + " thinking" : "") : ""));
+    kpi("Rules", (latest && latest.rules_version) || "—", model ? "older cycles: " + shortModel(model) : ""));
 
   const costBars = [...st.cycles].reverse().map((c) => {
     const a = c.agent || {}, usage = a.usage || {};
@@ -1278,13 +1273,7 @@ function botPage() {
       open ? cycleDetail(c) : null);
   }), olderButton("cycles", 30, st.cycles.length)) : empty("No cycles yet", "The bot's first cycle shows up within a few minutes of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
 
-  const journal = card("Journal", st.journal_error ? errorBox(st.journal_error) : st.journal.length
-    ? el("div", { class: "feed" }, st.journal.slice(0, shownCount("journal", 20)).map((j) => el("div", { class: "feed-item" },
-      el("div", { class: "feed-meta" }, el("span", { title: stamp(j.timestamp) }, ago(j.timestamp)), el("span", { class: "sep" }, "·"), el("span", null, stamp(j.timestamp))),
-      longText("journal:" + j.timestamp, j.text))), olderButton("journal", 20, st.journal.length))
-    : empty("Empty journal", "The bot writes its theses here so they survive restarts."), { flush: st.journal.length > 0, hint: "the bot's own notes" });
-
-  return el("div", { class: "grid" }, head, kpis, el("div", { class: "grid split" }, cost, brainsCard(st)), el("div", { class: "grid split" }, feed, journal));
+  return el("div", { class: "grid" }, head, kpis, el("div", { class: "grid split" }, cost, brainsCard(st)), feed);
 }
 
 // ---------- Exits (Phase 45 exit plans) ----------

@@ -23,7 +23,7 @@ pub enum TraderError {
     /// omp agent failure.
     #[error(transparent)]
     Agent(#[from] bb_omp::OmpError),
-    /// Audit / journal write failure.
+    /// Audit write failure.
     #[error(transparent)]
     Audit(#[from] bb_core::audit::AuditError),
     /// Exclusive run lock unavailable.

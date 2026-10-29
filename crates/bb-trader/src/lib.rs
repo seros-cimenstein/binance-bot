@@ -13,7 +13,7 @@
 //! - [`memory`]: trade memory from the audit log.
 //! - [`context`]: decision context, `context_hash`, `route_id`.
 //! - [`executor`]: live route execution. [`audit`]: rows, halt, review marker.
-//! - [`journal`]: notebook + agent state.
+//! - [`state`]: the persisted cycle counter and last cycle.
 //! - [`exit_plan`]: the Phase 45 sell-plan menu. [`exit_replay`]: its historical replay.
 //!   [`exit_book`]: plans set by `set_exit_plan`. [`exit_watch`]: the paper watcher.
 //!   [`exit_guard`]: live exit plans inside the trader daemon.
@@ -50,13 +50,13 @@ pub mod exit_plan;
 pub mod exit_replay;
 pub mod exit_watch;
 pub mod gcp2;
-pub mod journal;
 pub mod market_mood;
 pub mod mdp;
 pub mod memory;
 pub mod persona_backtest;
 pub mod schizo;
 pub mod scope;
+pub mod state;
 pub mod trades;
 pub mod universe;
 

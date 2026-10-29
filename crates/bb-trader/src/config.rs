@@ -17,8 +17,6 @@ pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 
 /// Default `BOT_SPOT_AUDIT_PATH`.
 pub const DEFAULT_AUDIT_PATH: &str = "data/bot-spot-decisions.jsonl";
-/// Default `BOT_SPOT_JOURNAL_PATH`.
-pub const DEFAULT_JOURNAL_PATH: &str = "data/bot-spot-journal.jsonl";
 /// Default `BOT_SPOT_STATE_PATH`.
 pub const DEFAULT_STATE_PATH: &str = "data/bot-spot-agent-state.json";
 /// Default `BOT_SPOT_STOP_PATH`.
@@ -72,6 +70,7 @@ pub const REMOVED_VARS: &[&str] = &[
     "BOT_SPOT_MARKET_EVIDENCE_LOOKBACK_HOURS",
     "BOT_SPOT_MARKET_EVIDENCE_MAX_SYMBOLS",
     "BOT_SPOT_MARKET_EVIDENCE_TIMEFRAME",
+    "BOT_SPOT_JOURNAL_PATH",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -120,7 +119,6 @@ pub struct TraderConfig {
     /// `BOT_SPOT_RULES_VERSION`: the operator's name for the rule set in force, recorded
     /// on every audit row (required with the rule).
     pub rules_version: String,
-    pub journal_path: PathBuf,
     pub state_path: PathBuf,
     pub route_stale_seconds: f64,
     // files
@@ -235,7 +233,6 @@ impl TraderConfig {
                 .string("BOT_SPOT_DYNAMIC_SCOPE", "")
                 .to_ascii_lowercase(),
             rules_version,
-            journal_path: env.path("BOT_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
             state_path: env.path("BOT_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
             route_stale_seconds: env.float("BOT_SPOT_ROUTE_STALE_SECONDS", 60.0)?,
             audit_path: env.path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
@@ -296,7 +293,6 @@ impl TraderConfig {
             ("audit_path", &self.audit_path),
             ("lock_path", &self.lock_path),
             ("emergency_stop_path", &self.stop_path),
-            ("journal_path", &self.journal_path),
             ("state_path", &self.state_path),
         ] {
             if path.as_os_str().is_empty() {

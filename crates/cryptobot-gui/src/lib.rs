@@ -5,8 +5,8 @@
 //! withdrawal endpoint.
 //!
 //! - `GET /`: the dashboard page.
-//! - `GET /api/status`: Bot Spot stop file, failed-route halt, agent state, recent cycles,
-//!   the /biz/ feed the newest cycle read (Phase 51) and journal notes.
+//! - `GET /api/status`: Bot Spot stop file, failed-route halt, recent cycles and the /biz/
+//!   feed the newest cycle read.
 //! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
@@ -41,10 +41,7 @@ use axum::routing::get;
 use bb_binance::BinanceClient;
 use bb_trader::exit_book::ExitPaths;
 use bb_trader::audit::failed_route_halt;
-use bb_trader::config::{
-    DEFAULT_AUDIT_PATH, DEFAULT_JOURNAL_PATH, DEFAULT_STATE_PATH, DEFAULT_STOP_PATH,
-};
-use bb_trader::journal::{AgentState, Journal};
+use bb_trader::config::{DEFAULT_AUDIT_PATH, DEFAULT_STOP_PATH};
 use bb_trader::memory::load_audit_rows;
 use serde_json::{Value, json};
 
@@ -55,8 +52,6 @@ use crate::wallet::WalletView;
 
 /// Newest cycle summaries sent to the page.
 pub const CYCLE_LIMIT: usize = 120;
-/// Newest journal entries sent to the page (it shows 20 and pages through the rest).
-pub const JOURNAL_LIMIT: usize = 150;
 /// How long one Binance wallet read is reused (the page polls every 30 s).
 pub const WALLET_TTL: Duration = Duration::from_secs(20);
 /// How long one market-mood read is reused (it moves on 15m candles).
@@ -68,22 +63,18 @@ const INDEX_HTML: &str = include_str!("index.html");
 #[derive(Debug, Clone)]
 pub struct BotSpotFiles {
     pub audit_path: PathBuf,
-    pub journal_path: PathBuf,
-    pub state_path: PathBuf,
     pub stop_path: PathBuf,
     /// Phase 45 exit-plan book, watch state and watch log.
     pub exits: ExitPaths,
 }
 
 impl BotSpotFiles {
-    /// From `BOT_SPOT_{AUDIT,JOURNAL,STATE,STOP}_PATH`.
+    /// From `BOT_SPOT_{AUDIT,STOP}_PATH`.
     pub fn from_env() -> Self {
         let path =
             |name: &str, default: &str| PathBuf::from(bb_core::env::string(&[name], default));
         Self {
             audit_path: path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
-            journal_path: path("BOT_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
-            state_path: path("BOT_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
             stop_path: path("BOT_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
             exits: ExitPaths::from_env(),
         }
@@ -322,8 +313,8 @@ fn no_store(mut response: Response) -> Response {
     response
 }
 
-/// Bot Spot state: stop file, the trader's own failed-route halt verdict, agent state,
-/// newest cycle summaries and journal notes (newest first), the /biz/ feed the newest cycle
+/// Bot Spot state: stop file, the trader's own failed-route halt verdict, the newest cycle
+/// summaries (newest first; the page's liveness is the newest one), the /biz/ feed the newest cycle
 /// that read one recorded (`biz`: its cycle time and the audit `biz` field, `null` before
 /// Phase 51), and where the data came from (`source`: a missing audit file means this host
 /// has no Bot Spot data at all).
@@ -362,13 +353,6 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
             row.get("biz")
                 .map(|feed| json!({"cycle_at": row.get("timestamp"), "feed": feed}))
         });
-    let (journal, journal_error) = match Journal::new(&files.journal_path).read(JOURNAL_LIMIT) {
-        Ok(mut entries) => {
-            entries.reverse();
-            (entries, None)
-        }
-        Err(error) => (Vec::new(), Some(error.to_string())),
-    };
     let audit_meta = std::fs::metadata(&files.audit_path).ok();
     let audit_modified = audit_meta
         .as_ref()
@@ -384,11 +368,8 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
         "stop_path": files.stop_path.display().to_string(),
         "halt": halt,
         "audit_error": audit.error,
-        "agent": AgentState::load(&files.state_path),
         "cycles": cycles,
         "biz": biz,
-        "journal": journal,
-        "journal_error": journal_error,
     })
 }
 
@@ -442,8 +423,6 @@ mod tests {
     fn files(dir: &Path) -> BotSpotFiles {
         BotSpotFiles {
             audit_path: dir.join("audit.jsonl"),
-            journal_path: dir.join("journal.jsonl"),
-            state_path: dir.join("state.json"),
             stop_path: dir.join("bot-spot.stop"),
             exits: ExitPaths {
                 plans: dir.join("exit-plans.json"),

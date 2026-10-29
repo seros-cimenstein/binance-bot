@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Nightly archive of the Bot Spot data files: the decisions audit
-# (the only record of every trade), journal, agent state, exit-plan book and watch files.
+# (the only record of every trade), trader state, exit-plan book and watch files.
 # Keeps the newest
 # BINANCE_BOT_BACKUP_RETENTION archives (default 14) in BINANCE_BOT_BACKUP_DIR.
 #
@@ -50,7 +50,6 @@ relative_path() {
 AUDIT=$(relative_path "$(configured_value BOT_SPOT_AUDIT_PATH data/bot-spot-decisions.jsonl)")
 declare -a WANTED=(
     "$AUDIT"
-    "$(relative_path "$(configured_value BOT_SPOT_JOURNAL_PATH data/bot-spot-journal.jsonl)")"
     "$(relative_path "$(configured_value BOT_SPOT_STATE_PATH data/bot-spot-agent-state.json)")"
     "$(relative_path "$(configured_value BOT_SPOT_EXIT_PLANS_PATH data/bot-spot-exit-plans.json)")"
     "$(relative_path "$(configured_value BOT_SPOT_EXIT_WATCH_STATE_PATH data/bot-spot-exit-watch-state.json)")"

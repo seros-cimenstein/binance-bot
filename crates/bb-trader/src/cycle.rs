@@ -18,7 +18,7 @@ use crate::config::TraderConfig;
 use crate::context::{DecisionContext, decimal_json, execution_invariants, route_scope};
 use crate::error::{Result, TraderError};
 use crate::executor::{Executor, LegResult};
-use crate::journal::{AgentState, ExecutionSummary, Journal, LastCycle};
+use crate::state::{ExecutionSummary, LastCycle, TraderState};
 use crate::memory::TradeMemory;
 use crate::universe::{
     Balances, MarketView, RouteCandidate, build_route_candidates, quote_candidate,
@@ -91,7 +91,6 @@ pub struct Runtime {
     pub mode: CycleMode,
     pub client: BinanceClient,
     pub audit: AuditLog,
-    pub journal: Journal,
     /// Live GCP2 reader (`None` unless `BOT_SPOT_GCP2_ENABLED`).
     pub gcp2: Option<crate::gcp2::Gcp2LiveReader>,
     pub(crate) cycle: Mutex<Option<CycleState>>,
@@ -110,7 +109,6 @@ impl Runtime {
     ) -> Self {
         Self {
             audit: AuditLog::new(&config.audit_path),
-            journal: Journal::new(&config.journal_path),
             mode,
             client,
             gcp2: config.gcp2_enabled.then(|| {
@@ -1169,7 +1167,7 @@ impl Trader {
             config.check_live_arming()?;
         }
         let cycle_id = uuid::Uuid::now_v7().to_string();
-        let mut state = AgentState::load(&config.state_path);
+        let mut state = TraderState::load(&config.state_path);
 
         if runtime.mode == CycleMode::Live
             && let Some(halt) = failed_route_halt(&runtime.audit.rows())
@@ -1209,7 +1207,6 @@ impl Trader {
             cycle_id: cycle_id.clone(),
             finished_at: summary.timestamp.clone(),
             status: summary.status.as_str().into(),
-            turn_status: report.status.clone(),
             end_cycle: Some(EndCycle {
                 action: summary.decision.action.clone(),
                 summary: summary.decision.reason.clone(),
@@ -1218,7 +1215,7 @@ impl Trader {
             error: summary.error.clone(),
         });
         if let Err(error) = state.save(&config.state_path) {
-            tracing::warn!(%error, "agent state not saved");
+            tracing::warn!(%error, "trader state not saved");
         }
         let failed = summary.status == RowStatus::Failed && runtime.mode == CycleMode::Live;
         Ok(CycleOutcome { summary, failed })
@@ -1238,12 +1235,7 @@ mod tests {
 
     fn trader_config(dir: &Path, extra: &[(&str, &str)]) -> TraderConfig {
         let p = |name: &str| dir.join(name).to_string_lossy().into_owned();
-        let (audit, journal, state, stop) = (
-            p("audit.jsonl"),
-            p("journal.jsonl"),
-            p("state.json"),
-            p("stop"),
-        );
+        let (audit, state, stop) = (p("audit.jsonl"), p("state.json"), p("stop"));
         let (plans, watch_state, watch_log) = (
             p("exit-plans.json"),
             p("exit-watch-state.json"),
@@ -1251,7 +1243,6 @@ mod tests {
         );
         let mut pairs = vec![
             ("BOT_SPOT_AUDIT_PATH", audit.as_str()),
-            ("BOT_SPOT_JOURNAL_PATH", journal.as_str()),
             ("BOT_SPOT_STATE_PATH", state.as_str()),
             ("BOT_SPOT_STOP_PATH", stop.as_str()),
             ("BOT_SPOT_EXIT_PLANS_PATH", plans.as_str()),
