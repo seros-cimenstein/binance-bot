@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bb_binance::BinanceClient;
-use bb_omp::CancellationToken;
+use tokio_util::sync::CancellationToken;
 use bb_pool::CommissionService;
 use rust_decimal::Decimal;
 use serde_json::{Value, json};

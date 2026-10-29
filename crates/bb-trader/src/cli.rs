@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bb_binance::{BinanceClient, BinanceConfig, Credentials};
-use bb_omp::CancellationToken;
+use tokio_util::sync::CancellationToken;
 use serde_json::json;
 
 use crate::audit::{DEFAULT_REVIEW_REASON, mark_failed_route_reviewed};

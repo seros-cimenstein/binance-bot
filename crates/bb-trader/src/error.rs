@@ -20,9 +20,6 @@ pub enum TraderError {
     /// Catalog / route / commission failure.
     #[error(transparent)]
     Pool(#[from] bb_pool::PoolError),
-    /// omp agent failure.
-    #[error(transparent)]
-    Agent(#[from] bb_omp::OmpError),
     /// Audit write failure.
     #[error(transparent)]
     Audit(#[from] bb_core::audit::AuditError),

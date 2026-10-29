@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bb_omp::CancellationToken;
+use tokio_util::sync::CancellationToken;
 use rust_decimal::Decimal;
 use serde_json::json;
 use tokio::time::Instant;
