@@ -32,6 +32,9 @@ use crate::universe::{
     Balances, MarketView, RouteCandidate, build_route_candidates, quote_candidate,
 };
 
+/// 1m bars read per coin for the algorithm's 15m/1h returns: 61 closed bars plus the open one.
+const ALGO_PRICE_MINUTES: u32 = 62;
+
 /// The exit-plan watcher saves its state every few seconds; older state means it is down.
 const EXIT_WATCHER_STALE_MS: i64 = 60_000;
 
@@ -294,7 +297,13 @@ impl Runtime {
         let mdp = self.config.mdp_enabled.then(|| {
             self.mdp_voice(trade_memory.current_holding.as_ref(), snap.as_ref())
         });
-        let biz = Some(self.biz_feed(&view));
+        let biz = self.biz_feed(&view);
+        let step = if self.config.decider == crate::config::Decider::Algo {
+            Some(self.algo_step(&view, &balances, portfolio_value_usdt, &biz).await)
+        } else {
+            None
+        };
+        let biz = Some(biz);
         let market_mood = breadth.filter(|mood| mood.score.is_some());
         let context = DecisionContext {
             timestamp: crate::audit::utc_timestamp(),
@@ -317,8 +326,79 @@ impl Runtime {
             context,
             view,
             balances,
-            step: snap,
+            step,
         })
+    }
+
+    /// The algorithm's market view (operator decision 2026-10-29, "Feed coins + own
+    /// prices"): the coins it may buy are the /biz/ feed coins with an eligible USDT market
+    /// (stablecoins left out), and it reads 1m prices for those and for every held coin.
+    /// Without a fresh feed it may only hold or sell. A coin whose price read fails is left
+    /// out (logged), so it is neither bought nor scored as held.
+    async fn algo_step(
+        &self,
+        view: &MarketView,
+        balances: &Balances,
+        equity: Decimal,
+        biz: &crate::biz::BizNow,
+    ) -> crate::book::Snapshot {
+        use futures::StreamExt;
+        use rust_decimal::prelude::ToPrimitive;
+        let t = bb_core::time::now_ms();
+        let usdt_market = |asset: &str| {
+            view.markets
+                .get(&format!("{asset}/USDT"))
+                .filter(|market| market.eligible)
+                .is_some()
+        };
+        let candidates: Vec<String> = match biz {
+            crate::biz::BizNow::Fresh(feed) => feed
+                .coins
+                .keys()
+                .filter(|asset| {
+                    asset.as_str() != "USDT"
+                        && !crate::evidence::is_low_upside(asset)
+                        && usdt_market(asset)
+                })
+                .cloned()
+                .collect(),
+            crate::biz::BizNow::Unavailable { .. } => Vec::new(),
+        };
+        let held = crate::book::live_book(
+            t,
+            balances,
+            equity,
+            |asset, amount| view.usdt_value(asset, amount),
+            |asset| view.markets.get(&format!("{asset}/USDT")).map(|m| m.min_notional),
+        );
+        let mut assets: Vec<String> = candidates.clone();
+        assets.extend(held.holdings.keys().filter(|a| usdt_market(a)).cloned());
+        assets.sort();
+        assets.dedup();
+        let client = &self.client;
+        let coins = futures::stream::iter(assets)
+            .map(|asset| async move {
+                let symbol = format!("{asset}/USDT");
+                match client.klines(&symbol, "1m", None, None, Some(ALGO_PRICE_MINUTES)).await {
+                    Ok(klines) => {
+                        let bars: Vec<(i64, f64)> = klines
+                            .iter()
+                            .filter(|k| k.close_time.is_some_and(|close| close < t))
+                            .filter_map(|k| Some((k.open_time, k.close.to_f64()?)))
+                            .collect();
+                        crate::book::coin_view_from_minutes(&bars).map(|view| (asset, view))
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, %symbol, "price read failed; coin left out this cycle");
+                        None
+                    }
+                }
+            })
+            .buffer_unordered(8)
+            .filter_map(|coin| async move { coin })
+            .collect()
+            .await;
+        crate::book::Snapshot::live(t, coins, candidates)
     }
 
     /// The schizo state for this cycle (saved by [`Self::finish_cycle`]); `None`, with an
@@ -405,9 +485,7 @@ impl Runtime {
     ) -> std::result::Result<crate::decider::Verdict, String> {
         use rust_decimal::prelude::ToPrimitive;
         let Some(step) = &snapshot.step else {
-            return Err(
-                "no market view this cycle (market evidence off or the breadth read failed)".into(),
-            );
+            return Err("no market view this cycle".into());
         };
         let view = &snapshot.view;
         let mut book = crate::book::live_book(
@@ -1745,6 +1823,68 @@ mod tests {
         let (summary, _) = second.finish_cycle(&report).await.unwrap();
         assert_eq!(summary.status, RowStatus::Held);
         assert_eq!(audit_rows(dir.path()).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_algo_view_is_the_feed_coins_plus_held_coins_without_a_breadth_read() {
+        use wiremock::matchers::query_param;
+        let server = MockServer::start().await;
+        let now = bb_core::time::now_ms();
+        let newest = now - now.rem_euclid(60_000) - 60_000;
+        // 61 closed bars rising 0.1 per minute from 100, plus the still-open minute.
+        let klines: Vec<Value> = (0..=61)
+            .map(|i| {
+                let open = newest - (60 - i) * 60_000;
+                let close = 100.0 + 0.1 * i as f64;
+                json!([open, "1", "1", "1", close.to_string(), "1", open + 59_999, "1", 1, "1", "1", "0"])
+            })
+            .collect();
+        for symbol in ["ETHUSDT", "BTCUSDT"] {
+            Mock::given(method("GET"))
+                .and(path("/api/v3/klines"))
+                .and(query_param("symbol", symbol))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!(klines)))
+                .mount(&server)
+                .await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let algo = [("BOT_SPOT_DECIDER", "algo"), ("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0,0.5,0")];
+        let config = trader_config(dir.path(), &algo);
+        let view = view(&config);
+        let runtime = runtime(&server, config, CycleMode::PlanOnly).await;
+        let balances = Balances {
+            free: [("USDT".to_owned(), dec!(10)), ("BTC".to_owned(), dec!(0.01))].into(),
+            ..Balances::default()
+        };
+        let window = crate::biz::Window { mentions: 5, ..Default::default() };
+        let windows = crate::biz::CoinWindows { h6: window, h24: window, ..Default::default() };
+        let feed = crate::biz::BizFeed {
+            as_of: "now".into(),
+            age_minutes: 1,
+            model: String::new(),
+            prompt_version: String::new(),
+            // SOL has no USDT market and USDC is cash-like: neither may be bought.
+            coins: [("ETH", windows), ("SOL", windows), ("USDC", windows)]
+                .map(|(a, w)| (a.to_owned(), w))
+                .into(),
+            dropped: Vec::new(),
+        };
+        let step = runtime
+            .algo_step(&view, &balances, dec!(610), &crate::biz::BizNow::Fresh(Box::new(feed)))
+            .await;
+        assert_eq!(step.liquid_top, vec!["ETH"]);
+        assert_eq!(step.coins.keys().collect::<Vec<_>>(), vec!["BTC", "ETH"]);
+        let eth = step.coin("ETH").unwrap();
+        assert!((eth.ret_1h.unwrap() - (106.0 / 100.0 - 1.0) * 100.0).abs() < 1e-9, "{eth:?}");
+        assert_eq!(step.score, None);
+        let requests = server.received_requests().await.unwrap_or_default();
+        assert!(requests.iter().all(|r| r.url.path() == "/api/v3/klines"), "no breadth or ticker read");
+
+        // Without a fresh feed only the held coin is read and nothing is a buy candidate.
+        let unavailable = crate::biz::BizNow::Unavailable { reason: "stale".into() };
+        let step = runtime.algo_step(&view, &balances, dec!(610), &unavailable).await;
+        assert!(step.liquid_top.is_empty());
+        assert_eq!(step.coins.keys().collect::<Vec<_>>(), vec!["BTC"]);
     }
 
     #[tokio::test]

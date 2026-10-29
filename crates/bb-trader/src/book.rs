@@ -37,6 +37,19 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// The live algorithm's view: the coins it read prices for and the coins it may buy,
+    /// with no market-wide breadth score.
+    pub fn live(t: i64, coins: BTreeMap<String, CoinView>, candidates: Vec<String>) -> Self {
+        Self {
+            t,
+            score: None,
+            horizons: Vec::new(),
+            coins,
+            liquid_top: candidates,
+            gcp2: None,
+        }
+    }
+
     pub fn coin(&self, asset: &str) -> Option<&CoinView> {
         self.coins.get(asset)
     }
@@ -73,6 +86,28 @@ impl Book {
     pub fn is_flat(&self) -> bool {
         self.holdings.is_empty()
     }
+}
+
+const MINUTE_MS: i64 = 60_000;
+
+/// A coin's view from its closed 1m bars `(open time ms, close)`, oldest first: the 15m and
+/// 1h returns of the newest close, `None` when the bar 15 or 60 minutes back is missing.
+/// `None` without bars.
+pub fn coin_view_from_minutes(bars: &[(i64, f64)]) -> Option<CoinView> {
+    let &(newest_open, newest_close) = bars.last()?;
+    let ret = |minutes: i64| {
+        let open = newest_open - minutes * MINUTE_MS;
+        bars.iter()
+            .find(|(t, _)| *t == open)
+            .filter(|(_, close)| *close > 0.0)
+            .map(|(_, close)| (newest_close / close - 1.0) * 100.0)
+    };
+    Some(CoinView {
+        ret_15m: ret(15),
+        ret_1h: ret(60),
+        ret_4h: None,
+        quote_volume_24h: 0.0,
+    })
 }
 
 fn float(value: Decimal) -> f64 {
@@ -217,5 +252,22 @@ pub mod tests {
         assert_eq!(book.holdings.keys().collect::<Vec<_>>(), vec!["SOL"]);
         assert_eq!(book.holdings["SOL"].value, 18.0);
         assert_eq!((book.cash, book.equity), (12.0, 80.0));
+    }
+
+    #[test]
+    fn coin_views_come_from_the_newest_closed_minute_and_need_the_bars_back() {
+        let bar = |minute: i64, close: f64| (T0 + minute * MINUTE_MS, close);
+        // 61 bars: 100 an hour before the newest close of 103, 102 fifteen minutes before.
+        let mut bars: Vec<(i64, f64)> = (0..=60).map(|m| bar(m, 100.0)).collect();
+        bars[45].1 = 102.0;
+        bars[60].1 = 103.0;
+        let view = coin_view_from_minutes(&bars).unwrap();
+        assert!((view.ret_1h.unwrap() - 3.0).abs() < 1e-9);
+        assert!((view.ret_15m.unwrap() - 103.0 / 102.0 * 100.0 + 100.0).abs() < 1e-9);
+        // A missing bar 60 minutes back leaves the 1h return unknown, not zero.
+        let view = coin_view_from_minutes(&bars[1..]).unwrap();
+        assert_eq!(view.ret_1h, None);
+        assert!(view.ret_15m.is_some());
+        assert_eq!(coin_view_from_minutes(&[]), None);
     }
 }

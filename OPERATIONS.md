@@ -475,16 +475,20 @@ dashboard's /biz/ tab shows the newest recorded feed.
 
 `BOT_SPOT_DECIDER` picks who decides each cycle: `llm` (default) or `algo`,
 the rule-based decider `crate::decider` (operator decisions in `CODEX.md`,
-"Phase 51"). With `algo` the trader never starts omp. Each cycle it builds the
-usual snapshot (wallet, market breadth, /biz/ feed, long-term value model),
-scores the liquid-top coins with `BOT_SPOT_ALGO_WEIGHTS`
-(`talk,stance,momentum,value,buy_above,sell_below`; stances need
-`BOT_SPOT_ALGO_MIN_POSTERS`, 2), sells a held coin scoring below the sell
-level into USDT and, with nothing held, buys the best coin with all USDT at
-or above the buy level. Every order is quoted for the whole free balance and
-sent through `execute_route`, so the stop file, arming, scope, `order/test`,
-reconciliation and the failed-route halt apply; the first failed order ends
-the cycle's orders. No market view (breadth read failed) means hold.
+"Phase 51"). With `algo` the trader never starts omp. Each cycle it reads the
+wallet and the /biz/ feed, then reads 1m prices for the coins it may buy (the
+feed's coins with an eligible USDT market, stablecoins left out) and for the
+coins it holds (operator decision 2026-10-29: no market breadth read). It
+scores those coins with `BOT_SPOT_ALGO_WEIGHTS`
+(`talk,stance,momentum,value,buy_above,sell_below`; momentum is the coin's
+own 1h move; stances need `BOT_SPOT_ALGO_MIN_POSTERS`, 2), sells a held coin
+scoring below the sell level into USDT and, with nothing held, buys the best
+coin with all USDT at or above the buy level. Every order is quoted for the
+whole free balance and sent through `execute_route`, so the stop file,
+arming, scope, `order/test`, reconciliation and the failed-route halt apply;
+the first failed order ends the cycle's orders. Without a fresh feed nothing
+is a buy candidate, so it can only hold or sell; a coin whose price read fails
+is left out of that cycle.
 
 - **Records.** Every audit row has `decider` (`llm` or `algo`); algo cycle
   summaries add `algo` (rule, best candidate and score, held coins and

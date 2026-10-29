@@ -20,8 +20,9 @@
 //!
 //! Weights may be negative (a negative `w_talk` fades /biz/ hype). Rules: a held coin
 //! whose score falls below `sell_below` is sold; with nothing held after that, the
-//! candidate (the step's liquid top, in order) with the highest score is bought with all
-//! cash when its score reaches `buy_above`. One coin at a time; no stop-loss, take-profit or
+//! candidate (the step's buy candidates in order; live: the /biz/ feed coins with a USDT
+//! market) with the highest score is bought with all cash when its score reaches
+//! `buy_above`. One coin at a time; no stop-loss, take-profit or
 //! exit plan, only the score.
 
 use std::collections::BTreeMap;
