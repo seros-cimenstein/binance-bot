@@ -4,17 +4,13 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::Value;
 
 use bb_core::money::{BPS_PER_UNIT, to_f64};
 
-use crate::trades::{
-    HoldBuckets, Mark, RecordWindow, RouteRecord, Trade, TradeStatus, build_trades, hold_buckets,
-    plan_sold, record_window, route_record,
-};
+use crate::trades::{Mark, RouteRecord, Trade, TradeStatus, build_trades, route_record};
 
 /// Python reads the last 500 audit lines.
 pub const AUDIT_TAIL_LINES: usize = 500;
@@ -181,39 +177,6 @@ pub struct CurrentHolding {
     pub route_id: Option<String>,
 }
 
-/// The bot's record from the whole audit log: closed coin trades after fees, all time and
-/// over the last 7 days (information for its judgement, never a gate).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct TradeRecord {
-    pub all_time: RecordWindow,
-    pub last_7_days: RecordWindow,
-    pub by_hold: HoldBuckets,
-    /// Closed trades a live exit-plan sell closed (all time).
-    pub by_plan: RecordWindow,
-    /// How the price moved around the bot's entries (filled in by the cycle; needs candles).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub entry_timing: Option<crate::entry_timing::EntryTimingSummary>,
-}
-
-impl TradeRecord {
-    /// `rows`: every audit row, oldest first. `mark(asset)` values fees paid in other coins.
-    pub fn from_rows(rows: &[Value], mark: impl Fn(&str) -> Option<Mark>, now: DateTime<Utc>) -> Self {
-        let records: Vec<RouteRecord> = rows
-            .iter()
-            .filter(|row| row_status(row) == "submitted" && row_attempted_submission(row))
-            .map(route_record)
-            .collect();
-        let trades = build_trades(&records, mark, now);
-        Self {
-            all_time: record_window(&trades, None),
-            last_7_days: record_window(&trades, Some(now - chrono::Duration::days(7))),
-            by_hold: hold_buckets(&trades),
-            by_plan: plan_sold(&trades),
-            entry_timing: None,
-        }
-    }
-}
-
 /// Trade memory packet (Python `_trade_memory_context`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TradeMemory {
@@ -324,7 +287,7 @@ fn outcomes(submitted: &[&Value], trades: &[Trade]) -> Vec<TradeOutcome> {
                         .to_owned()
                 }),
             };
-            if crate::evidence::is_low_upside(&destination) {
+            if crate::assets::is_low_upside(&destination) {
                 // Into cash or fiat: parking, not a bet.
                 outcome.status = "cash";
                 return outcome;
@@ -383,7 +346,7 @@ fn current_holding(
         };
     };
     let current = value_usdt(&destination, amount);
-    if crate::evidence::is_low_upside(&destination) {
+    if crate::assets::is_low_upside(&destination) {
         // Parked in cash: the balance is not a position with a return.
         return CurrentHolding {
             status: "cash",
@@ -501,54 +464,6 @@ pub(crate) mod tests {
         assert_eq!(pnl, dec!(0.03778));
         assert!((aave.pnl_bps.unwrap() - to_f64(pnl / cost * BPS_PER_UNIT)).abs() < 1e-9);
         assert_eq!(memory.recent_outcomes[1].status, "cash");
-    }
-
-    #[test]
-    fn record_counts_closed_coin_trades_after_fees_all_time_and_last_7_days() {
-        let mut aave_plan_sell =
-            filled_row("2026-10-17T10:30:00Z", "AAVE", "USDT", "0.052", "7.98668", 0.0000083);
-        aave_plan_sell["cycle_id"] = json!(crate::cycle::EXIT_CYCLE_ID);
-        let rows = vec![
-            // 2026-10-01: a loss, outside the 7-day window.
-            filled_row("2026-10-01T10:00:00Z", "USDT", "SOL", "1", "10", 0.00001),
-            filled_row("2026-10-01T11:00:00Z", "SOL", "USDT", "1", "9.9", 0.00001),
-            // 2026-10-17: a win held 30 minutes, sold by an exit plan, then a buy still open.
-            filled_row("2026-10-17T10:00:00Z", "USDT", "AAVE", "0.052", "7.93728", 0.0000083),
-            aave_plan_sell,
-            filled_row("2026-10-17T11:00:00Z", "USDT", "BCH", "0.028", "7.7616", 0.0000083),
-            json!({"status": "held", "row_type": "cycle_summary"}),
-        ];
-        let mark = |asset: &str| match asset {
-            "BNB" => Some(Mark { free: dec!(0.01), price_usdt: dec!(700) }),
-            "BCH" => Some(Mark { free: dec!(0.028), price_usdt: dec!(276) }),
-            _ => None,
-        };
-        let now = crate::trades::parse_time("2026-10-18T08:00:00Z").unwrap();
-        let record = TradeRecord::from_rows(&rows, mark, now);
-
-        let all = &record.all_time;
-        assert_eq!((all.trips, all.wins), (2, 1));
-        // SOL: 9.9 - 10 - 0.014 = -0.114; AAVE: +0.03778 (fees 0.01162). BCH is open, not counted.
-        assert_eq!(all.net_usdt, dec!(-0.07622));
-        assert_eq!(all.fees_usdt, dec!(0.02562));
-        assert_eq!(all.mean_hold_minutes, Some(45.0));
-        let week = &record.last_7_days;
-        assert_eq!((week.trips, week.wins, week.net_usdt), (1, 1, dec!(0.03778)));
-        assert_eq!(week.mean_hold_minutes, Some(30.0));
-        assert_eq!(record.by_hold.under_30m.trips, 0);
-        assert_eq!(
-            (record.by_hold.from_30_to_60m.trips, record.by_hold.from_30_to_60m.wins),
-            (1, 1)
-        );
-        assert_eq!(
-            (record.by_hold.over_60m.trips, record.by_hold.over_60m.wins),
-            (1, 0)
-        );
-        // Only the AAVE sale was a plan sell.
-        assert_eq!(
-            (record.by_plan.trips, record.by_plan.wins, record.by_plan.net_usdt),
-            (1, 1, dec!(0.03778))
-        );
     }
 
     #[test]

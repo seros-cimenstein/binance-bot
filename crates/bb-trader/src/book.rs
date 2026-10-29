@@ -116,7 +116,7 @@ fn float(value: Decimal) -> f64 {
 
 /// The live book the personas vote on: USDT cash, the portfolio value, and every free
 /// balance worth at least its USDT market's minimum order (`min_notional`), leaving out
-/// USDT itself and cash-like coins (`evidence::is_low_upside`). Dust a market order could
+/// USDT itself and cash-like coins (`assets::is_low_upside`). Dust a market order could
 /// not sell is not a position.
 pub fn live_book(
     t: i64,
@@ -128,7 +128,7 @@ pub fn live_book(
     let holdings = balances
         .free
         .iter()
-        .filter(|(asset, _)| *asset != "USDT" && !crate::evidence::is_low_upside(asset))
+        .filter(|(asset, _)| *asset != "USDT" && !crate::assets::is_low_upside(asset))
         .filter_map(|(asset, qty)| {
             let value = value_usdt(asset, *qty)?;
             let min = min_notional_usdt(asset)?;

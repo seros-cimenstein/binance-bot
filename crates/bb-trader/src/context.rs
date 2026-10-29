@@ -8,13 +8,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::TraderConfig;
-use crate::evidence::{LONG_WINDOWS, SHORT_TIMEFRAME, SHORT_WINDOWS};
 use crate::memory::TradeMemory;
 use crate::universe::{Balances, RouteCandidate};
-
-/// Mission statement embedded in the context payload and the system prompt.
-pub const MISSION: &str = "Maximise the value of the Binance Spot wallet through active, opinionated trading. \
-You own the whole Spot wallet. Fees, spread and slippage are real costs that you weigh; they are not rules.";
 
 /// `SRC->DST:` + first 12 hex chars of sha256(`src|dst|sym:side:a>b,...`).
 pub fn route_id(route: &RouteQuote) -> String {
@@ -142,7 +137,7 @@ pub fn execution_invariants(config: &TraderConfig) -> Vec<String> {
     ]
 }
 
-/// Scope + information settings shown to the bot (no trading gates remain).
+/// Operator scope and information settings recorded with the context.
 pub fn route_scope(config: &TraderConfig) -> Value {
     json!({
         "allowed_symbols": config.scope.allowed_symbols,
@@ -152,21 +147,15 @@ pub fn route_scope(config: &TraderConfig) -> Value {
         "blocked_quotes": config.scope.blocked_quotes,
         "block_fiat_assets": config.scope.block_fiat_assets,
         "max_route_legs": config.max_route_legs,
-        "market_evidence_enabled": config.market_evidence_enabled,
-        "market_evidence_windows": LONG_WINDOWS.iter().map(|(name, _, _)| *name).collect::<Vec<_>>(),
-        "market_evidence_short_timeframe": SHORT_TIMEFRAME,
-        "market_evidence_short_windows": SHORT_WINDOWS.iter().map(|(name, _, _)| *name).collect::<Vec<_>>(),
-        "market_evidence_lookback_hours": config.market_evidence_lookback_hours,
-        "market_evidence_max_symbols": config.market_evidence_max_symbols,
         "trade_memory_limit": config.trade_memory_limit,
     })
 }
 
-/// Everything the cycle knows when it asks the bot.
+/// Everything the cycle knows when the rule decides.
 #[derive(Debug, Clone)]
 pub struct DecisionContext {
     pub timestamp: String,
-    pub prompt_version: String,
+    pub rules_version: String,
     pub market_pick_mode: &'static str,
     pub balances: Balances,
     pub portfolio_value_usdt: Decimal,
@@ -174,8 +163,6 @@ pub struct DecisionContext {
     pub execution_invariants: Vec<String>,
     pub route_scope: Value,
     pub trade_memory: TradeMemory,
-    /// The bot's record over the whole audit log (`None` when the log cannot be read).
-    pub trade_record: Option<crate::memory::TradeRecord>,
     /// 20-coin liquid USDT crypto market breadth (`None` when disabled or unavailable).
     pub market_mood: Option<crate::market_mood::MarketView>,
     /// Phase 49 live GCP2 reading (`None` when the reader is off; failures are
@@ -185,18 +172,16 @@ pub struct DecisionContext {
     pub schizo: Option<crate::schizo::SchizoState>,
     /// Phase 50 long-term value voice (`None` unless `BOT_SPOT_MDP_ENABLED`).
     pub mdp: Option<crate::mdp::MdpNow>,
-    /// Phase 51 /biz/ feed (`None` in tests; the cycle always reads it); the LLM prompt does
-    /// not show it, the rule-based decider scores on it.
+    /// The /biz/ feed (`None` in tests; the cycle always reads it); the rule scores on it.
     pub biz: Option<crate::biz::BizNow>,
 }
 
 impl DecisionContext {
-    /// Python `as_prompt_payload` (minus the removed friction allowance).
+    /// The recorded context (`--evidence-only` output; hashed into `context_hash`).
     pub fn as_payload(&self) -> Value {
         json!({
             "timestamp": self.timestamp,
-            "prompt_version": self.prompt_version,
-            "mission": MISSION,
+            "rules_version": self.rules_version,
             "market_pick_mode": self.market_pick_mode,
             "balances": self.balances,
             "portfolio_value_usdt": decimal_json(self.portfolio_value_usdt),
@@ -204,7 +189,6 @@ impl DecisionContext {
             "execution_invariants": self.execution_invariants,
             "route_scope": self.route_scope,
             "trade_memory": self.trade_memory,
-            "trade_record": self.trade_record,
             "market_mood": self.market_mood,
             "gcp2": self.gcp2.as_ref().map(crate::gcp2::Gcp2Now::payload),
             "schizo": self.schizo,

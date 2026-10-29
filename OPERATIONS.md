@@ -438,8 +438,9 @@ is a buy candidate, so it can only hold or sell; a coin whose price read fails
 is left out of that cycle.
 
 - **Records.** Cycle summaries carry `algo` (rule, best candidate and score,
-  held coins and scores, orders), `agent.model` `rule-based decider` and
-  `session_id` `algo`. The Bot tab's cycle details show the rule's scores.
+  held coins and scores, orders), `rules_version` (`BOT_SPOT_RULES_VERSION`,
+  required) and `session_id` `algo`. The Bot tab's cycle details show the
+  rule's scores.
 - **Practice run.** `docker compose --profile algo-paper up -d
   bot-spot-algo-paper` runs it plan-only with its own files
   (`bot-spot-algo-paper-{decisions.jsonl,journal.jsonl,state.json}`, lock
@@ -620,11 +621,12 @@ bias.
 
 Bot Spot's record is files: the decisions
 audit (the only record of every trade), journal, agent state, exit-plan book
-and watch files, the entry-timing cache, and the omp session directory.
+and watch files (the old omp session directory and entry-timing cache are no
+longer archived; earlier archives keep them).
 `scripts/backup_bot_data.sh` archives them into
 `backups/bot-spot-data-<UTC>-<pid>.tar.gz`. It keeps 14
 (`BINANCE_BOT_BACKUP_RETENTION`) and resolves each path from the trader's
-`BOT_SPOT_*_PATH` / `BOT_SPOT_SESSION_DIR` settings. On Docker the `scheduler`
+`BOT_SPOT_*_PATH` settings. On Docker the `scheduler`
 runs it at 23:45 UTC into `docker-backups/`. The archive's paths start with
 `data/`, which is `docker-data/` on the Docker host. To restore, stop
 `bot-spot`, extract into a temporary directory, copy its `data/` contents over

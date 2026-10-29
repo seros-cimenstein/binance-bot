@@ -9,7 +9,7 @@
 //! - [`config`]: `TraderConfig::from_env` (`BOT_SPOT_*`).
 //! - [`scope`]: operator allow/block lists and fiat blocking.
 //! - [`universe`]: catalog view, balances, route candidates.
-//! - [`evidence`]: multi-horizon evidence and relative momentum.
+//! - [`assets`]: cash-like (low-upside) assets.
 //! - [`memory`]: trade memory from the audit log.
 //! - [`context`]: decision context, `context_hash`, `route_id`.
 //! - [`executor`]: live route execution. [`audit`]: rows, halt, review marker.
@@ -33,17 +33,16 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod assets;
 pub mod audit;
 pub mod biz;
 pub mod book;
 pub mod cli;
 pub mod config;
 pub mod context;
-pub mod entry_timing;
 pub mod cycle;
 pub mod decider;
 pub mod error;
-pub mod evidence;
 pub mod executor;
 pub mod exit_book;
 pub mod exit_guard;

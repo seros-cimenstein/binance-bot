@@ -1,4 +1,4 @@
-//! Audit rows (Python schema + agent fields), the failed-route halt and the operator review
+//! Audit rows (Python schema + the rule's verdict), the failed-route halt and the operator review
 //! marker that clears it.
 
 use std::path::{Path, PathBuf};
@@ -112,60 +112,11 @@ impl Decision {
     }
 }
 
-/// One recorded host tool call.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ToolCallEntry {
-    pub name: String,
-    pub args: Value,
-    pub is_error: bool,
-    pub ms: u64,
-}
-
-/// Token and cost usage of one cycle turn.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub struct UsageEntry {
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
-    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    pub cost_usd: Decimal,
-}
-
-/// The bot's explicit end-of-cycle statement.
+/// What a cycle ended with: `hold` or `traded`, and the summary in words.
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct EndCycle {
     pub action: String,
     pub summary: String,
-}
-
-/// One failed model attempt of a cycle turn (the turn was retried on the next model).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct AttemptEntry {
-    /// `provider/model-id` the attempt ran on.
-    pub model: String,
-    /// `timeout`, `error`, `crashed`, `completed` (usage-limited) or `compaction`.
-    pub status: String,
-    pub error: String,
-}
-
-/// Agent fields of a cycle summary row.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct AgentRecord {
-    /// The model that produced the final outcome (its last assistant message).
-    pub model: String,
-    pub thinking: String,
-    /// `completed`, `aborted`, `error`, `timeout`, `crashed`, `skipped`.
-    pub turn_status: String,
-    pub tool_calls: Vec<ToolCallEntry>,
-    pub usage: UsageEntry,
-    pub end_cycle: Option<EndCycle>,
-    /// Failed attempts before the final one (model failover), oldest first.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub attempts: Vec<AttemptEntry>,
-    /// The final outcome came from a model other than the primary.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub fallback_active: bool,
 }
 
 /// `--mark-failed-route-reviewed` marker.
@@ -183,7 +134,9 @@ pub struct AuditRow {
     pub timestamp: String,
     pub mode: String,
     pub status: RowStatus,
-    pub prompt_version: String,
+    /// The operator's rule-set name (`BOT_SPOT_RULES_VERSION`); LLM-era rows have
+    /// `prompt_version` instead.
+    pub rules_version: String,
     pub context_hash: String,
     pub decision: Decision,
     pub candidate_route_count: usize,
@@ -195,12 +148,9 @@ pub struct AuditRow {
     pub submission_attempted: bool,
     pub error: String,
     pub audit_path: String,
-    /// Route rows: always `false` on disk (the alert is sent after the durable write).
     pub row_type: RowType,
     pub cycle_id: String,
     pub session_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent: Option<AgentRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator_review: Option<OperatorReview>,
     /// Cycle summaries: the trader's non-secret run configuration
@@ -234,7 +184,7 @@ impl AuditRow {
             timestamp: utc_timestamp(),
             mode: config.mode().into(),
             status,
-            prompt_version: config.prompt_version.clone(),
+            rules_version: config.rules_version.clone(),
             context_hash: String::new(),
             decision,
             candidate_route_count: 0,
@@ -248,7 +198,6 @@ impl AuditRow {
             row_type,
             cycle_id: String::new(),
             session_id: String::new(),
-            agent: None,
             operator_review: None,
             run_config: None,
             schizo: None,

@@ -1164,7 +1164,7 @@ function argText(args) {
   if (typeof args !== "object") return String(args);
   return Object.entries(args).map(([k, v]) => k + "=" + (Array.isArray(v) ? v.join(",") : v !== null && typeof v === "object" ? JSON.stringify(v) : String(v))).join("  ");
 }
-function cycleAction(c) { return ((c.agent && c.agent.end_cycle && c.agent.end_cycle.action) || "").toLowerCase(); }
+function cycleAction(c) { return ((c.agent && c.agent.end_cycle && c.agent.end_cycle.action) || (c.decision && c.decision.action) || "").toLowerCase(); }
 function cycleFailed(c) { const a = c.agent || {}; return !!c.error || (!!a.turn_status && a.turn_status !== "completed"); }
 function cycleKey(c) { return "cycle:" + (c.cycle_id || c.timestamp); }
 function cycleDetail(c) {
@@ -1194,7 +1194,7 @@ function cycleDetail(c) {
       fact("Decided by", algo ? "Algorithm" : "LLM (before Phase 52)"),
       fact("Brain", shortModel(a.model) + (a.thinking ? " · " + a.thinking : "")),
       fact("Turn", a.turn_status ? pretty(a.turn_status) : "—"),
-      fact("Prompt", c.prompt_version || "—"),
+      fact(c.rules_version ? "Rules" : "Prompt", c.rules_version || c.prompt_version || "—"),
       fact("Routes quoted", c.candidate_route_count === null || c.candidate_route_count === undefined ? "—" : String(c.candidate_route_count)),
       fact("Tokens in / cached / out", compactNum(u.input) + " / " + compactNum(u.cache_read) + " / " + compactNum(u.output)),
       fact("Cost", usd(u.cost_usd))),

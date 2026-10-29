@@ -3,10 +3,8 @@
 
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::Duration;
 
 use bb_core::env::{ConfigError, parse_bool};
-use bb_omp::ThinkingLevel;
 use bb_pool::{CatalogConfig, RouteConfig};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
@@ -14,24 +12,6 @@ use rust_decimal::prelude::FromPrimitive;
 use crate::error::{Result, TraderError};
 use crate::scope::ScopeConfig;
 
-/// Prompt/audit version tag of the agentic trader. v11: the v7 prompt restored on the
-/// old-gold-way branch, plus the stretch fee floor and closed-position feedback. v12
-/// (2026-10-18, LOOP_MONEY section B): information-only changes to the cycle message.
-/// v13 (2026-10-18, Phase 47): 20-coin market breadth in the cycle prompt, hold-duration and
-/// +4h entry timing in "Your record", liquid-leader candidate filtering, and asymmetric
-/// regime/swing guidance in the system prompt. v14 (2026-10-19, operator decision): live, the
-/// exit-plan section ends with the real results of the positions a plan sold instead of
-/// "plan vs your own exits" (in live mode only trigger price vs fill). v15 (2026-10-20,
-/// Phase 49, operator decision): the schizo trader. With `BOT_SPOT_GCP2_ENABLED` (on by
-/// default) the system prompt makes the bot act out a GCP2-driven mood among the four
-/// personas, hear their votes, bet one coin with all cash and obey YOLO (removed in v17), and the cycle
-/// message opens with `## Your schizo state`. With GCP2 off both prompts are the v14 text.
-/// v16 (2026-10-20, operator decision): the mood follows GCP2 instead of running inverted
-/// (it switches when the GCP2 zone changes and holds while it stays the same). v17
-/// (2026-10-21, Phase 50, operator decision): with `BOT_SPOT_MDP_ENABLED` (on by default) the
-/// system prompt adds the long-term value voice and the cycle message its
-/// `## Your long-term value` section (`crate::mdp`, γ=0.95 per cycle); YOLO is removed.
-pub const PROMPT_VERSION: &str = "bot-spot-v17-schizo";
 /// The only accepted value of `BOT_SPOT_DYNAMIC_SCOPE` for live trading.
 pub const DYNAMIC_SCOPE_ALL: &str = "all_eligible_spot";
 
@@ -70,8 +50,28 @@ pub const REMOVED_VARS: &[&str] = &[
     "TELEGRAM_COOLDOWN_PATH",
     // Phase 52: no social-signal (Telegram/X) evidence; /biz/ comes from the biz-app feed.
     "SOCIAL_SIGNAL_ENABLED",
-    // Phase 52: the algorithm always decides; no LLM decider.
+    // Phase 52: the algorithm always decides; no LLM, omp session, journal prompt,
+    // model failover, LLM cost cap or market-evidence service.
     "BOT_SPOT_DECIDER",
+    "BOT_SPOT_COMMAND",
+    "BOT_SPOT_MODEL",
+    "BOT_SPOT_THINKING",
+    "BOT_SPOT_WEB_SEARCH",
+    "BOT_SPOT_TIMEOUT_SECONDS",
+    "BOT_SPOT_FALLBACK_MODELS",
+    "BOT_SPOT_PRIMARY_TIMEOUT_SECONDS",
+    "BOT_SPOT_FALLBACK_COOLDOWN_SECONDS",
+    "BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES",
+    "BOT_SPOT_PROMPT_VERSION",
+    "BOT_SPOT_SESSION_DIR",
+    "BOT_SPOT_JOURNAL_PROMPT_ENTRIES",
+    "BOT_SPOT_COMPACT_AT_PERCENT",
+    "BOT_SPOT_COMPACT_AT_TOKENS",
+    "BOT_SPOT_MAX_DAILY_LLM_COST_USD",
+    "BOT_SPOT_MARKET_EVIDENCE_ENABLED",
+    "BOT_SPOT_MARKET_EVIDENCE_LOOKBACK_HOURS",
+    "BOT_SPOT_MARKET_EVIDENCE_MAX_SYMBOLS",
+    "BOT_SPOT_MARKET_EVIDENCE_TIMEFRAME",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -106,67 +106,6 @@ impl FromStr for MarketPickMode {
     }
 }
 
-/// One model of the trader's chain: `provider/model-id` plus its thinking level.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelSpec {
-    pub provider: String,
-    pub model_id: String,
-    pub thinking: ThinkingLevel,
-}
-
-impl ModelSpec {
-    /// `provider/model-id[:thinking]`; an omitted thinking level uses `default_thinking`.
-    pub fn parse(entry: &str, default_thinking: ThinkingLevel) -> Result<Self> {
-        let entry = entry.trim();
-        let invalid = |why: &str| {
-            TraderError::config(format!(
-                "invalid model {entry:?}: {why} (expected provider/model-id[:thinking])"
-            ))
-        };
-        let (name, thinking) = match entry.rsplit_once(':') {
-            Some((name, level)) => {
-                let level = level.trim().to_ascii_lowercase();
-                let thinking =
-                    parse_thinking(&level).ok_or_else(|| invalid("unknown thinking level"))?;
-                (name.trim(), thinking)
-            }
-            None => (entry, default_thinking),
-        };
-        let Some((provider, model_id)) = name.split_once('/') else {
-            return Err(invalid("missing provider"));
-        };
-        let (provider, model_id) = (provider.trim(), model_id.trim());
-        if provider.is_empty()
-            || model_id.is_empty()
-            || provider.contains(char::is_whitespace)
-            || model_id.contains(char::is_whitespace)
-        {
-            return Err(invalid("blank provider or model id"));
-        }
-        Ok(Self {
-            provider: provider.to_owned(),
-            model_id: model_id.to_owned(),
-            thinking,
-        })
-    }
-
-    /// `provider/model-id` (a bare primary `--model` pattern has no provider).
-    pub fn name(&self) -> String {
-        if self.provider.is_empty() {
-            self.model_id.clone()
-        } else {
-            format!("{}/{}", self.provider, self.model_id)
-        }
-    }
-}
-
-/// A named thinking level (`inherit` is not a level).
-fn parse_thinking(level: &str) -> Option<ThinkingLevel> {
-    serde_json::from_value(serde_json::Value::String(level.to_owned()))
-        .ok()
-        .filter(|level| !matches!(level, ThinkingLevel::Inherit))
-}
-
 /// Every trader setting.
 #[derive(Debug, Clone)]
 pub struct TraderConfig {
@@ -178,31 +117,10 @@ pub struct TraderConfig {
     pub confirm_live_trading: String,
     pub enabled: bool,
     pub dynamic_scope: String,
-    // agent
-    pub command: String,
-    pub model: String,
-    pub thinking: ThinkingLevel,
-    /// Enable omp's built-in `web_search` tool alongside the host tools.
-    pub web_search: bool,
-    pub timeout: Duration,
-    /// `BOT_SPOT_FALLBACK_MODELS`: tried in order when the active model fails a turn
-    /// (without an `execute_route` call) or a compaction. Empty = no fallback.
-    pub fallback_models: Vec<ModelSpec>,
-    /// Per-attempt timeout of the primary while fallbacks exist (fallbacks use `timeout`).
-    pub primary_timeout: Duration,
-    /// How long to stay on a fallback before the primary is tried again (next cycle start).
-    pub fallback_cooldown: Duration,
-    /// Consecutive cycles failed on every model before the brain-down alert (0 = never).
-    pub brain_down_alert_cycles: u32,
-    pub prompt_version: String,
-    pub session_dir: PathBuf,
+    /// `BOT_SPOT_RULES_VERSION`: the operator's name for the rule set in force, recorded
+    /// on every audit row (required with the rule).
+    pub rules_version: String,
     pub journal_path: PathBuf,
-    pub journal_prompt_entries: usize,
-    pub compact_at_percent: f64,
-    /// `BOT_SPOT_COMPACT_AT_TOKENS`: also compact at this many context tokens (0 = off).
-    pub compact_at_tokens: u64,
-    /// 0 = unlimited.
-    pub max_daily_llm_cost_usd: Decimal,
     pub state_path: PathBuf,
     pub route_stale_seconds: f64,
     // files
@@ -229,10 +147,7 @@ pub struct TraderConfig {
     pub min_leg_quote_reserve_bps: Decimal,
     pub ticker_stale_seconds: f64,
     pub fee_cache_seconds: f64,
-    // evidence / memory (information only)
-    pub market_evidence_enabled: bool,
-    pub market_evidence_lookback_hours: u32,
-    pub market_evidence_max_symbols: usize,
+    // memory (information only)
     pub trade_memory_limit: usize,
     /// Phase 49: read GCP2 live once per cycle and run the schizo state and voice (v15).
     pub gcp2_enabled: bool,
@@ -281,17 +196,6 @@ impl TraderConfig {
             .ok_or_else(|| {
                 ConfigError::Missing("BINANCE_API_SECRET or BINANCE_SECRET_KEY".into())
             })?;
-        let thinking_raw = env
-            .string("BOT_SPOT_THINKING", "high")
-            .to_ascii_lowercase();
-        let thinking: ThinkingLevel = serde_json::from_value(serde_json::Value::String(
-            thinking_raw.clone(),
-        ))
-        .map_err(|_| ConfigError::Invalid {
-            name: "BOT_SPOT_THINKING".into(),
-            expected: "off, minimal, low, medium, high, xhigh or max",
-            value: thinking_raw,
-        })?;
         let allowed_symbols_default = env.raw("API_SYMBOL_WHITELIST").unwrap_or_default();
         let allowed_assets_default = env.raw("API_ASSET_WHITELIST").unwrap_or_default();
         let scope = ScopeConfig::new(
@@ -302,23 +206,6 @@ impl TraderConfig {
             &env.csv("BOT_SPOT_BLOCKED_QUOTES", "IDR"),
             env.boolean("BOT_SPOT_BLOCK_FIAT_ASSETS", true)?,
         )?;
-        let timeout_seconds = env.float("BOT_SPOT_TIMEOUT_SECONDS", 300.0)?;
-        let fallback_models = env
-            .csv("BOT_SPOT_FALLBACK_MODELS", "")
-            .iter()
-            .map(|entry| ModelSpec::parse(entry, thinking))
-            .collect::<Result<Vec<_>>>()?;
-        let primary_timeout_seconds = env.float("BOT_SPOT_PRIMARY_TIMEOUT_SECONDS", 150.0)?;
-        let cooldown_seconds = env.float("BOT_SPOT_FALLBACK_COOLDOWN_SECONDS", 1800.0)?;
-        if cooldown_seconds < 0.0 {
-            return Err(TraderError::config(
-                "BOT_SPOT_FALLBACK_COOLDOWN_SECONDS must be non-negative",
-            ));
-        }
-        let evidence_timeframe = env.string("BOT_SPOT_MARKET_EVIDENCE_TIMEFRAME", "1h");
-        if evidence_timeframe != "1h" {
-            return Err(TraderError::config("market_evidence_timeframe must be 1h"));
-        }
         let exit = crate::exit_book::ExitSettings::from_lookup(|name| env.raw(name))
             .map_err(TraderError::config)?;
         let spec = env.raw("BOT_SPOT_ALGO_WEIGHTS").ok_or_else(|| {
@@ -330,6 +217,11 @@ impl TraderConfig {
             weights: crate::decider::Weights::parse(&spec).map_err(TraderError::config)?,
             min_posters: env.integer("BOT_SPOT_ALGO_MIN_POSTERS", 2)?,
         };
+        let rules_version = env.raw("BOT_SPOT_RULES_VERSION").ok_or_else(|| {
+            TraderError::config(
+                "BOT_SPOT_RULES_VERSION is required: the operator's name for the rule set",
+            )
+        })?;
         let config = Self {
             api_key,
             api_secret,
@@ -342,26 +234,8 @@ impl TraderConfig {
             dynamic_scope: env
                 .string("BOT_SPOT_DYNAMIC_SCOPE", "")
                 .to_ascii_lowercase(),
-            command: env.string("BOT_SPOT_COMMAND", "omp"),
-            model: env.string("BOT_SPOT_MODEL", "anthropic/claude-haiku-5-5"),
-            thinking,
-            web_search: env.boolean("BOT_SPOT_WEB_SEARCH", true)?,
-            timeout: positive_duration(timeout_seconds, "bot_timeout_seconds")?,
-            fallback_models,
-            primary_timeout: positive_duration(
-                primary_timeout_seconds,
-                "BOT_SPOT_PRIMARY_TIMEOUT_SECONDS",
-            )?,
-            fallback_cooldown: Duration::from_secs_f64(cooldown_seconds),
-            brain_down_alert_cycles: env.integer("BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES", 3)?,
-            prompt_version: env.string("BOT_SPOT_PROMPT_VERSION", PROMPT_VERSION),
-            session_dir: env.path("BOT_SPOT_SESSION_DIR", "data/bot-spot-session"),
+            rules_version,
             journal_path: env.path("BOT_SPOT_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
-            journal_prompt_entries: env.integer("BOT_SPOT_JOURNAL_PROMPT_ENTRIES", 8)?,
-            compact_at_percent: env.float("BOT_SPOT_COMPACT_AT_PERCENT", 70.0)?,
-            compact_at_tokens: env.integer("BOT_SPOT_COMPACT_AT_TOKENS", 0)?,
-            max_daily_llm_cost_usd: env
-                .decimal("BOT_SPOT_MAX_DAILY_LLM_COST_USD", Decimal::ZERO)?,
             state_path: env.path("BOT_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
             route_stale_seconds: env.float("BOT_SPOT_ROUTE_STALE_SECONDS", 60.0)?,
             audit_path: env.path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
@@ -394,11 +268,6 @@ impl TraderConfig {
                 .decimal("BOT_SPOT_MIN_LEG_QUOTE_RESERVE_BPS", Decimal::from(25))?,
             ticker_stale_seconds: env.float("BOT_SPOT_TICKER_STALE_SECONDS", 300.0)?,
             fee_cache_seconds: env.float("BOT_SPOT_FEE_CACHE_SECONDS", 60.0)?,
-            market_evidence_enabled: env.boolean("BOT_SPOT_MARKET_EVIDENCE_ENABLED", true)?,
-            market_evidence_lookback_hours: env
-                .integer("BOT_SPOT_MARKET_EVIDENCE_LOOKBACK_HOURS", 168)?,
-            market_evidence_max_symbols: env
-                .integer("BOT_SPOT_MARKET_EVIDENCE_MAX_SYMBOLS", 12)?,
             trade_memory_limit: env.integer("BOT_SPOT_TRADE_MEMORY_LIMIT", 8)?,
             gcp2_enabled: env.boolean("BOT_SPOT_GCP2_ENABLED", true)?,
             gcp2_base_url: env.string("BOT_SPOT_GCP2_BASE_URL", crate::gcp2::DEFAULT_BASE_URL),
@@ -427,7 +296,6 @@ impl TraderConfig {
             ("audit_path", &self.audit_path),
             ("lock_path", &self.lock_path),
             ("emergency_stop_path", &self.stop_path),
-            ("session_dir", &self.session_dir),
             ("journal_path", &self.journal_path),
             ("state_path", &self.state_path),
         ] {
@@ -435,14 +303,8 @@ impl TraderConfig {
                 return Err(TraderError::config(format!("{name} must not be blank")));
             }
         }
-        if self.command.trim().is_empty() {
-            return Err(TraderError::config("bot_command must not be blank"));
-        }
-        if self.model.trim().is_empty() {
-            return Err(TraderError::config("bot_model must not be blank"));
-        }
-        if self.prompt_version.trim().is_empty() {
-            return Err(TraderError::config("prompt_version must not be blank"));
+        if self.rules_version.trim().is_empty() {
+            return Err(TraderError::config("BOT_SPOT_RULES_VERSION must not be blank"));
         }
         if self.biz_max_age_minutes == 0 {
             return Err(TraderError::config(
@@ -465,7 +327,6 @@ impl TraderConfig {
             ("slippage_buffer_bps", self.slippage_buffer_bps),
             ("leg_rounding_reserve_bps", self.leg_rounding_reserve_bps),
             ("min_leg_quote_reserve_bps", self.min_leg_quote_reserve_bps),
-            ("max_daily_llm_cost_usd", self.max_daily_llm_cost_usd),
         ] {
             if value < Decimal::ZERO {
                 return Err(TraderError::config(format!(
@@ -484,48 +345,7 @@ impl TraderConfig {
                 )));
             }
         }
-        if !(self.compact_at_percent > 0.0 && self.compact_at_percent <= 100.0) {
-            return Err(TraderError::config(
-                "compact_at_percent must be in (0, 100]",
-            ));
-        }
-        if matches!(self.thinking, ThinkingLevel::Inherit) {
-            return Err(TraderError::config(
-                "BOT_SPOT_THINKING must name a level",
-            ));
-        }
-        self.model_chain()?;
         Ok(())
-    }
-
-    /// `[primary, fallbacks...]`. Without fallbacks the primary stays an opaque `--model`
-    /// pattern; with fallbacks it must be `provider/model-id` so the trader can switch back
-    /// to it, and no fallback may repeat the primary or another fallback.
-    pub fn model_chain(&self) -> Result<Vec<ModelSpec>> {
-        if self.fallback_models.is_empty() {
-            let (provider, model_id) = self.model.split_once('/').unwrap_or(("", &self.model));
-            return Ok(vec![ModelSpec {
-                provider: provider.trim().to_owned(),
-                model_id: model_id.trim().to_owned(),
-                thinking: self.thinking,
-            }]);
-        }
-        let primary = ModelSpec::parse(&self.model, self.thinking).map_err(|error| {
-            TraderError::config(format!(
-                "BOT_SPOT_MODEL must be provider/model-id when BOT_SPOT_FALLBACK_MODELS is set: {error}"
-            ))
-        })?;
-        let mut chain = vec![primary];
-        for fallback in &self.fallback_models {
-            if chain.iter().any(|model| model.name() == fallback.name()) {
-                return Err(TraderError::config(format!(
-                    "BOT_SPOT_FALLBACK_MODELS entry {} repeats the primary or another fallback",
-                    fallback.name()
-                )));
-            }
-            chain.push(fallback.clone());
-        }
-        Ok(chain)
     }
 
     /// `DRY_RUN`, `testnet` or `LIVE` (the environment, independent of plan-only).
@@ -545,23 +365,8 @@ impl TraderConfig {
         let decimal = |value: Decimal| value.normalize().to_string();
         serde_json::json!({
             "mode": self.mode(),
-            "prompt_version": self.prompt_version,
-            "model": self.model,
-            "thinking": self.thinking.as_str(),
-            "fallback_models": self
-                .fallback_models
-                .iter()
-                .map(|m| format!("{}:{}", m.name(), m.thinking.as_str()))
-                .collect::<Vec<_>>(),
-            "turn_timeout_seconds": self.timeout.as_secs(),
-            "primary_timeout_seconds": self.primary_timeout.as_secs(),
-            "fallback_cooldown_seconds": self.fallback_cooldown.as_secs(),
-            "web_search": self.web_search,
+            "rules_version": self.rules_version,
             "cycle_interval_seconds": cycle_interval_seconds,
-            "journal_prompt_entries": self.journal_prompt_entries,
-            "compact_at_percent": self.compact_at_percent,
-            "compact_at_tokens": self.compact_at_tokens,
-            "max_daily_llm_cost_usd": decimal(self.max_daily_llm_cost_usd),
             "exit_plans": {
                 "live": self.exit.live,
                 "default_plan": self.exit.default_plan.map(|d| d.plan.to_string()),
@@ -580,11 +385,6 @@ impl TraderConfig {
                 "small_max_spread_bps": decimal(self.small_max_spread_bps),
                 "slippage_buffer_bps": decimal(self.slippage_buffer_bps),
                 "leg_rounding_reserve_bps": decimal(self.leg_rounding_reserve_bps),
-            },
-            "market_evidence": {
-                "enabled": self.market_evidence_enabled,
-                "lookback_hours": self.market_evidence_lookback_hours,
-                "max_symbols": self.market_evidence_max_symbols,
             },
             "trade_memory_limit": self.trade_memory_limit,
             "gcp2": {
@@ -607,8 +407,8 @@ impl TraderConfig {
         })
     }
 
-    /// Hard safety: every live arming flag must be set. Checked before any LLM call and
-    /// again before every route execution.
+    /// Hard safety: every live arming flag must be set. Checked at cycle start and again
+    /// before every route execution.
     pub fn check_live_arming(&self) -> Result<()> {
         if !self.enabled {
             return Err(TraderError::safety(
@@ -680,15 +480,6 @@ impl TraderConfig {
             slippage_buffer_bps: self.slippage_buffer_bps,
         }
     }
-}
-
-fn positive_duration(seconds: f64, name: &str) -> Result<Duration> {
-    if !(seconds.is_finite() && seconds > 0.0) {
-        return Err(TraderError::config(format!(
-            "{name} must be greater than zero"
-        )));
-    }
-    Ok(Duration::from_secs_f64(seconds))
 }
 
 /// Typed readers over a variable lookup. Blank values count as unset, except for the
@@ -786,6 +577,7 @@ pub(crate) mod tests {
             ("BINANCE_API_SECRET".to_owned(), "secret".to_owned()),
             // Tests run on a fixed rule; production requires the operator's.
             ("BOT_SPOT_ALGO_WEIGHTS".to_owned(), "1,0.5,0.5,0,0.5,0".to_owned()),
+            ("BOT_SPOT_RULES_VERSION".to_owned(), "test-rules".to_owned()),
         ]);
         for (name, value) in pairs {
             map.insert((*name).to_owned(), (*value).to_owned());
@@ -809,7 +601,7 @@ pub(crate) mod tests {
             ("BINANCE_API_KEY", "KEY-must-not-leak"),
             ("BINANCE_API_SECRET", "SECRET-must-not-leak"),
             ("CONFIRM_LIVE_TRADING", "yes"),
-            ("BOT_SPOT_MODEL", "openai-codex/gpt-6.1-sol"),
+            ("BOT_SPOT_RULES_VERSION", "rules-2026-10-30"),
             ("BOT_SPOT_DEFAULT_EXIT_PLAN", "deadline=120"),
             ("BOT_SPOT_DEFAULT_EXIT_PLAN_FROM", "2026-10-15T09:17:34Z"),
         ]))
@@ -817,7 +609,7 @@ pub(crate) mod tests {
         let snapshot = config.run_config(Some(1200));
         let text = snapshot.to_string();
         assert!(!text.contains("must-not-leak"), "{text}");
-        assert_eq!(snapshot["model"], "openai-codex/gpt-6.1-sol");
+        assert_eq!(snapshot["rules_version"], "rules-2026-10-30");
         assert_eq!(snapshot["cycle_interval_seconds"], 1200);
         assert_eq!(snapshot["exit_plans"]["default_plan"], "deadline=120");
     }
@@ -827,25 +619,16 @@ pub(crate) mod tests {
         let config = TraderConfig::from_lookup(lookup(&[])).unwrap();
         assert!(config.use_testnet && config.dry_run && !config.enabled);
         assert_eq!(config.confirm_live_trading, "no");
-        assert_eq!(config.command, "omp");
-        assert_eq!(config.prompt_version, PROMPT_VERSION);
-        assert_eq!(
-            config.session_dir,
-            PathBuf::from("data/bot-spot-session")
-        );
         assert_eq!(
             config.audit_path,
             PathBuf::from("data/bot-spot-decisions.jsonl")
         );
-        assert_eq!(config.timeout, Duration::from_secs(300));
         assert_eq!(config.max_route_legs, 3);
         assert_eq!(config.market_pick_mode, MarketPickMode::LiquidTopValue);
         assert_eq!(config.slippage_buffer_bps, Decimal::from(25));
         assert_eq!(config.scope.blocked_quotes, vec!["IDR".to_owned()]);
         assert!(config.scope.block_fiat_assets);
         assert_eq!(config.mode(), "DRY_RUN");
-        assert_eq!(config.compact_at_percent, 70.0);
-        assert_eq!(config.max_daily_llm_cost_usd, Decimal::ZERO);
     }
 
     #[test]
@@ -854,6 +637,11 @@ pub(crate) mod tests {
             ("BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS", "not-a-number"),
             ("BOT_SPOT_DECISION_MODE", "freestyle"),
             ("BOT_SPOT_MAX_SUBMITTED_TRADES_PER_DAY", "-3"),
+            // Phase 52 removals: an old LLM env file still loads.
+            ("BOT_SPOT_THINKING", "loud"),
+            ("BOT_SPOT_TIMEOUT_SECONDS", "0"),
+            ("BOT_SPOT_FALLBACK_MODELS", "not a model"),
+            ("BOT_SPOT_MARKET_EVIDENCE_TIMEFRAME", "4h"),
         ]));
         assert!(config.is_ok());
     }
@@ -900,9 +688,7 @@ pub(crate) mod tests {
             [("BOT_SPOT_MAX_ROUTE_LEGS", "4")],
             [("BOT_SPOT_MAX_ROUTE_LEGS", "0")],
             [("BOT_SPOT_MARKET_PICK_MODE", "yolo")],
-            [("BOT_SPOT_MARKET_EVIDENCE_TIMEFRAME", "4h")],
-            [("BOT_SPOT_TIMEOUT_SECONDS", "0")],
-            [("BOT_SPOT_THINKING", "loud")],
+            [("BOT_SPOT_RULES_VERSION", " ")],
             [("BOT_SPOT_CANDIDATE_LIMIT", "-1")],
             [("BOT_SPOT_BLOCKED_ASSETS", "B@D")],
             [("USE_TESTNET", "maybe")],
@@ -930,94 +716,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn fallback_models_parse_thinking_suffix_and_defaults() {
-        let config = TraderConfig::from_lookup(lookup(&[])).unwrap();
-        assert!(config.fallback_models.is_empty());
-        assert_eq!(config.primary_timeout, Duration::from_secs(150));
-        assert_eq!(config.fallback_cooldown, Duration::from_secs(1800));
-        assert_eq!(config.brain_down_alert_cycles, 3);
-        let chain = config.model_chain().unwrap();
-        assert_eq!(chain.len(), 1);
-        assert_eq!(chain[0].name(), "anthropic/claude-haiku-5-5");
-
-        let config = TraderConfig::from_lookup(lookup(&[
-            (
-                "BOT_SPOT_FALLBACK_MODELS",
-                " openai-codex/gpt-6.1-sol:LOW , google/gemini-x ",
-            ),
-            ("BOT_SPOT_PRIMARY_TIMEOUT_SECONDS", "90"),
-            ("BOT_SPOT_FALLBACK_COOLDOWN_SECONDS", "0"),
-            ("BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES", "5"),
-        ]))
-        .unwrap();
-        assert_eq!(
-            config.fallback_models,
-            vec![
-                ModelSpec {
-                    provider: "openai-codex".into(),
-                    model_id: "gpt-6.1-sol".into(),
-                    thinking: ThinkingLevel::Low,
-                },
-                // Omitted thinking = the primary's.
-                ModelSpec {
-                    provider: "google".into(),
-                    model_id: "gemini-x".into(),
-                    thinking: ThinkingLevel::High,
-                },
-            ]
-        );
-        assert_eq!(config.primary_timeout, Duration::from_secs(90));
-        assert_eq!(config.fallback_cooldown, Duration::ZERO);
-        assert_eq!(config.brain_down_alert_cycles, 5);
-        let chain = config.model_chain().unwrap();
-        assert_eq!(chain[0].name(), "anthropic/claude-haiku-5-5");
-        assert_eq!(chain[0].thinking, ThinkingLevel::High);
-        assert_eq!(chain[1].name(), "openai-codex/gpt-6.1-sol");
-    }
-
-    #[test]
-    fn fallback_models_reject_bad_entries() {
-        for (fallbacks, extra) in [
-            ("gpt-6.1-sol", None),
-            ("openai-codex/", None),
-            ("/gpt", None),
-            ("openai-codex/gpt-6.1-sol:loud", None),
-            ("openai-codex/gpt-6.1-sol:inherit", None),
-            ("openai codex/gpt", None),
-            // Equal to the primary (thinking does not make it a different model).
-            ("anthropic/claude-haiku-5-5:low", None),
-            (
-                "openai-codex/gpt-6.1-sol,openai-codex/gpt-6.1-sol:low",
-                None,
-            ),
-            // A bare primary pattern cannot be switched back to.
-            (
-                "openai-codex/gpt-6.1-sol",
-                Some(("BOT_SPOT_MODEL", "haiku")),
-            ),
-        ] {
-            let mut pairs = vec![("BOT_SPOT_FALLBACK_MODELS", fallbacks)];
-            pairs.extend(extra);
-            assert!(
-                TraderConfig::from_lookup(lookup(&pairs)).is_err(),
-                "{fallbacks} {extra:?}"
-            );
-        }
-        for pairs in [
-            [("BOT_SPOT_PRIMARY_TIMEOUT_SECONDS", "0")],
-            [("BOT_SPOT_FALLBACK_COOLDOWN_SECONDS", "-1")],
-            [("BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES", "-1")],
-        ] {
-            assert!(
-                TraderConfig::from_lookup(lookup(&pairs)).is_err(),
-                "{pairs:?}"
-            );
-        }
-        // Without fallbacks a bare --model pattern stays valid (today's behavior).
-        assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_MODEL", "haiku")])).is_ok());
-    }
-
-    #[test]
     fn the_rule_is_required_and_parsed_from_the_operators_weights() {
         let without = |name: &str| {
             let base = lookup(&[]);
@@ -1028,6 +726,10 @@ pub(crate) mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("BOT_SPOT_ALGO_WEIGHTS is required"), "{err}");
+        let err = TraderConfig::from_lookup(without("BOT_SPOT_RULES_VERSION"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("BOT_SPOT_RULES_VERSION is required"), "{err}");
         let config = TraderConfig::from_lookup(lookup(&[
             ("BOT_SPOT_ALGO_WEIGHTS", "1,0.25,0.5,0,0.5,0"),
             ("BOT_SPOT_ALGO_MIN_POSTERS", "3"),

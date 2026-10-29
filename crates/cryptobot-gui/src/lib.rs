@@ -343,6 +343,7 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
                 "status": row.get("status"),
                 "mode": row.get("mode"),
                 "prompt_version": row.get("prompt_version"),
+                "rules_version": row.get("rules_version"),
                 "candidate_route_count": row.get("candidate_route_count"),
                 "error": row.get("error"),
                 "decision": row.get("decision"),

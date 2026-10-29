@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Nightly archive of the Bot Spot data files: the decisions audit
-# (the only record of every trade), journal, agent state, exit-plan book and watch files,
-# the entry-timing cache and the omp session directory. Keeps the newest
+# (the only record of every trade), journal, agent state, exit-plan book and watch files.
+# Keeps the newest
 # BINANCE_BOT_BACKUP_RETENTION archives (default 14) in BINANCE_BOT_BACKUP_DIR.
 #
 # Paths come from the trader's own settings (process env, then the .env file, then the
 # trader's defaults), relative to the project dir like the trader resolves them. Missing files
-# are skipped (a fresh install has no session yet); an archive with none of them fails.
+# are skipped (a fresh install has none yet); an archive with none of them fails.
 # Reads only; the archive is written to a temp name, checked with `tar -tzf`, then renamed.
 set -euo pipefail
 
@@ -50,13 +50,11 @@ relative_path() {
 AUDIT=$(relative_path "$(configured_value BOT_SPOT_AUDIT_PATH data/bot-spot-decisions.jsonl)")
 declare -a WANTED=(
     "$AUDIT"
-    "$(dirname "$AUDIT")/bot-spot-entry-timing.json"
     "$(relative_path "$(configured_value BOT_SPOT_JOURNAL_PATH data/bot-spot-journal.jsonl)")"
     "$(relative_path "$(configured_value BOT_SPOT_STATE_PATH data/bot-spot-agent-state.json)")"
     "$(relative_path "$(configured_value BOT_SPOT_EXIT_PLANS_PATH data/bot-spot-exit-plans.json)")"
     "$(relative_path "$(configured_value BOT_SPOT_EXIT_WATCH_STATE_PATH data/bot-spot-exit-watch-state.json)")"
     "$(relative_path "$(configured_value BOT_SPOT_EXIT_WATCH_LOG_PATH data/bot-spot-exit-watch.jsonl)")"
-    "$(relative_path "$(configured_value BOT_SPOT_SESSION_DIR data/bot-spot-session)")"
 )
 
 cd "$PROJECT_DIR"

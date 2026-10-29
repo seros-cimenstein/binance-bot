@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::config::{MarketPickMode, TraderConfig};
 use crate::context::{decimal_json, opt_decimal_json, route_id};
 use crate::error::Result;
-use crate::evidence::{RouteEvidence, is_low_upside};
+use crate::assets::is_low_upside;
 
 /// Quote assets that earn the small-market quote bonus.
 const MAJOR_QUOTES: [&str; 6] = ["USDT", "FDUSD", "USDC", "BNB", "BTC", "ETH"];
@@ -157,7 +157,6 @@ pub struct RouteCandidate {
     pub quote_volume_usdt: Option<Decimal>,
     pub spread_bps: Option<Decimal>,
     pub liquidity_tier: &'static str,
-    pub market_evidence: Option<RouteEvidence>,
 }
 
 impl RouteCandidate {
@@ -198,7 +197,6 @@ impl RouteCandidate {
             "quote_volume_usdt": opt_decimal_json(self.quote_volume_usdt),
             "spread_bps": opt_decimal_json(self.spread_bps),
             "liquidity_tier": self.liquidity_tier,
-            "market_evidence": self.market_evidence.as_ref().map_or_else(|| json!({}), |e| json!(e)),
             "slippage_bps": decimal_json(self.route.slippage_bps),
             "legs": legs,
         })
@@ -497,7 +495,6 @@ pub async fn quote_candidate(
         quote_volume_usdt: market.and_then(|m| m.quote_volume_usdt),
         spread_bps: market.and_then(|m| m.spread_bps),
         liquidity_tier: liquidity_tier(market.and_then(|m| m.quote_volume_usdt)),
-        market_evidence: None,
         route,
     }))
 }

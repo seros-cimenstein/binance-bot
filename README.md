@@ -88,7 +88,8 @@ required):
   - operator scope (allow/block lists, blocked quotes, fiat blocking);
   - Spot MARKET orders only, at most `BOT_SPOT_MAX_ROUTE_LEGS` legs.
 - **Audit.** Each route or cycle is one fsync'd row in `BOT_SPOT_AUDIT_PATH`.
-  It uses the Python schema plus agent fields: tool calls, tokens and cost.
+  It uses the Python schema plus `rules_version` (`BOT_SPOT_RULES_VERSION`,
+  required) and, on cycle summaries, the rule's verdict (`algo`).
   There are no Telegram or phone alerts (operator decision 2026-10-29); watch
   the dashboard and the audit log.
 

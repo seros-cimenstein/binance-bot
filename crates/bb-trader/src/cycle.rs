@@ -13,17 +13,13 @@ use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::audit::{
-    AgentRecord, AttemptEntry, AuditLog, AuditRow, Decision, EndCycle, RowStatus, RowType,
-    ToolCallEntry, UsageEntry, failed_route_halt,
-};
+use crate::audit::{AuditLog, AuditRow, Decision, EndCycle, RowStatus, RowType, failed_route_halt};
 use crate::config::TraderConfig;
 use crate::context::{DecisionContext, decimal_json, execution_invariants, route_scope};
 use crate::error::{Result, TraderError};
-use crate::evidence::{EvidenceService, route_evidence};
 use crate::executor::{Executor, LegResult};
 use crate::journal::{AgentState, ExecutionSummary, Journal, LastCycle};
-use crate::memory::{TradeMemory, TradeRecord};
+use crate::memory::TradeMemory;
 use crate::universe::{
     Balances, MarketView, RouteCandidate, build_route_candidates, quote_candidate,
 };
@@ -31,29 +27,13 @@ use crate::universe::{
 /// 1m bars read per coin for the algorithm's 15m/1h returns: 61 closed bars plus the open one.
 const ALGO_PRICE_MINUTES: u32 = 62;
 
-/// What one cycle turn produced.
+/// What one cycle's orders produced.
 #[derive(Debug, Clone, Default)]
 pub struct TurnReport {
-    /// `completed`, `aborted`, `error`, `timeout` or `crashed`.
+    /// `completed` (the rule's orders ran or none were asked for).
     pub status: String,
+    /// The first failed order (the remaining ones were not sent), or shutdown.
     pub error: Option<String>,
-    pub final_text: Option<String>,
-    /// Every tool call of the cycle (failed attempts first).
-    pub tool_calls: Vec<ToolCallEntry>,
-    /// Usage summed over every attempt.
-    pub usage: UsageEntry,
-    /// `provider/model-id` that produced the final outcome (empty = the configured model).
-    pub model: String,
-    /// Thinking level of `model` (empty = the configured level).
-    pub thinking: String,
-    /// Failures that moved this cycle to another model (compactions and turn attempts).
-    pub attempts: Vec<AttemptEntry>,
-    /// `model` is not the primary.
-    pub fallback_active: bool,
-    /// `Some(true)`: the turn failed on every configured model (no orders were placed);
-    /// `Some(false)`: a model completed the turn; `None`: neither (shutdown, aborted, or a
-    /// retry refused because the failed attempt called `execute_route`).
-    pub all_models_failed: Option<bool>,
 }
 
 /// Whether `execute_route` may place orders.
@@ -112,7 +92,6 @@ pub struct Runtime {
     pub client: BinanceClient,
     pub audit: AuditLog,
     pub journal: Journal,
-    pub evidence: EvidenceService,
     /// Live GCP2 reader (`None` unless `BOT_SPOT_GCP2_ENABLED`).
     pub gcp2: Option<crate::gcp2::Gcp2LiveReader>,
     pub(crate) cycle: Mutex<Option<CycleState>>,
@@ -129,15 +108,9 @@ impl Runtime {
         mode: CycleMode,
         client: BinanceClient,
     ) -> Self {
-        let evidence = EvidenceService::new(
-            bb_binance::history::HistoryFetcher::spot(client.clone()),
-            config.market_evidence_lookback_hours,
-            config.market_evidence_max_symbols,
-        );
         Self {
             audit: AuditLog::new(&config.audit_path),
             journal: Journal::new(&config.journal_path),
-            evidence,
             mode,
             client,
             gcp2: config.gcp2_enabled.then(|| {
@@ -191,60 +164,16 @@ impl Runtime {
         )
     }
 
-    /// The bot's record from the whole audit log, fees in other coins valued at the view's
-    /// prices, plus how the price moved around its entries (candles fetched once per entry,
-    /// cached next to the audit). `None` when the log cannot be read.
-    pub(crate) async fn trade_record(&self, balances: &Balances, view: &MarketView) -> Option<TradeRecord> {
-        let rows = match crate::exit_replay::read_audit(&self.config.audit_path) {
-            Ok(rows) => rows,
-            Err(error) => {
-                tracing::warn!(%error, "audit unreadable; the cycle prompt has no record section");
-                return None;
-            }
-        };
-        let mark = |asset: &str| {
-            Some(crate::trades::Mark {
-                free: balances.free(asset),
-                price_usdt: view.usdt_value(asset, Decimal::ONE)?,
-            })
-        };
-        let mut record = TradeRecord::from_rows(&rows, mark, bb_core::time::now());
-        let (trips, _) = crate::exit_replay::round_trips(&rows, Some("USDT"), None);
-        record.entry_timing = crate::entry_timing::summary(
-            &self.client,
-            &crate::entry_timing::cache_path(&self.config.audit_path),
-            &trips,
-            bb_core::time::now_ms(),
-        )
-        .await;
-        Some(record)
-    }
-
-    /// Catalog, balances, candidate routes, evidence, trade memory, GCP2,
-    /// the schizo state, the long-term value voice and the /biz/ feed.
+    /// Catalog, balances, candidate routes, trade memory, GCP2, the schizo state, the
+    /// long-term value voice, the /biz/ feed and the algorithm's market view.
     pub async fn build_snapshot(&self) -> Result<Snapshot> {
         let balances = self.balances().await?;
         let view = self.load_view().await?;
-        let mut candidates = build_route_candidates(&view, &self.config, &balances.free).await?;
+        let candidates = build_route_candidates(&view, &self.config, &balances.free).await?;
         let trade_memory = self.trade_memory(&balances, &view, self.config.trade_memory_limit);
-        let trade_record = self.trade_record(&balances, &view).await;
-        self.evidence.clear().await;
-        let breadth = if self.config.market_evidence_enabled {
-            for candidate in &mut candidates {
-                let source = self
-                    .evidence
-                    .asset(&candidate.route.source_asset, &view.markets, true)
-                    .await;
-                let destination = self
-                    .evidence
-                    .asset(&candidate.route.destination_asset, &view.markets, true)
-                    .await;
-                candidate.market_evidence = Some(route_evidence(
-                    candidate.immediate_friction_bps,
-                    source,
-                    destination,
-                ));
-            }
+        // The 20-coin breadth read only feeds the schizo state and the MDP voice (both
+        // removed later in Phase 52); the algorithm reads its own prices.
+        let breadth = if self.config.gcp2_enabled || self.config.mdp_enabled {
             Some(crate::market_mood::fetch(Some(&self.client)).await)
         } else {
             None
@@ -273,7 +202,7 @@ impl Runtime {
         let market_mood = breadth.filter(|mood| mood.score.is_some());
         let context = DecisionContext {
             timestamp: crate::audit::utc_timestamp(),
-            prompt_version: self.config.prompt_version.clone(),
+            rules_version: self.config.rules_version.clone(),
             market_pick_mode: self.config.market_pick_mode.as_str(),
             portfolio_value_usdt,
             balances: balances.clone(),
@@ -281,7 +210,6 @@ impl Runtime {
             execution_invariants: execution_invariants(&self.config),
             route_scope: route_scope(&self.config),
             trade_memory,
-            trade_record,
             market_mood,
             gcp2,
             schizo,
@@ -323,7 +251,7 @@ impl Runtime {
                 .keys()
                 .filter(|asset| {
                     asset.as_str() != "USDT"
-                        && !crate::evidence::is_low_upside(asset)
+                        && !crate::assets::is_low_upside(asset)
                         && usdt_market(asset)
                 })
                 .cloned()
@@ -544,9 +472,7 @@ impl Runtime {
         use crate::decider::Action;
         let mut report = TurnReport {
             status: "completed".into(),
-            model: ALGO_MODEL.into(),
-            thinking: "off".into(),
-            ..TurnReport::default()
+            error: None,
         };
         let mut traded = 0usize;
         let mut failure = None;
@@ -562,17 +488,10 @@ impl Runtime {
                         Action::Sell { asset, reason } => (asset.as_str(), EXIT_QUOTE, reason.as_str()),
                         Action::Buy { asset, reason } => (EXIT_QUOTE, asset.as_str(), reason.as_str()),
                     };
-                    let started = std::time::Instant::now();
                     let result = match self.quote_for_cycle(source, destination).await {
                         Ok(route_id) => self.execute_route(&route_id, reason, None).await,
                         Err(message) => Err(message),
                     };
-                    report.tool_calls.push(crate::audit::ToolCallEntry {
-                        name: "execute_route".into(),
-                        args: json!({"source": source, "destination": destination, "reason": reason}),
-                        is_error: result.is_err(),
-                        ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                    });
                     match result {
                         Ok(_) => traded += 1,
                         Err(message) => {
@@ -682,10 +601,7 @@ impl Runtime {
         let reason = match (&end, &report.error) {
             (Some(end), _) => end.summary.clone(),
             (None, Some(error)) => format!("{error}; no further orders this cycle"),
-            (None, None) => format!(
-                "The bot ended the turn without end_cycle: {}",
-                report.final_text.clone().unwrap_or_default()
-            ),
+            (None, None) => "the cycle ended without a verdict".to_owned(),
         };
         let action = end.as_ref().map_or("hold", |e| e.action.as_str());
         let mut row = AuditRow::new(
@@ -700,24 +616,6 @@ impl Runtime {
         row.cycle_id = state.cycle_id.clone();
         row.session_id = state.session_id.clone();
         row.error = report.error.clone().unwrap_or_default();
-        row.agent = Some(AgentRecord {
-            model: if report.model.is_empty() {
-                self.config.model.clone()
-            } else {
-                report.model.clone()
-            },
-            thinking: if report.thinking.is_empty() {
-                self.config.thinking.as_str().into()
-            } else {
-                report.thinking.clone()
-            },
-            turn_status: report.status.clone(),
-            tool_calls: report.tool_calls.clone(),
-            usage: report.usage.clone(),
-            end_cycle: end,
-            attempts: report.attempts.clone(),
-            fallback_active: report.fallback_active,
-        });
         row.run_config = self.run_config.get().cloned();
         row.schizo = match &state.context.schizo {
             Some(schizo) => Some(serde_json::to_value(schizo)?),
@@ -743,7 +641,7 @@ impl Runtime {
         Ok((row, state.executions))
     }
 
-    /// Record a cycle that never asked the bot (halt, cost cap, build failure).
+    /// Record a cycle the rule never decided (halt, snapshot failure).
     pub async fn record_skipped(
         &self,
         cycle_id: &str,
@@ -759,16 +657,6 @@ impl Runtime {
         );
         row.cycle_id = cycle_id.to_owned();
         row.error = error.to_owned();
-        row.agent = Some(AgentRecord {
-            model: self.config.model.clone(),
-            thinking: self.config.thinking.as_str().into(),
-            turn_status: "skipped".into(),
-            tool_calls: Vec::new(),
-            usage: Default::default(),
-            end_cycle: None,
-            attempts: Vec::new(),
-            fallback_active: false,
-        });
         row.run_config = self.run_config.get().cloned();
         self.audit.append(&row)?;
         Ok(row)
@@ -916,13 +804,6 @@ impl Runtime {
                 quoted.route.destination_asset
             )
         })?;
-        let mut fresh = RouteCandidate {
-            market_evidence: quoted.market_evidence.clone(),
-            ..fresh
-        };
-        if let Some(evidence) = &mut fresh.market_evidence {
-            evidence.route_friction_bps = fresh.immediate_friction_bps.unwrap_or(0.0).max(0.0);
-        }
         state.quotes.insert(fresh.route_id.clone(), fresh.clone());
         if fresh.route_id != quoted.route_id {
             return Err(format!(
@@ -1161,8 +1042,6 @@ impl Runtime {
 pub const EXIT_QUOTE: &str = "USDT";
 /// `cycle_id` of exit-plan route rows (they run between cycles).
 pub const EXIT_CYCLE_ID: &str = "exit-plan";
-/// `agent.model` of algo cycle summaries (Phase 51): no LLM answered.
-pub const ALGO_MODEL: &str = "rule-based decider";
 /// `session_id` of algo cycles (no omp session exists).
 pub const ALGO_SESSION_ID: &str = "algo";
 
@@ -1331,7 +1210,10 @@ impl Trader {
             finished_at: summary.timestamp.clone(),
             status: summary.status.as_str().into(),
             turn_status: report.status.clone(),
-            end_cycle: summary.agent.as_ref().and_then(|a| a.end_cycle.clone()),
+            end_cycle: Some(EndCycle {
+                action: summary.decision.action.clone(),
+                summary: summary.decision.reason.clone(),
+            }),
             executions,
             error: summary.error.clone(),
         });
@@ -1406,7 +1288,7 @@ mod tests {
             .unwrap();
         let context = DecisionContext {
             timestamp: crate::audit::utc_timestamp(),
-            prompt_version: config.prompt_version.clone(),
+            rules_version: config.rules_version.clone(),
             market_pick_mode: config.market_pick_mode.as_str(),
             portfolio_value_usdt: dec!(100),
             balances: balances.clone(),
@@ -1414,7 +1296,6 @@ mod tests {
             execution_invariants: execution_invariants(&config),
             route_scope: route_scope(&config),
             trade_memory: runtime.trade_memory(&balances, &view, 8),
-            trade_record: None,
             market_mood: None,
             gcp2: None,
             schizo: None,
@@ -1559,16 +1440,15 @@ mod tests {
         let report = first
             .run_algo_turn(Ok(buy), &rule, &CancellationToken::new())
             .await;
-        assert_eq!((report.error.as_deref(), report.model.as_str()), (None, ALGO_MODEL));
+        assert_eq!(report.error.as_deref(), None);
         let (summary, _) = first.finish_cycle(&report).await.unwrap();
         assert_eq!(summary.status, RowStatus::Planned);
         assert_eq!(order_calls(&server).await, 0);
         let rows = audit_rows(dir.path());
         assert_eq!(rows[0]["decision"]["destination_asset"], "SOL");
         assert_eq!(rows[0]["decision"]["reason"], "SOL score +0.600 ≥ buy level +0.5");
-        assert_eq!(rows[1]["agent"]["end_cycle"]["action"], "traded");
+        assert_eq!(rows[1]["decision"]["action"], "traded");
         assert_eq!(rows[1]["algo"]["best"]["asset"], "SOL");
-        assert_eq!(rows[1]["agent"]["model"], ALGO_MODEL);
         assert_eq!(rows[1]["session_id"], "session-1");
 
         // A sell that cannot be quoted stops the turn: no buy of a second coin.
@@ -1592,7 +1472,7 @@ mod tests {
             .run_algo_turn(Ok(rotate), &rule, &CancellationToken::new())
             .await;
         assert!(report.error.as_deref().unwrap().contains("no free BTC balance"), "{report:?}");
-        assert_eq!(report.tool_calls.len(), 1);
+        assert_eq!(order_calls(&server).await, 0);
         let (summary, _) = second.finish_cycle(&report).await.unwrap();
         assert_eq!(summary.status, RowStatus::Held);
         assert_eq!(audit_rows(dir.path()).len(), 1);
