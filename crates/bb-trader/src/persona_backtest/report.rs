@@ -19,7 +19,6 @@ use super::personas::{
 };
 use crate::decider::{Rule, Weights};
 use crate::error::{Result, TraderError};
-use crate::mdp::Model;
 
 /// The Phase 48 variants `all` expands to, in report order.
 pub const ALL_PERSONAS: [&str; 6] = [
@@ -85,10 +84,6 @@ pub struct PersonaBacktestArgs {
     /// Where the three report files go.
     #[arg(long, default_value = "reports")]
     pub output_dir: PathBuf,
-    /// `bb bot-spot-mdp-fit` model for `biz_algo`'s value term; it must be fitted on data that ends
-    /// before the window starts.
-    #[arg(long)]
-    pub mdp_model: Option<PathBuf>,
     /// `biz-feed-v1` history (`biz-insights feed --history`) for `biz_algo`; without it the
     /// /biz/ terms are 0.
     #[arg(long)]
@@ -96,7 +91,7 @@ pub struct PersonaBacktestArgs {
     /// A feed older than this at a step is not visible (hourly history needs more than 60).
     #[arg(long, default_value_t = 90)]
     pub biz_max_age_minutes: i64,
-    /// Fixed `biz_algo` weights `talk,stance,momentum,value,buy_above,sell_below` (e.g. read
+    /// Fixed `biz_algo` weights `talk,stance,momentum,buy_above,sell_below` (e.g. read
     /// off the `bb biz-lead-study` report) instead of tuning them on the older half.
     #[arg(long)]
     pub biz_weights: Option<String>,
@@ -132,11 +127,9 @@ pub fn resolve_personas(names: &[String]) -> Result<Vec<&'static str>> {
     Ok(out)
 }
 
-/// What `biz_algo` needs beyond the market: the long-term value model, the /biz/ feed
-/// history and the decider rule.
+/// What `biz_algo` needs beyond the market: the /biz/ feed history and the decider rule.
 #[derive(Debug, Clone, Default)]
 pub struct PersonaInputs {
-    pub mdp: Option<Arc<Model>>,
     pub biz: Option<Arc<BizHistory>>,
     pub rule: Option<Rule>,
 }
@@ -154,7 +147,6 @@ fn build_persona(name: &str, cfg: Config, inputs: &PersonaInputs) -> Result<Box<
                 .rule
                 .ok_or_else(|| TraderError::config("biz_algo needs its rule (tuned or --biz-weights)"))?,
             inputs.biz.clone(),
-            inputs.mdp.clone(),
         )),
         other => return Err(TraderError::config(format!("unknown persona {other:?}"))),
     })
@@ -288,27 +280,22 @@ pub fn split_point(cfg: &Config) -> Result<i64> {
 }
 
 /// The weight sets `biz_algo` is tuned over: talk and stance −1/0/+1 (0 only without
-/// feeds), momentum 0/1, value 0/1 (0 only without a model), buy at 0.5/1, sell below
-/// −0.5/0.
-pub fn weight_grid(with_biz: bool, with_mdp: bool) -> Vec<Weights> {
+/// feeds), momentum 0/1, buy at 0.5/1, sell below −0.5/0.
+pub fn weight_grid(with_biz: bool) -> Vec<Weights> {
     let signed: &[f64] = if with_biz { &[-1.0, 0.0, 1.0] } else { &[0.0] };
-    let values: &[f64] = if with_mdp { &[0.0, 1.0] } else { &[0.0] };
     let mut out = Vec::new();
     for &talk in signed {
         for &stance in signed {
             for momentum in [0.0, 1.0] {
-                for &value in values {
-                    for buy_above in [0.5, 1.0] {
-                        for sell_below in [-0.5, 0.0] {
-                            out.push(Weights {
-                                talk,
-                                stance,
-                                momentum,
-                                value,
-                                buy_above,
-                                sell_below,
-                            });
-                        }
+                for buy_above in [0.5, 1.0] {
+                    for sell_below in [-0.5, 0.0] {
+                        out.push(Weights {
+                            talk,
+                            stance,
+                            momentum,
+                            buy_above,
+                            sell_below,
+                        });
                     }
                 }
             }
@@ -326,14 +313,13 @@ pub fn tune(
     min_posters: u64,
 ) -> Result<(Weights, Vec<GridRow>)> {
     let mut rows = Vec::new();
-    for weights in weight_grid(inputs.biz.is_some(), inputs.mdp.is_some()) {
+    for weights in weight_grid(inputs.biz.is_some()) {
         let persona = BizAlgo::new(
             Rule {
                 weights,
                 min_posters,
             },
             inputs.biz.clone(),
-            inputs.mdp.clone(),
         );
         let r = run(market, older, Box::new(persona))?;
         rows.push(GridRow {
@@ -403,7 +389,7 @@ fn run_split(
 
 fn biz_summary(history: Option<&BizHistory>, dir: Option<&Path>) -> String {
     let (Some(history), Some(dir)) = (history, dir) else {
-        return "not loaded (no `--biz-feeds`): the talk and stance terms are 0, so `biz_algo` trades on momentum and the value model alone".to_string();
+        return "not loaded (no `--biz-feeds`): the talk and stance terms are 0, so `biz_algo` trades on momentum alone".to_string();
     };
     let span = |ms: Option<i64>| ms.map_or_else(|| "none".to_string(), iso);
     let readers: Vec<&str> = history.readers().iter().map(String::as_str).collect();
@@ -438,7 +424,7 @@ fn rules(name: &str) -> String {
         "ensemble" => format!(
             "the four base personas vote on its own book; buys the coin with ≥ 2 buy votes (most votes, then 24h volume), all cash; sells on ≥ 2 sell votes or when `{V13_EXIT_PLAN}` fires"
         ),
-        "biz_algo" => "Phase 51, no LLM: the rule-based decider scores each liquid-top coin as w_talk·talk + w_stance·stance + w_momentum·momentum + w_value·value (talk = the /biz/ 6h mention rate over its 24h rate − 1; stance = (bullish − bearish) / tagged of the 6h AI tags with enough posters; momentum = 1h return / 5%, capped; value = the long-term value model's verdict); a held coin scoring below the sell level is sold, and with nothing held the best coin is bought with all cash at or above the buy level; no exit plan".to_string(),
+        "biz_algo" => "the trader's algorithm, no LLM: scores each liquid-top coin as w_talk·talk + w_stance·stance + w_momentum·momentum (talk = the /biz/ 6h mention rate over its 24h rate − 1; stance = (bullish − bearish) / tagged of the 6h AI tags with enough posters; momentum = 1h return / 5%, capped); a held coin scoring below the sell level is sold, and with nothing held the best coin is bought with all cash at or above the buy level; no exit plan".to_string(),
         other => other.to_string(),
     }
 }
@@ -743,32 +729,11 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
         min_notional: MIN_NOTIONAL_USDT,
     };
     cfg.validate()?;
-    let mdp = match &args.mdp_model {
-        Some(path) => {
-            let model = Model::load(path)?;
-            let fitted_to = DateTime::parse_from_rfc3339(&model.data_to)
-                .map_err(|e| TraderError::config(format!("MDP model data_to {:?}: {e}", model.data_to)))?
-                .timestamp_millis();
-            if fitted_to >= start_ms {
-                return Err(TraderError::config(format!(
-                    "the MDP model saw data up to {}, inside the window that starts {} (look-ahead); refit with --end before the window",
-                    model.data_to,
-                    iso(start_ms)
-                )));
-            }
-            Some(Arc::new(model))
-        }
-        None => None,
-    };
     let biz = match &args.biz_feeds {
         Some(dir) => Some(Arc::new(BizHistory::load_dir(dir, args.biz_max_age_minutes)?)),
         None => None,
     };
-    let mut inputs = PersonaInputs {
-        mdp,
-        biz,
-        rule: None,
-    };
+    let mut inputs = PersonaInputs { biz, rule: None };
     let market = Market::load_dir(&args.cache_dir)?;
     check_coverage(&market, start_ms, end_ms)?;
     let (results, split) = if names.contains(&"biz_algo") {
@@ -896,7 +861,6 @@ mod tests {
             slippage_bps: 5.0,
             step_minutes: 20,
             output_dir: out.to_path_buf(),
-            mdp_model: None,
             biz_feeds: None,
             biz_max_age_minutes: 90,
             biz_weights: None,
@@ -948,12 +912,12 @@ mod tests {
         assert!(paths.contains(&out.path().join("algo_backtest_2026-07-23_biz_algo@newer_trace.csv")));
 
         // Fixed weights skip the tuning.
-        a.biz_weights = Some("1,1,1,0,0.5,0".into());
+        a.biz_weights = Some("1,1,1,0.5,0".into());
         let (_, paths) = run_backtest(&a).unwrap();
         let md = std::fs::read_to_string(&paths[0]).unwrap();
         assert!(md.contains("Given with `--biz-weights`"), "{md}");
         a.biz_weights = Some("1,1".into());
-        assert!(run_backtest(&a).unwrap_err().to_string().contains("need 6 numbers"));
+        assert!(run_backtest(&a).unwrap_err().to_string().contains("need 5 numbers"));
     }
 
     #[test]

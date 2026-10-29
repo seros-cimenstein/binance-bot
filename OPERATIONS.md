@@ -268,42 +268,6 @@ and sell fees at the trip's fee rate), so it cannot sell a fee-negative
   the audit's `exit-plan` sells, so `--summary` also reads
   `BOT_SPOT_AUDIT_PATH`). The dashboard's Exits tab shows the same split.
 
-### Long-term value voice (Phase 50)
-
-Phase 52 removes this; since the LLM trader is gone (2026-10-29) the prompt and tool parts below no longer run.
-
-Operator decisions 2026-10-21 (`docs/decisions.md`): a reward-and-discount ("Markov")
-voice with γ = 0.95 per 20-minute cycle, shown to the LLM as its strongest
-voice; information, never a gate. Switch: `BOT_SPOT_MDP_ENABLED` (default
-true); model file `BOT_SPOT_MDP_MODEL_PATH` (default
-`data/bot-spot-mdp.json`, `docker-data/bot-spot-mdp.json` on the Pi).
-
-- **Model.** `bb bot-spot-mdp-fit --cache-dir data/entry-study-cache --output
-  data/bot-spot-mdp.json` (offline, seconds). Every liquid coin at every
-  20-minute step of the cache is an entry followed for 24 h. State: gain since
-  entry (`<-3, -3..-1, -1..0, 0..1, 1..2, 2..4, >=4` %), time held (`<1, 1-3,
-  3-6, >=6` h), the coin's 1h move (`<-1, -1..0, 0..1, >=1` %), market breadth
-  (`<-15, -15..15, >=15`). Hold pays the next 20-minute return; sell pays
-  minus the exit cost (fee plus slippage, 0.125% by default). Value iteration
-  with `--gamma` (0.95). A full state seen fewer than 100 times, a coin without
-  a 1h move or a market without breadth falls back to gain and time held only.
-  `--test-days 20` (default) also fits on the earlier days and follows the
-  model on the last 20, written as `evaluation` in the file and printed.
-- **Each cycle.** The trader reads the file and values the open position
-  (trade memory: entry value, current value, entry time) and buying each
-  liquid-top coin now (value after the entry cost; cash is 0). The cycle
-  message shows `## Your long-term value`; the audit row carries `mdp`
-  (`status` `ready` with `held` and `buys`, or `unavailable` with the
-  reason, which also logs `WARN MDP voice unavailable this cycle`).
-- **Refit** with fresh candles: extend the cache with `bb entry-study`, rerun
-  the fit, copy the file to `~/binance-bot/docker-data/bot-spot-mdp.json`
-  (back up the old one). The trader reads it at the next cycle; no restart.
-- **What it says.** On the 2026-07-20 → 2026-10-18 cache almost every held
-  state values holding above selling: with γ < 1 a sale costs its exit fee now
-  while holding defers it, so the model only sells states whose expected next
-  steps lose clearly (e.g. a +4% spike within the first hour). Its main
-  effect is patience: it argues against selling on a red 15 minutes.
-
 ### /biz/ feed (Phase 51)
 
 biz-app (`~/projects/automation/imageboards/biz-app`, on the laptop) writes
@@ -329,7 +293,7 @@ Each cycle it reads the wallet and the /biz/ feed, then reads 1m prices for
 the coins it may buy (the feed's coins with an eligible USDT market,
 stablecoins left out) and for the coins it holds (operator decision
 2026-10-29: no market breadth read). It scores those coins with
-`talk,stance,momentum,value,buy_above,sell_below` (momentum is the coin's own
+`talk,stance,momentum,buy_above,sell_below` (momentum is the coin's own
 1h move; stances need `BOT_SPOT_ALGO_MIN_POSTERS`, 2), sells a held coin
 scoring below the sell level into USDT and, with nothing held, buys the best
 coin with all USDT at or above the buy level. Every order is quoted for the
@@ -444,21 +408,20 @@ Personas:
   less than 72h of history). A switch step only sells.
 - `ensemble` buys the coin with at least 2 of 4 base-persona buy votes. It
   sells on 2 sell votes or the `v13` exit plan.
-- `biz_algo` (Phase 51, not part of `all`, research only) is the rule-based
-  decider `crate::decider`, no LLM: each liquid-top coin scores
-  `w_talk·talk + w_stance·stance + w_momentum·momentum + w_value·value`
+- `biz_algo` (not part of `all`, research only) is the trader's algorithm
+  `crate::decider`, no LLM: each liquid-top coin scores
+  `w_talk·talk + w_stance·stance + w_momentum·momentum`
   (talk: /biz/ 6h mention rate over its 24h rate − 1, from 4 mentions in 24h,
   capped −1..3; stance: (bullish − bearish) / tagged of the 6h AI tags with
-  `--biz-min-posters` (2) posters; momentum: 1h return / 5%, capped; value:
-  the `--mdp-model` verdict, 0 without one). A held coin scoring below the
+  `--biz-min-posters` (2) posters; momentum: 1h return / 5%, capped). A held coin scoring below the
   sell level is sold; with nothing held the best coin at or above the buy
   level is bought with all cash; no exit plan. `--biz-feeds <dir>` is the
   hourly `biz-feed-v1` history from biz-app (a feed counts at a step from its
   `as_of` on, for `--biz-max-age-minutes`, 90); without it the /biz/ terms
   are 0. Selecting `biz_algo` splits the window: the weights are picked on
-  the older half from a grid (talk and stance −1/0/+1, momentum 0/1, value
-  0/1, buy at 0.5/1, sell below −0.5/0; 72 sets with feeds and no model) by
-  net %, or given with `--biz-weights talk,stance,momentum,value,buy,sell`
+  the older half from a grid (talk and stance −1/0/+1, momentum 0/1, buy at
+  0.5/1, sell below −0.5/0; 72 sets with feeds) by net %, or given with
+  `--biz-weights talk,stance,momentum,buy,sell`
   (e.g. from `bb biz-lead-study`); every persona then runs on both halves as
   `<persona>@older` and `<persona>@newer`, and the `@newer` row is the
   out-of-sample result. The report adds a `biz_algo` rule section with the

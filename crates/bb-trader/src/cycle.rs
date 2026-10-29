@@ -157,33 +157,17 @@ impl Runtime {
         )
     }
 
-    /// Catalog, balances, candidate routes, trade memory, the long-term value voice, the
-    /// /biz/ feed and the algorithm's market view.
+    /// Catalog, balances, candidate routes, trade memory, the /biz/ feed and the
+    /// algorithm's market view.
     pub async fn build_snapshot(&self) -> Result<Snapshot> {
         let balances = self.balances().await?;
         let view = self.load_view().await?;
         let candidates = build_route_candidates(&view, &self.config, &balances.free).await?;
         let trade_memory = self.trade_memory(&balances, &view, self.config.trade_memory_limit);
-        // The 20-coin breadth read only feeds the MDP voice (removed later in Phase 52); the
-        // algorithm reads its own prices.
-        let breadth = if self.config.mdp_enabled {
-            Some(crate::market_mood::fetch(Some(&self.client)).await)
-        } else {
-            None
-        };
         let portfolio_value_usdt = balances.free_value_usdt(&view);
-        // The point-in-time view the MDP voice reads.
-        let t = bb_core::time::now_ms();
-        let snap = breadth
-            .as_ref()
-            .and_then(|mood| crate::book::Snapshot::from_breadth(t, mood));
-        let mdp = self.config.mdp_enabled.then(|| {
-            self.mdp_voice(trade_memory.current_holding.as_ref(), snap.as_ref())
-        });
         let biz = self.biz_feed(&view);
         let step = Some(self.algo_step(&view, &balances, portfolio_value_usdt, &biz).await);
         let biz = Some(biz);
-        let market_mood = breadth.filter(|mood| mood.score.is_some());
         let context = DecisionContext {
             timestamp: crate::audit::utc_timestamp(),
             rules_version: self.config.rules_version.clone(),
@@ -194,8 +178,7 @@ impl Runtime {
             execution_invariants: execution_invariants(&self.config),
             route_scope: route_scope(&self.config),
             trade_memory,
-            market_mood,
-            mdp,
+            market_mood: None,
             biz,
         };
         Ok(Snapshot {
@@ -277,24 +260,6 @@ impl Runtime {
         crate::book::Snapshot::live(t, coins, candidates)
     }
 
-    /// The long-term value voice; `Unavailable`, with a warning, when the model file cannot
-    /// be read.
-    fn mdp_voice(
-        &self,
-        holding: Option<&crate::memory::CurrentHolding>,
-        snap: Option<&crate::book::Snapshot>,
-    ) -> crate::mdp::MdpNow {
-        match crate::mdp::Model::load(&self.config.mdp_model_path) {
-            Ok(model) => crate::mdp::MdpNow::Ready(Box::new(crate::mdp::voice(&model, holding, snap, chrono::Utc::now()))),
-            Err(error) => {
-                tracing::warn!(%error, "MDP voice unavailable this cycle");
-                crate::mdp::MdpNow::Unavailable {
-                    reason: error.to_string(),
-                }
-            }
-        }
-    }
-
     /// The /biz/ feed for this cycle, keeping the coins with an eligible market in the view.
     fn biz_feed(&self, view: &MarketView) -> crate::biz::BizNow {
         let listed: std::collections::BTreeSet<&str> = view
@@ -318,53 +283,26 @@ impl Runtime {
         snapshot: &Snapshot,
         rule: &crate::decider::Rule,
     ) -> std::result::Result<crate::decider::Verdict, String> {
-        use rust_decimal::prelude::ToPrimitive;
         let Some(step) = &snapshot.step else {
             return Err("no market view this cycle".into());
         };
         let view = &snapshot.view;
-        let mut book = crate::book::live_book(
+        let book = crate::book::live_book(
             step.t,
             &snapshot.balances,
             snapshot.context.portfolio_value_usdt,
             |asset, amount| view.usdt_value(asset, amount),
             |asset| view.markets.get(&format!("{asset}/USDT")).map(|m| m.min_notional),
         );
-        // The open position's entry (price, time) from trade memory, for the value term.
-        if let Some(open) = &snapshot.context.trade_memory.current_holding
-            && open.status == "open"
-            && let (Some(asset), Some(amount), Some(entry_value), Some(entered_at)) = (
-                open.asset.as_deref(),
-                open.amount,
-                open.entry_value_usdt,
-                open.entered_at.as_deref(),
-            )
-            && let Some(holding) = book.holdings.get_mut(asset)
-            && amount > Decimal::ZERO
-            && let (Some(price), Ok(at)) = (
-                (entry_value / amount).to_f64(),
-                chrono::DateTime::parse_from_rfc3339(entered_at),
-            )
-        {
-            holding.entry = Some((price, at.timestamp_millis()));
-        }
         let biz = match &snapshot.context.biz {
             Some(crate::biz::BizNow::Fresh(feed)) => Some(&feed.coins),
             _ => None,
-        };
-        let model = if self.config.mdp_enabled {
-            crate::mdp::Model::load(&self.config.mdp_model_path)
-                .map_err(|error| tracing::warn!(%error, "MDP model unavailable; the decider's value term is 0"))
-                .ok()
-        } else {
-            None
         };
         Ok(crate::decider::decide(
             &crate::decider::Inputs {
                 snap: step,
                 book: &book,
                 biz,
-                mdp: model.as_ref(),
             },
             rule,
         ))
@@ -558,10 +496,6 @@ impl Runtime {
         row.session_id = state.session_id.clone();
         row.error = report.error.clone().unwrap_or_default();
         row.run_config = self.run_config.get().cloned();
-        row.mdp = match &state.context.mdp {
-            Some(mdp) => Some(serde_json::to_value(mdp)?),
-            None => None,
-        };
         row.biz = match &state.context.biz {
             Some(biz) => Some(serde_json::to_value(biz)?),
             None => None,
@@ -1220,7 +1154,6 @@ mod tests {
             route_scope: route_scope(&config),
             trade_memory: runtime.trade_memory(&balances, &view, 8),
             market_mood: None,
-            mdp: None,
             biz: None,
         };
         runtime
@@ -1345,7 +1278,7 @@ mod tests {
     async fn the_algo_turn_sends_its_orders_through_execute_route_and_stops_at_a_failure() {
         use crate::decider::{Action, Verdict};
         let server = MockServer::start().await;
-        let algo = [("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0,0.5,0")];
+        let algo = [("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0.5,0")];
         let dir = tempfile::tempdir().unwrap();
         let config = trader_config(dir.path(), &algo);
         let rule = config.algo_rule;
@@ -1422,7 +1355,7 @@ mod tests {
                 .await;
         }
         let dir = tempfile::tempdir().unwrap();
-        let algo = [("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0,0.5,0")];
+        let algo = [("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0.5,0")];
         let config = trader_config(dir.path(), &algo);
         let view = view(&config);
         let runtime = runtime(&server, config, CycleMode::PlanOnly).await;

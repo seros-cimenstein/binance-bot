@@ -16,7 +16,7 @@ Polymarket, airdrop, funding arb, trend filter, mean reversion) were moved to
 |---|---|
 | `bb-core` | env config, `Decimal` money helpers, fsync'd JSONL audit, run locks, stop files |
 | `bb-binance` | native Binance Spot REST client: HMAC/Ed25519 signing, time sync, rate-limit tracking, exchange rules, spot market data and orders, wallet balance totals, klines history |
-| `bb-trader` | `bot-spot`: the algorithm trader (the operator's rule), exit plans, persona backtests, the Markov value model (the last three until Phase 52 removes them) |
+| `bb-trader` | `bot-spot`: the algorithm trader (the operator's rule), exit plans and persona backtests (both until Phase 52 removes them) |
 | `bb-pool` | library for the trader: market catalog, commission/fee service, multi-leg route engine, models (no commands, no order path) |
 | `bb-strategies` | bot research: `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
 | `bb-cli` | the `bb` binary |
@@ -46,7 +46,7 @@ Run `bb --help` or `bb <command> --help`.
 | Area | Commands |
 |---|---|
 | Bot trader | `bot-spot`, `bot-spot-exit-watch`, `bot-spot-exit-replay` |
-| Bot research | `bot-spot-persona-backtest`, `bot-spot-mdp-fit`, `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
+| Bot research | `bot-spot-persona-backtest`, `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
 
 ## Algorithm Spot trader (`bb bot-spot`)
 
@@ -56,10 +56,11 @@ prices for the feed's coins with an eligible USDT market and for the coins it
 holds, and runs the operator's rule (`crate::decider`, `BOT_SPOT_ALGO_WEIGHTS`,
 required):
 
-- **Score.** `w_talk·talk + w_stance·stance + w_momentum·momentum + w_value·value`
-  per coin: /biz/ talk surge, /biz/ AI stance (needs
-  `BOT_SPOT_ALGO_MIN_POSTERS`), the coin's own 1h move, and the long-term
-  value model (below, until Phase 52 removes it).
+- **Score.** `w_talk·talk + w_stance·stance + w_momentum·momentum` per coin:
+  /biz/ talk surge, /biz/ AI stance (needs `BOT_SPOT_ALGO_MIN_POSTERS`) and the
+  coin's own 1h move. `BOT_SPOT_ALGO_WEIGHTS` is
+  `talk,stance,momentum,buy_above,sell_below`; `BOT_SPOT_RULES_VERSION` names
+  the rule set.
 - **Orders.** A held coin scoring below the sell level is sold into USDT; with
   nothing held, the best coin at or above the buy level is bought with all
   USDT. Every order goes through `execute_route` and every hard-safety check
@@ -71,9 +72,8 @@ required):
   <history dir>` tunes the weights on the older half of the window and judges
   them on the newer (OPERATIONS.md, "Persona backtest"). The compose profile
   `algo-paper` runs the trader plan-only.
-- **Still in the code until Phase 52 removes it:** the Markov long-term value
-  model (`bb bot-spot-mdp-fit`, `BOT_SPOT_MDP_*`), exit plans
-  and the 20-minute cycle.
+- **Still in the code until Phase 52 removes it:** exit plans and the
+  20-minute cycle.
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
   - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked at cycle start, before every route, before every leg and before every order;

@@ -655,8 +655,8 @@ impl Votes {
 /// Per-step trace header of `biz_algo`.
 pub const BIZ_TRACE_HEADER: &str = "time,feed_as_of,best_coin,best_score,held_coin,held_score,action";
 
-/// `biz_algo` (Phase 51): the rule-based decider ([`crate::decider`]) on the /biz/ feed
-/// history, the market snapshot and, when given, the long-term value model.
+/// `biz_algo`: the trader's algorithm ([`crate::decider`]) on the /biz/ feed history and
+/// the market snapshot.
 ///
 /// - Each step reads the feed visible at the step time ([`BizHistory::at`]); without
 ///   history, or with none visible, the /biz/ terms are 0.
@@ -665,22 +665,16 @@ pub const BIZ_TRACE_HEADER: &str = "time,feed_as_of,best_coin,best_score,held_co
 pub struct BizAlgo {
     rule: crate::decider::Rule,
     biz: Option<Arc<BizHistory>>,
-    mdp: Option<Arc<crate::mdp::Model>>,
     steps: usize,
     steps_with_feed: usize,
     trace: Vec<String>,
 }
 
 impl BizAlgo {
-    pub fn new(
-        rule: crate::decider::Rule,
-        biz: Option<Arc<BizHistory>>,
-        mdp: Option<Arc<crate::mdp::Model>>,
-    ) -> Self {
+    pub fn new(rule: crate::decider::Rule, biz: Option<Arc<BizHistory>>) -> Self {
         Self {
             rule,
             biz,
-            mdp,
             steps: 0,
             steps_with_feed: 0,
             trace: Vec::new(),
@@ -710,7 +704,6 @@ impl Persona for BizAlgo {
                 snap,
                 book,
                 biz: feed.map(|f| &f.coins),
-                mdp: self.mdp.as_deref(),
             },
             &self.rule,
         );
@@ -754,10 +747,8 @@ impl Persona for BizAlgo {
             |_| format!("/biz/ feed visible at {} of {} steps", self.steps_with_feed, self.steps),
         );
         vec![format!(
-            "rule: {}; stances need {} posters; {feeds}; long-term value model: {}",
-            self.rule.weights,
-            self.rule.min_posters,
-            if self.mdp.is_some() { "on" } else { "off (value term 0)" }
+            "rule: {}; stances need {} posters; {feeds}",
+            self.rule.weights, self.rule.min_posters
         )]
     }
 

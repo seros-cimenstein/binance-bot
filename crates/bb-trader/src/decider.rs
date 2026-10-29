@@ -2,10 +2,10 @@
 //!
 //! One plain function, [`decide`], used by the `biz_algo` backtest persona and by every
 //! trader cycle (`Runtime::algo_verdict`). It reads the step's market
-//! [`Snapshot`], the account [`Book`], the /biz/ feed visible at that time and, when
-//! given, the long-term value model ([`crate::mdp`]), and scores each coin:
+//! [`Snapshot`], the account [`Book`] and the /biz/ feed visible at that time, and scores
+//! each coin:
 //!
-//! `score = w_talk·talk + w_stance·stance + w_momentum·momentum + w_value·value`
+//! `score = w_talk·talk + w_stance·stance + w_momentum·momentum`
 //!
 //! - `talk`: the coin's /biz/ mention rate over the last 6h against its 24h rate, minus 1
 //!   (0 = steady, +1 = twice the usual rate), capped to −1..3; 0 under
@@ -14,9 +14,6 @@
 //!   the 6h window has fewer than `min_posters` distinct posters, no tags, or no feed.
 //! - `momentum`: the coin's 1h return capped to ±[`MOMENTUM_CAP_PCT`] and divided by it,
 //!   −1..1.
-//! - `value`: percent. Buying: the model's long-term value of a new entry after its cost
-//!   (cash is 0). Holding: the value of holding minus the value of selling now. 0 without
-//!   a model or a seen state.
 //!
 //! Weights may be negative (a negative `w_talk` fades /biz/ hype). Rules: a held coin
 //! whose score falls below `sell_below` is sold; with nothing held after that, the
@@ -29,10 +26,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::biz::CoinWindows;
-use crate::mdp::{Model, State};
-use crate::book::{Book, Holding, Snapshot};
-
-const MINUTE_MS: i64 = 60_000;
+use crate::book::{Book, Snapshot};
 
 /// 24h mentions a coin needs before its talk surge counts.
 pub const SURGE_MIN_MENTIONS: u64 = 4;
@@ -45,7 +39,6 @@ pub struct Weights {
     pub talk: f64,
     pub stance: f64,
     pub momentum: f64,
-    pub value: f64,
     /// A candidate is bought when its score is at least this.
     pub buy_above: f64,
     /// A held coin is sold when its score is below this.
@@ -53,7 +46,7 @@ pub struct Weights {
 }
 
 impl Weights {
-    /// `talk,stance,momentum,value,buy_above,sell_below`, e.g. `1,0.5,0.5,1,0.5,0`.
+    /// `talk,stance,momentum,buy_above,sell_below`, e.g. `1,0.5,0.5,0.5,0`.
     pub fn parse(spec: &str) -> Result<Self, String> {
         let values: Vec<f64> = spec
             .split(',')
@@ -65,9 +58,9 @@ impl Weights {
                     .ok_or_else(|| format!("weights {spec:?}: {part:?} is not a number"))
             })
             .collect::<Result<_, _>>()?;
-        let [talk, stance, momentum, value, buy_above, sell_below] = values[..] else {
+        let [talk, stance, momentum, buy_above, sell_below] = values[..] else {
             return Err(format!(
-                "weights {spec:?}: need 6 numbers: talk,stance,momentum,value,buy_above,sell_below"
+                "weights {spec:?}: need 5 numbers: talk,stance,momentum,buy_above,sell_below"
             ));
         };
         if sell_below > buy_above {
@@ -79,7 +72,6 @@ impl Weights {
             talk,
             stance,
             momentum,
-            value,
             buy_above,
             sell_below,
         })
@@ -90,8 +82,8 @@ impl fmt::Display for Weights {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "talk {:+}, stance {:+}, momentum {:+}, value {:+}; buy at score ≥ {:+}, sell below {:+}",
-            self.talk, self.stance, self.momentum, self.value, self.buy_above, self.sell_below
+            "talk {:+}, stance {:+}, momentum {:+}; buy at score ≥ {:+}, sell below {:+}",
+            self.talk, self.stance, self.momentum, self.buy_above, self.sell_below
         )
     }
 }
@@ -109,22 +101,20 @@ pub struct Terms {
     pub talk: f64,
     pub stance: f64,
     pub momentum: f64,
-    pub value: f64,
 }
 
 impl Terms {
     pub fn score(&self, w: &Weights) -> f64 {
-        w.talk * self.talk + w.stance * self.stance + w.momentum * self.momentum + w.value * self.value
+        w.talk * self.talk + w.stance * self.stance + w.momentum * self.momentum
     }
 
     fn describe(&self, w: &Weights) -> String {
         format!(
-            "score {:+.3} (talk {:+.2}, stance {:+.2}, momentum {:+.2}, value {:+.3})",
+            "score {:+.3} (talk {:+.2}, stance {:+.2}, momentum {:+.2})",
             self.score(w),
             self.talk,
             self.stance,
-            self.momentum,
-            self.value
+            self.momentum
         )
     }
 }
@@ -136,7 +126,6 @@ pub struct Inputs<'a> {
     pub book: &'a Book,
     /// Coins of the /biz/ feed visible at `snap.t`; `None` without one.
     pub biz: Option<&'a BTreeMap<String, CoinWindows>>,
-    pub mdp: Option<&'a Model>,
 }
 
 /// One order the rule asks for, with the reason in words.
@@ -188,43 +177,13 @@ fn biz_terms(inputs: &Inputs<'_>, asset: &str, min_posters: u64) -> (f64, f64) {
         .map_or((0.0, 0.0), |w| (talk_surge(w), stance(w, min_posters)))
 }
 
-/// Terms of buying `asset` now.
-pub fn entry_terms(inputs: &Inputs<'_>, asset: &str, min_posters: u64) -> Terms {
+/// Terms of `asset` (the same whether it is bought or held).
+pub fn terms(inputs: &Inputs<'_>, asset: &str, min_posters: u64) -> Terms {
     let (talk, stance) = biz_terms(inputs, asset, min_posters);
-    let ret_1h = inputs.snap.coin(asset).and_then(|c| c.ret_1h);
     Terms {
         talk,
         stance,
         momentum: momentum(inputs.snap, asset),
-        value: inputs
-            .mdp
-            .and_then(|m| m.buy_value(ret_1h, inputs.snap.score))
-            .map_or(0.0, |(_, _, value)| value),
-    }
-}
-
-/// Terms of keeping the held `asset`.
-pub fn held_terms(inputs: &Inputs<'_>, asset: &str, holding: &Holding, min_posters: u64) -> Terms {
-    let (talk, stance) = biz_terms(inputs, asset, min_posters);
-    let value = match (inputs.mdp, holding.entry) {
-        (Some(model), Some((entry_price, entry_ms))) if holding.qty > 0.0 && entry_price > 0.0 => {
-            let state = State::new(
-                (holding.value / holding.qty / entry_price - 1.0) * 100.0,
-                (inputs.snap.t - entry_ms) / MINUTE_MS,
-                inputs.snap.coin(asset).and_then(|c| c.ret_1h),
-                inputs.snap.score,
-            );
-            model
-                .lookup(state)
-                .map_or(0.0, |(_, v)| v.q_hold_pct - v.q_sell_pct)
-        }
-        _ => 0.0,
-    };
-    Terms {
-        talk,
-        stance,
-        momentum: momentum(inputs.snap, asset),
-        value,
     }
 }
 
@@ -234,8 +193,8 @@ pub fn decide(inputs: &Inputs<'_>, rule: &Rule) -> Verdict {
     let mut actions = Vec::new();
     let mut held = Vec::new();
     let mut kept = 0usize;
-    for (asset, holding) in &inputs.book.holdings {
-        let terms = held_terms(inputs, asset, holding, rule.min_posters);
+    for asset in inputs.book.holdings.keys() {
+        let terms = terms(inputs, asset, rule.min_posters);
         let score = terms.score(w);
         held.push((asset.clone(), score));
         if score < w.sell_below {
@@ -253,7 +212,7 @@ pub fn decide(inputs: &Inputs<'_>, rule: &Rule) -> Verdict {
             if inputs.snap.coin(asset).is_none() {
                 continue;
             }
-            let terms = entry_terms(inputs, asset, rule.min_posters);
+            let terms = terms(inputs, asset, rule.min_posters);
             let score = terms.score(w);
             if best.as_ref().is_none_or(|(_, b, _)| score > *b) {
                 best = Some((asset.clone(), score, terms));
@@ -287,7 +246,6 @@ mod tests {
                 talk,
                 stance,
                 momentum,
-                value: 0.0,
                 buy_above,
                 sell_below,
             },
@@ -329,7 +287,7 @@ mod tests {
         let snap = snap(10.0, 1.0, &[("BTC", 0.0, 0.5, 1.0, 9e9), ("ETH", 0.0, 0.2, 1.0, 5e9), ("SOL", 0.0, 2.5, 1.0, 1e9)]);
         let biz = BTreeMap::from([("ETH".to_string(), windows(6, 12, 3, 3.0, 1.0))]);
         let book = flat_book();
-        let inputs = Inputs { snap: &snap, book: &book, biz: Some(&biz), mdp: None };
+        let inputs = Inputs { snap: &snap, book: &book, biz: Some(&biz) };
         // talk 1 + stance 0.5 + 0.04 momentum beats SOL's 0.5 momentum.
         let verdict = decide(&inputs, &rule(1.0, 1.0, 1.0, 1.0, 0.0));
         assert_eq!(verdict.best.as_ref().map(|(a, _)| a.as_str()), Some("ETH"));
@@ -348,7 +306,7 @@ mod tests {
     fn a_held_coin_is_sold_below_the_sell_level_and_otherwise_blocks_buys() {
         let snap = snap(10.0, 1.0, &[("BTC", 0.0, -2.5, 1.0, 9e9), ("SOL", 0.0, 4.0, 1.0, 1e9)]);
         let book = holding(&["BTC"]);
-        let inputs = Inputs { snap: &snap, book: &book, biz: None, mdp: None };
+        let inputs = Inputs { snap: &snap, book: &book, biz: None };
         // BTC scores −0.5: sold, and SOL (0.8) is bought in the same step.
         let verdict = decide(&inputs, &rule(0.0, 0.0, 1.0, 0.5, 0.0));
         assert_eq!(verdict.held, vec![("BTC".to_string(), -0.5)]);
@@ -362,11 +320,13 @@ mod tests {
     }
 
     #[test]
-    fn weights_parse_six_numbers_with_sell_not_above_buy() {
-        let w = Weights::parse("1, -0.5, 0.5, 1, 0.5, 0").unwrap();
-        assert_eq!((w.talk, w.stance, w.buy_above, w.sell_below), (1.0, -0.5, 0.5, 0.0));
+    fn weights_parse_five_numbers_with_sell_not_above_buy() {
+        let w = Weights::parse("1, -0.5, 0.5, 0.5, 0").unwrap();
+        assert_eq!((w.talk, w.stance, w.momentum, w.buy_above, w.sell_below), (1.0, -0.5, 0.5, 0.5, 0.0));
         assert!(Weights::parse("1,2,3").is_err());
-        assert!(Weights::parse("1,0,0,0,0,x").is_err());
-        assert!(Weights::parse("0,0,0,0,0.5,1").is_err());
+        // The six-number LLM-era format (with a value weight) is refused, not misread.
+        assert!(Weights::parse("1,0.5,0.5,0,0.5,0").is_err());
+        assert!(Weights::parse("1,0,0,0,x").is_err());
+        assert!(Weights::parse("0,0,0,0.5,1").is_err());
     }
 }

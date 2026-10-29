@@ -72,7 +72,7 @@ services:
   # Practice run of the algorithm (no LLM): plan-only,
   # so it records `planned` routes and places no order, next to the live trader. Its own audit,
   # state and lock; the emergency stop file is shared, so data/bot-spot.stop stops it
-  # too. Needs BOT_SPOT_ALGO_WEIGHTS (talk,stance,momentum,value,buy_above,sell_below) in the
+  # too. Needs BOT_SPOT_ALGO_WEIGHTS (talk,stance,momentum,buy_above,sell_below) in the
   # env file. Plan-only cycles do not move the wallet: it re-decides on the real balances.
   bot-spot-algo-paper:
     <<: *base

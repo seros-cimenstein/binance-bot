@@ -157,9 +157,6 @@ pub struct AuditRow {
     /// ([`TraderConfig::run_config`]), so each cycle says what setup produced it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_config: Option<Value>,
-    /// Cycle summaries (Phase 50): the long-term value voice ([`crate::mdp::MdpNow`]).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mdp: Option<Value>,
     /// Cycle summaries (Phase 51): the /biz/ feed the cycle read ([`crate::biz::BizNow`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub biz: Option<Value>,
@@ -197,7 +194,6 @@ impl AuditRow {
             session_id: String::new(),
             operator_review: None,
             run_config: None,
-            mdp: None,
             biz: None,
             algo: None,
         }

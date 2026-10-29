@@ -24,7 +24,7 @@ use super::data::{Bar, MINUTE_MS, Market, Series};
 use crate::error::{Result, TraderError};
 use crate::exit_plan::{ATR_PERIODS, ExitPlan, ExitWatch, PriceBar, average_true_range};
 use crate::book::{Book, CoinView, Holding, Snapshot};
-use crate::market_mood::{self, breadth_score_at};
+use crate::market_mood::breadth_score_at;
 
 /// The 20-coin liquid universe: the `bb entry-study` top 20 by quote volume on 2026-10-18
 /// (the Phase 47 basket). Fixed, so the backtest has survivorship bias.
@@ -128,52 +128,6 @@ impl Snapshot {
             coins,
             liquid_top,
         }
-    }
-
-    /// The live view (the MDP voice's) from what `market_mood::fetch` already read:
-    /// the 20-coin basket's 15m candles and their 24h tickers. No second fetch.
-    ///
-    /// - Coins: the basket; returns are the breadth's newest-bar returns (`15m`, `1h`,
-    ///   `4h`), the same numbers as the cycle's `## Market breadth` section.
-    /// - `liquid_top`: the [`CANDIDATE_LIMIT`] basket coins with the most 24h quote volume
-    ///   (the basket already leaves out stablecoins, fiat and tokenized stocks).
-    /// - `None` when the breadth read failed or has no coins.
-    pub fn from_breadth(t: i64, mood: &market_mood::MarketView) -> Option<Self> {
-        if mood.error.is_some() || mood.coins.is_empty() {
-            return None;
-        }
-        let ret = |c: &market_mood::CoinMove, i: usize| c.returns_pct.get(i).copied().flatten();
-        let coins: BTreeMap<String, CoinView> = mood
-            .coins
-            .iter()
-            .map(|c| {
-                let view = CoinView {
-                    ret_15m: ret(c, 0),
-                    ret_1h: ret(c, 1),
-                    ret_4h: ret(c, 2),
-                    quote_volume_24h: c.quote_volume_24h.unwrap_or(0.0),
-                };
-                (c.asset.clone(), view)
-            })
-            .collect();
-        let mut liquid: Vec<(&str, f64)> = mood
-            .coins
-            .iter()
-            .filter_map(|c| Some((c.asset.as_str(), c.quote_volume_24h?)))
-            .collect();
-        liquid.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        let liquid_top = liquid
-            .into_iter()
-            .take(CANDIDATE_LIMIT)
-            .map(|(a, _)| a.to_string())
-            .collect();
-        Some(Self {
-            t,
-            score: mood.score,
-            horizons: mood.horizons.clone(),
-            coins,
-            liquid_top,
-        })
     }
 }
 

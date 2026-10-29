@@ -74,6 +74,9 @@ pub const REMOVED_VARS: &[&str] = &[
     // Phase 52: no GCP2 or schizo state.
     "BOT_SPOT_GCP2_ENABLED",
     "BOT_SPOT_GCP2_BASE_URL",
+    // Phase 52 (operator, A5): no Markov value model.
+    "BOT_SPOT_MDP_ENABLED",
+    "BOT_SPOT_MDP_MODEL_PATH",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -150,10 +153,6 @@ pub struct TraderConfig {
     pub fee_cache_seconds: f64,
     // memory (information only)
     pub trade_memory_limit: usize,
-    /// Phase 50: show the long-term value voice (`crate::mdp`) every cycle (v17).
-    pub mdp_enabled: bool,
-    /// `bb bot-spot-mdp-fit` model file the voice reads every cycle.
-    pub mdp_model_path: PathBuf,
     /// Phase 51: the /biz/ feed (`crate::biz`) recorded every cycle, information only.
     pub biz_feed_path: PathBuf,
     /// A feed whose `as_of` is older than this is recorded as unavailable.
@@ -208,7 +207,7 @@ impl TraderConfig {
             .map_err(TraderError::config)?;
         let spec = env.raw("BOT_SPOT_ALGO_WEIGHTS").ok_or_else(|| {
             TraderError::config(
-                "BOT_SPOT_ALGO_WEIGHTS is required (talk,stance,momentum,value,buy_above,sell_below): the operator's rule",
+                "BOT_SPOT_ALGO_WEIGHTS is required (talk,stance,momentum,buy_above,sell_below): the operator's rule",
             )
         })?;
         let algo_rule = crate::decider::Rule {
@@ -266,8 +265,6 @@ impl TraderConfig {
             ticker_stale_seconds: env.float("BOT_SPOT_TICKER_STALE_SECONDS", 300.0)?,
             fee_cache_seconds: env.float("BOT_SPOT_FEE_CACHE_SECONDS", 60.0)?,
             trade_memory_limit: env.integer("BOT_SPOT_TRADE_MEMORY_LIMIT", 8)?,
-            mdp_enabled: env.boolean("BOT_SPOT_MDP_ENABLED", true)?,
-            mdp_model_path: env.path("BOT_SPOT_MDP_MODEL_PATH", crate::mdp::DEFAULT_MODEL_PATH),
             biz_feed_path: env.path("BOT_SPOT_BIZ_FEED_PATH", crate::biz::DEFAULT_FEED_PATH),
             biz_max_age_minutes: env.integer(
                 "BOT_SPOT_BIZ_MAX_AGE_MINUTES",
@@ -381,10 +378,6 @@ impl TraderConfig {
                 "leg_rounding_reserve_bps": decimal(self.leg_rounding_reserve_bps),
             },
             "trade_memory_limit": self.trade_memory_limit,
-            "mdp": {
-                "enabled": self.mdp_enabled,
-                "model_path": self.mdp_model_path,
-            },
             "biz": {
                 "feed_path": self.biz_feed_path,
                 "max_age_minutes": self.biz_max_age_minutes,
@@ -566,7 +559,7 @@ pub(crate) mod tests {
             ("BINANCE_API_KEY".to_owned(), "key".to_owned()),
             ("BINANCE_API_SECRET".to_owned(), "secret".to_owned()),
             // Tests run on a fixed rule; production requires the operator's.
-            ("BOT_SPOT_ALGO_WEIGHTS".to_owned(), "1,0.5,0.5,0,0.5,0".to_owned()),
+            ("BOT_SPOT_ALGO_WEIGHTS".to_owned(), "1,0.5,0.5,0.5,0".to_owned()),
             ("BOT_SPOT_RULES_VERSION".to_owned(), "test-rules".to_owned()),
         ]);
         for (name, value) in pairs {
@@ -721,12 +714,18 @@ pub(crate) mod tests {
             .to_string();
         assert!(err.contains("BOT_SPOT_RULES_VERSION is required"), "{err}");
         let config = TraderConfig::from_lookup(lookup(&[
-            ("BOT_SPOT_ALGO_WEIGHTS", "1,0.25,0.5,0,0.5,0"),
+            ("BOT_SPOT_ALGO_WEIGHTS", "1,0.25,0.5,0.5,0"),
             ("BOT_SPOT_ALGO_MIN_POSTERS", "3"),
         ]))
         .unwrap();
         assert_eq!((config.algo_rule.min_posters, config.algo_rule.weights.stance), (3, 0.25));
         assert_eq!(config.run_config(None)["rule"]["min_posters"], 3);
         assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_ALGO_WEIGHTS", "1,2")])).is_err());
+        // An env file still carrying the six-number LLM-era rule (with a value weight)
+        // refuses to start instead of shifting the levels into the wrong slots.
+        let err = TraderConfig::from_lookup(lookup(&[("BOT_SPOT_ALGO_WEIGHTS", "1,0.5,0.5,0,0.5,0")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("need 5 numbers"), "{err}");
     }
 }

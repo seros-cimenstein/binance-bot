@@ -165,8 +165,6 @@ pub struct DecisionContext {
     pub trade_memory: TradeMemory,
     /// 20-coin liquid USDT crypto market breadth (`None` when disabled or unavailable).
     pub market_mood: Option<crate::market_mood::MarketView>,
-    /// Phase 50 long-term value voice (`None` unless `BOT_SPOT_MDP_ENABLED`).
-    pub mdp: Option<crate::mdp::MdpNow>,
     /// The /biz/ feed (`None` in tests; the cycle always reads it); the rule scores on it.
     pub biz: Option<crate::biz::BizNow>,
 }
@@ -185,7 +183,6 @@ impl DecisionContext {
             "route_scope": self.route_scope,
             "trade_memory": self.trade_memory,
             "market_mood": self.market_mood,
-            "mdp": self.mdp,
             "biz": self.biz,
         })
     }
