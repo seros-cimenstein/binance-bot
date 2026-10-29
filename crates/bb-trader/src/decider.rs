@@ -1,7 +1,7 @@
-//! Phase 51 rule-based decider: buy, sell or hold from fixed rules, no LLM.
+//! The trader's algorithm: buy, sell or hold from the operator's fixed rule, no LLM.
 //!
-//! One plain function, [`decide`], used by the `biz_algo` backtest persona and by the
-//! trader's cycle with `BOT_SPOT_DECIDER=algo` (`Runtime::algo_verdict`). It reads the step's market
+//! One plain function, [`decide`], used by the `biz_algo` backtest persona and by every
+//! trader cycle (`Runtime::algo_verdict`). It reads the step's market
 //! [`Snapshot`], the account [`Book`], the /biz/ feed visible at that time and, when
 //! given, the long-term value model ([`crate::mdp`]), and scores each coin:
 //!

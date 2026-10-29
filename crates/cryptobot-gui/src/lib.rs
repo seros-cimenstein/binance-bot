@@ -347,9 +347,7 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
                 "error": row.get("error"),
                 "decision": row.get("decision"),
                 "agent": row.get("agent"),
-                // Phase 51: `llm` or `algo` (absent before, which was the LLM), and the
-                // algo rule's verdict.
-                "decider": row.get("decider").and_then(Value::as_str).unwrap_or("llm"),
+                // The rule's verdict (absent on LLM-era rows).
                 "algo": row.get("algo"),
             })
         })

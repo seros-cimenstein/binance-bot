@@ -1191,7 +1191,7 @@ function cycleDetail(c) {
   const scored = (p) => p.asset + " " + (num(p.score) === null ? "—" : fixed(num(p.score), 3));
   return el("div", { class: "cycle-detail", onclick: (e) => e.stopPropagation() },
     el("div", { class: "facts" },
-      fact("Decider", c.decider === "algo" ? "Rule-based algorithm (no LLM)" : "LLM"),
+      fact("Decided by", algo ? "Algorithm" : "LLM (before Phase 52)"),
       fact("Brain", shortModel(a.model) + (a.thinking ? " · " + a.thinking : "")),
       fact("Turn", a.turn_status ? pretty(a.turn_status) : "—"),
       fact("Prompt", c.prompt_version || "—"),
@@ -1489,7 +1489,7 @@ function stanceCell(w) {
 }
 function bizPage() {
   const status = ui.data.status;
-  const head = pageHead("/biz/ feed", "What the trader read from /biz/ (biz-app) in its newest cycle. Only the rule-based decider (BOT_SPOT_DECIDER=algo) trades on it.", null);
+  const head = pageHead("/biz/ feed", "What the trader read from /biz/ (biz-app) in its newest cycle. The algorithm scores coins on it.", null);
   if (!status) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
   const b = status.biz;
   if (!b) return el("div", { class: "grid" }, head, card(null, empty("No /biz/ reading yet", "No cycle summary has a biz field; the trader records the feed from Phase 51 on.")));
@@ -1520,7 +1520,7 @@ function bizPage() {
   return el("div", { class: "grid" }, head, kpis, coinsCard,
     dropped.length ? card("Named without a Binance market", el("div", { class: "small muted" }, dropped.join(", "))) : null,
     el("details", { class: "footnote" }, el("summary", null, "What this shows"),
-      el("p", null, "biz-app counts every /biz/ post that names a coin (mentions, distinct posters), and its AI tags long posts bullish or bearish, weighted by post quality (1-3). scripts/biz_feed_to_pi.sh copies the feed to the Pi, and the trader records it in each cycle summary (audit field biz). A missing, foreign or stale feed is recorded as unavailable with the reason. The LLM is not shown this feed; with BOT_SPOT_DECIDER=algo the rule-based decider scores coins on its talk and stance.")));
+      el("p", null, "biz-app counts every /biz/ post that names a coin (mentions, distinct posters), and its AI tags long posts bullish or bearish, weighted by post quality (1-3). scripts/biz_feed_to_pi.sh copies the feed to the Pi, and the trader records it in each cycle summary (audit field biz). A missing, foreign or stale feed is recorded as unavailable with the reason; then the algorithm buys nothing. The algorithm scores the feed's coins on their talk and stance.")));
 }
 
 // ---------- data loading ----------

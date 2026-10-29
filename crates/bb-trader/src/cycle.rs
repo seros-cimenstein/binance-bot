@@ -13,7 +13,6 @@ use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::agent::{BRAIN_UNAVAILABLE, TraderAgent, cycle_prompt};
 use crate::audit::{
     AgentRecord, AttemptEntry, AuditLog, AuditRow, Decision, EndCycle, RowStatus, RowType,
     ToolCallEntry, UsageEntry, failed_route_halt,
@@ -25,16 +24,12 @@ use crate::evidence::{EvidenceService, route_evidence};
 use crate::executor::{Executor, LegResult};
 use crate::journal::{AgentState, ExecutionSummary, Journal, LastCycle};
 use crate::memory::{TradeMemory, TradeRecord};
-use crate::tools::TraderTools;
 use crate::universe::{
     Balances, MarketView, RouteCandidate, build_route_candidates, quote_candidate,
 };
 
 /// 1m bars read per coin for the algorithm's 15m/1h returns: 61 closed bars plus the open one.
 const ALGO_PRICE_MINUTES: u32 = 62;
-
-/// The exit-plan watcher saves its state every few seconds; older state means it is down.
-const EXIT_WATCHER_STALE_MS: i64 = 60_000;
 
 /// What one cycle turn produced.
 #[derive(Debug, Clone, Default)]
@@ -273,11 +268,7 @@ impl Runtime {
             self.mdp_voice(trade_memory.current_holding.as_ref(), snap.as_ref())
         });
         let biz = self.biz_feed(&view);
-        let step = if self.config.decider == crate::config::Decider::Algo {
-            Some(self.algo_step(&view, &balances, portfolio_value_usdt, &biz).await)
-        } else {
-            None
-        };
+        let step = Some(self.algo_step(&view, &balances, portfolio_value_usdt, &biz).await);
         let biz = Some(biz);
         let market_mood = breadth.filter(|mood| mood.score.is_some());
         let context = DecisionContext {
@@ -1270,43 +1261,22 @@ pub struct CycleOutcome {
     pub failed: bool,
 }
 
-/// The agentic trader: runtime + persistent omp session.
+/// The trader: the runtime plus the operator's rule (the algorithm decides; no LLM).
 pub struct Trader {
     runtime: Arc<Runtime>,
-    agent: Option<TraderAgent>,
 }
 
 impl Trader {
     pub fn new(runtime: Arc<Runtime>) -> Self {
-        Self {
-            runtime,
-            agent: None,
-        }
-    }
-
-    /// Use an already-attached agent (tests, custom launchers).
-    pub fn with_agent(runtime: Arc<Runtime>, agent: TraderAgent) -> Self {
-        Self {
-            runtime,
-            agent: Some(agent),
-        }
+        Self { runtime }
     }
 
     pub fn runtime(&self) -> &Arc<Runtime> {
         &self.runtime
     }
 
-    async fn agent(&mut self) -> Result<&mut TraderAgent> {
-        if self.agent.is_none() {
-            let tools = Arc::new(TraderTools::new(Arc::clone(&self.runtime)));
-            self.agent = Some(TraderAgent::start(&self.runtime.config, tools).await?);
-        }
-        self.agent
-            .as_mut()
-            .ok_or_else(|| TraderError::config("agent unavailable"))
-    }
-
-    /// One full cycle. Hard-safety refusals that precede any LLM call are errors.
+    /// One full cycle decided by the algorithm ([`crate::decider`]). Hard-safety refusals
+    /// before any order are errors.
     pub async fn run_cycle(&mut self, shutdown: &CancellationToken) -> Result<CycleOutcome> {
         let runtime = Arc::clone(&self.runtime);
         let config = Arc::clone(&runtime.config);
@@ -1321,7 +1291,6 @@ impl Trader {
         }
         let cycle_id = uuid::Uuid::now_v7().to_string();
         let mut state = AgentState::load(&config.state_path);
-        let today = bb_core::time::utc_date(bb_core::time::now());
 
         if runtime.mode == CycleMode::Live
             && let Some(halt) = failed_route_halt(&runtime.audit.rows())
@@ -1334,125 +1303,7 @@ impl Trader {
                 failed: false,
             });
         }
-        if config.decider == crate::config::Decider::Algo {
-            return self.run_algo_cycle(&cycle_id, state, shutdown).await;
-        }
-        let spent = state.cost_on(&today);
-        if config.max_daily_llm_cost_usd > Decimal::ZERO && spent >= config.max_daily_llm_cost_usd {
-            let reason = format!(
-                "daily LLM cost cap reached ({spent} / {} USD); the model not asked until the next UTC day",
-                config.max_daily_llm_cost_usd
-            );
-            let summary = runtime
-                .record_skipped(&cycle_id, RowStatus::Held, &reason, "")
-                .await?;
-            return Ok(CycleOutcome {
-                summary,
-                failed: false,
-            });
-        }
-
-        let failure_status = match runtime.mode {
-            CycleMode::PlanOnly => RowStatus::Blocked,
-            CycleMode::Live => RowStatus::Failed,
-        };
-        let session_id = match self.agent().await {
-            Ok(agent) => agent.session_id.clone(),
-            Err(error) => {
-                let message = format!("omp agent start failed: {error}");
-                runtime
-                    .record_skipped(&cycle_id, failure_status, &message, &message)
-                    .await?;
-                return Err(error);
-            }
-        };
-        let snapshot = match runtime.build_snapshot().await {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                let message = error.to_string();
-                runtime
-                    .record_skipped(&cycle_id, failure_status, &message, &message)
-                    .await?;
-                return Err(error);
-            }
-        };
-        let context = runtime.begin_cycle(&cycle_id, &session_id, snapshot).await;
-        let journal = runtime
-            .journal
-            .read(config.journal_prompt_entries)
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "journal unreadable");
-                Vec::new()
-            });
-        let mut prompt = cycle_prompt(
-            &config,
-            runtime.mode,
-            state.cycle_count + 1,
-            &cycle_id,
-            &context,
-            state.last_cycle.as_ref(),
-            &journal,
-        );
-        prompt.push_str(&crate::exit_book::prompt_section(
-            &config.exit_paths,
-            bb_core::time::now_ms(),
-            EXIT_WATCHER_STALE_MS,
-            config.exit.live,
-            context.trade_record.as_ref().map(|record| &record.by_plan),
-        ));
-        let agent = self.agent().await?;
-        agent.prepare_cycle().await;
-        let report = agent.run_turn(&prompt, shutdown).await;
-        for notice in agent.take_notices() {
-            tracing::warn!(%notice, "trader model notice");
-        }
-        if shutdown.is_cancelled() {
-            runtime.begin_shutdown();
-        }
-        let (summary, executions) = runtime.finish_cycle(&report).await?;
-
-        state.cycle_count += 1;
-        state.add_cost(&today, report.usage.cost_usd);
-        state.session_id = Some(session_id);
-        state.last_cycle = Some(LastCycle {
-            cycle_id: cycle_id.clone(),
-            finished_at: summary.timestamp.clone(),
-            status: summary.status.as_str().into(),
-            turn_status: report.status.clone(),
-            end_cycle: summary.agent.as_ref().and_then(|a| a.end_cycle.clone()),
-            executions,
-            error: summary.error.clone(),
-        });
-        let brain_down =
-            state.record_brain(report.all_models_failed, config.brain_down_alert_cycles);
-        if let Err(error) = state.save(&config.state_path) {
-            tracing::warn!(%error, "agent state not saved");
-        }
-        if brain_down {
-            tracing::error!(
-                cycles = state.brain_down_cycles,
-                error = %summary.error,
-                "{BRAIN_UNAVAILABLE}; no orders are being placed"
-            );
-        }
-        let failed = summary.status == RowStatus::Failed && runtime.mode == CycleMode::Live;
-        Ok(CycleOutcome { summary, failed })
-    }
-
-    /// One cycle decided by the rule-based decider (`BOT_SPOT_DECIDER=algo`): no omp session
-    /// is started and no LLM cost accrues. The snapshot, the hard safety of `execute_route`,
-    /// the route rows and the cycle summary are the LLM cycle's.
-    async fn run_algo_cycle(
-        &self,
-        cycle_id: &str,
-        mut state: AgentState,
-        shutdown: &CancellationToken,
-    ) -> Result<CycleOutcome> {
-        let runtime = Arc::clone(&self.runtime);
-        let config = Arc::clone(&runtime.config);
-        let rule = config
-            .algo_rule
-            .ok_or_else(|| TraderError::config("BOT_SPOT_DECIDER=algo without BOT_SPOT_ALGO_WEIGHTS"))?;
+        let rule = config.algo_rule;
         let snapshot = match runtime.build_snapshot().await {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -1462,13 +1313,13 @@ impl Trader {
                 };
                 let message = error.to_string();
                 runtime
-                    .record_skipped(cycle_id, status, &message, &message)
+                    .record_skipped(&cycle_id, status, &message, &message)
                     .await?;
                 return Err(error);
             }
         };
         let verdict = runtime.algo_verdict(&snapshot, &rule);
-        runtime.begin_cycle(cycle_id, ALGO_SESSION_ID, snapshot).await;
+        runtime.begin_cycle(&cycle_id, ALGO_SESSION_ID, snapshot).await;
         let report = runtime.run_algo_turn(verdict, &rule, shutdown).await;
         if shutdown.is_cancelled() {
             runtime.begin_shutdown();
@@ -1476,7 +1327,7 @@ impl Trader {
         let (summary, executions) = runtime.finish_cycle(&report).await?;
         state.cycle_count += 1;
         state.last_cycle = Some(LastCycle {
-            cycle_id: cycle_id.to_owned(),
+            cycle_id: cycle_id.clone(),
             finished_at: summary.timestamp.clone(),
             status: summary.status.as_str().into(),
             turn_status: report.status.clone(),
@@ -1490,26 +1341,17 @@ impl Trader {
         let failed = summary.status == RowStatus::Failed && runtime.mode == CycleMode::Live;
         Ok(CycleOutcome { summary, failed })
     }
-
-    /// Close the omp session cleanly.
-    pub async fn close(self) {
-        if let Some(agent) = self.agent {
-            agent.shutdown().await;
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use bb_omp::HostToolHandler;
     use rust_decimal_macros::dec;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::tools::TraderTools;
     use crate::universe::tests::{config, view};
 
     fn trader_config(dir: &Path, extra: &[(&str, &str)]) -> TraderConfig {
@@ -1701,13 +1543,10 @@ mod tests {
     async fn the_algo_turn_sends_its_orders_through_execute_route_and_stops_at_a_failure() {
         use crate::decider::{Action, Verdict};
         let server = MockServer::start().await;
-        let algo = [
-            ("BOT_SPOT_DECIDER", "algo"),
-            ("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0,0.5,0"),
-        ];
+        let algo = [("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0,0.5,0")];
         let dir = tempfile::tempdir().unwrap();
         let config = trader_config(dir.path(), &algo);
-        let rule = config.algo_rule.unwrap();
+        let rule = config.algo_rule;
         let first = runtime(&server, config, CycleMode::PlanOnly).await;
         let buy = Verdict {
             actions: vec![Action::Buy {
@@ -1727,7 +1566,6 @@ mod tests {
         let rows = audit_rows(dir.path());
         assert_eq!(rows[0]["decision"]["destination_asset"], "SOL");
         assert_eq!(rows[0]["decision"]["reason"], "SOL score +0.600 ≥ buy level +0.5");
-        assert_eq!(rows[0]["decider"], "algo");
         assert_eq!(rows[1]["agent"]["end_cycle"]["action"], "traded");
         assert_eq!(rows[1]["algo"]["best"]["asset"], "SOL");
         assert_eq!(rows[1]["agent"]["model"], ALGO_MODEL);
@@ -1783,7 +1621,7 @@ mod tests {
                 .await;
         }
         let dir = tempfile::tempdir().unwrap();
-        let algo = [("BOT_SPOT_DECIDER", "algo"), ("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0,0.5,0")];
+        let algo = [("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0,0.5,0")];
         let config = trader_config(dir.path(), &algo);
         let view = view(&config);
         let runtime = runtime(&server, config, CycleMode::PlanOnly).await;
@@ -1866,195 +1704,6 @@ mod tests {
         assert!(error.contains("no active cycle"), "{error}");
         assert!(server.received_requests().await.unwrap_or_default().is_empty());
         assert_eq!(audit_rows(dir.path()).len(), 1, "only the cycle summary");
-    }
-
-    #[tokio::test]
-    async fn tool_argument_validation_returns_errors() {
-        let server = MockServer::start().await;
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
-        let tools = TraderTools::new(Arc::clone(&runtime));
-        let cases = [
-            (
-                "execute_route",
-                json!({"reason": "x"}),
-                "missing field `route_id`",
-            ),
-            (
-                "execute_route",
-                json!({"route_id": "A->B:1", "reason": "x", "extra": 1}),
-                "unknown field",
-            ),
-            (
-                "execute_route",
-                json!({"route_id": " ", "reason": "x"}),
-                "route_id must not be blank",
-            ),
-            (
-                "execute_route",
-                json!({"route_id": "A->B:1", "reason": " "}),
-                "reason must state",
-            ),
-            (
-                "execute_route",
-                json!({"route_id": "A->B:1", "reason": "x", "spend_amount": -1}),
-                "positive number",
-            ),
-            (
-                "execute_route",
-                json!({"route_id": "A->B:1", "reason": "x", "spend_amount": "lots"}),
-                "positive number",
-            ),
-            ("list_routes", json!({"limit": 0}), "at least 1"),
-            ("list_routes", json!({"limit": 51}), "at most 50"),
-            (
-                "list_routes",
-                json!({"destination": "EUR"}),
-                "blocked as fiat",
-            ),
-            ("get_market_evidence", json!({"assets": []}), "1-12 assets"),
-            (
-                "get_market_evidence",
-                json!({"assets": ["B@D"]}),
-                "invalid asset",
-            ),
-            (
-                "get_klines",
-                json!({"symbol": "BTC/USDT", "interval": "7m"}),
-                "interval must be one of",
-            ),
-            (
-                "get_klines",
-                json!({"symbol": "BTC/USDT", "interval": "1h", "limit": 501}),
-                "between 1 and 500",
-            ),
-            ("get_trade_history", json!({"limit": 99}), "at most 50"),
-            ("journal_write", json!({"text": "  "}), "must not be blank"),
-            (
-                "end_cycle",
-                json!({"action": "yolo", "summary": "x"}),
-                "hold or traded",
-            ),
-            (
-                "end_cycle",
-                json!({"action": "hold", "summary": ""}),
-                "summary must not be blank",
-            ),
-            ("get_portfolio", json!({"x": 1}), "unknown field"),
-            ("transfer_funds", json!({}), "unknown tool"),
-        ];
-        for (name, args, expected) in cases {
-            let error = tools.dispatch(name, args.clone()).await.unwrap_err();
-            assert!(error.contains(expected), "{name} {args}: {error}");
-        }
-        let outcome = tools
-            .call("transfer_funds", Value::Null, CancellationToken::new())
-            .await;
-        assert!(outcome.is_error);
-        assert!(
-            server
-                .received_requests()
-                .await
-                .unwrap_or_default()
-                .is_empty()
-        );
-
-        // Journal round trip, trade history and end_cycle succeed offline.
-        tools
-            .dispatch("journal_write", json!({"text": "SOL thesis: breakout"}))
-            .await
-            .unwrap();
-        let journal = tools.dispatch("journal_read", json!({})).await.unwrap();
-        assert_eq!(journal["entries"][0]["text"], "SOL thesis: breakout");
-        assert_eq!(journal["entries"][0]["cycle_id"], "cycle-1");
-        let history = tools
-            .dispatch("get_trade_history", Value::Null)
-            .await
-            .unwrap();
-        assert_eq!(history["status"], "empty");
-
-        runtime.finish_cycle(&TurnReport::default()).await.unwrap();
-        let error = tools
-            .dispatch("end_cycle", json!({"action": "hold", "summary": "x"}))
-            .await
-            .unwrap_err();
-        assert!(error.contains("no active cycle"));
-    }
-
-    #[tokio::test]
-    async fn set_exit_plan_follows_the_open_position_and_clears() {
-        let server = MockServer::start().await;
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
-        let tools = TraderTools::new(Arc::clone(&runtime));
-        let config = &runtime.config;
-
-        let error = tools
-            .dispatch("set_exit_plan", json!({"asset": "ena", "trail_pct": 2}))
-            .await
-            .unwrap_err();
-        assert!(error.contains("audit unreadable"), "{error}");
-
-        let buy = json!({
-            "row_type": "route",
-            "status": "submitted",
-            "selected_route": {"legs": [{"fee_rate": 0.001}]},
-            "submitted_legs": [{
-                "symbol": "ENA/USDT",
-                "side": "buy",
-                "final_order": {"average": 0.1983, "filled": 75.11, "timestamp": 1_791_990_000_000_i64}
-            }]
-        });
-        // A position bought on a non-USDT market, in the older row schema (no row_type).
-        let bnb_buy = json!({
-            "status": "submitted",
-            "selected_route": {"legs": [{"fee_rate": 0.001}], "source_value_usdt": 12.5},
-            "submitted_legs": [{
-                "symbol": "SOL/BNB",
-                "side": "buy",
-                "final_order": {"average": 0.25, "filled": 0.05, "timestamp": 1_791_990_100_000_i64}
-            }]
-        });
-        std::fs::write(&config.audit_path, format!("{buy}\n{bnb_buy}\n")).unwrap();
-        let error = tools
-            .dispatch("set_exit_plan", json!({"asset": "DOGE", "trail_pct": 2}))
-            .await
-            .unwrap_err();
-        assert!(error.contains("no open DOGE position"), "{error}");
-        let sol = tools
-            .dispatch("set_exit_plan", json!({"asset": "sol", "trail_pct": 2}))
-            .await
-            .unwrap();
-        assert_eq!(sol["symbol"], "SOL/BNB");
-        let error = tools
-            .dispatch("set_exit_plan", json!({"asset": "ENA"}))
-            .await
-            .unwrap_err();
-        assert!(error.contains("at least one rule"), "{error}");
-
-        let set = tools
-            .dispatch(
-                "set_exit_plan",
-                json!({"asset": "ena", "atr_multiple": 3, "atr_timeframe": "15m", "deadline_minutes": 240}),
-            )
-            .await
-            .unwrap();
-        assert_eq!(set["plan"], "atr=3:15m,deadline=240");
-        assert_eq!(set["paper_only"], true);
-        let book = crate::exit_book::PlanBook::load(&config.exit_paths.plans).unwrap();
-        let entry = &book.plans["ENA"];
-        assert_eq!(
-            (entry.symbol.as_str(), entry.entry_ms, entry.entry_price),
-            ("ENA/USDT", 1_791_990_000_000, Decimal::new(1983, 4))
-        );
-
-        let cleared = tools
-            .dispatch("set_exit_plan", json!({"asset": "ENA", "clear": true}))
-            .await
-            .unwrap();
-        assert_eq!(cleared["cleared"], true);
-        let book = crate::exit_book::PlanBook::load(&config.exit_paths.plans).unwrap();
-        assert_eq!(book.plans.keys().collect::<Vec<_>>(), ["SOL"]);
     }
 
     #[tokio::test]
@@ -2247,53 +1896,6 @@ mod tests {
             .unwrap_err();
         assert!(error.message.contains("review"), "{error}");
         assert_eq!(order_calls(&server).await, calls);
-    }
-
-    #[tokio::test]
-    async fn cycle_summary_records_the_producing_model_and_failed_attempts() {
-        let server = MockServer::start().await;
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
-        let attempt = |model: &str, status: &str| crate::audit::AttemptEntry {
-            model: model.into(),
-            status: status.into(),
-            error: "429 usage limit reached".into(),
-        };
-        let report = TurnReport {
-            status: "error".into(),
-            error: Some(format!(
-                "{BRAIN_UNAVAILABLE} (no orders placed): anthropic/claude-haiku-5-5 error: 429; openai-codex/gpt-6.1-sol timeout: The bot timed out after 300s"
-            )),
-            model: "openai-codex/gpt-6.1-sol".into(),
-            thinking: "low".into(),
-            attempts: vec![attempt("anthropic/claude-haiku-5-5", "error")],
-            fallback_active: true,
-            all_models_failed: Some(true),
-            ..TurnReport::default()
-        };
-        let (summary, _) = runtime.finish_cycle(&report).await.unwrap();
-        assert_eq!(summary.status, RowStatus::Held);
-        runtime
-            .record_skipped("cycle-2", RowStatus::Held, "halt", "")
-            .await
-            .unwrap();
-        let rows = audit_rows(dir.path());
-        let agent = &rows[0]["agent"];
-        assert_eq!(agent["model"], "openai-codex/gpt-6.1-sol");
-        assert_eq!(agent["thinking"], "low");
-        assert_eq!(agent["fallback_active"], true);
-        assert_eq!(agent["attempts"][0]["model"], "anthropic/claude-haiku-5-5");
-        assert_eq!(agent["attempts"][0]["status"], "error");
-        assert!(
-            rows[0]["decision"]["reason"]
-                .as_str()
-                .unwrap()
-                .starts_with(BRAIN_UNAVAILABLE)
-        );
-        // Rows without a failover keep the previous shape.
-        let skipped = rows[1]["agent"].as_object().unwrap();
-        assert_eq!(skipped["model"], "anthropic/claude-haiku-5-5");
-        assert!(!skipped.contains_key("attempts") && !skipped.contains_key("fallback_active"));
     }
 
     #[tokio::test]

@@ -1,8 +1,8 @@
-//! Agentic Binance Spot trader (replaces `src/claude_spot.py`).
+//! Binance Spot algorithm trader (Phase 52: no LLM).
 //!
-//! One long-lived omp RPC session per trader (persistent session dir, resumed after
-//! restarts) decides; host tools are its only hands. Trading guardrails are gone — costs,
-//! evidence and trade memory are information — while hard safety stays in
+//! The operator's rule ([`decider`]) decides each cycle on the /biz/ feed ([`biz`]) and
+//! the coins' own 1m prices ([`book`]); every order goes through the route path, and hard
+//! safety stays in
 //! [`executor`] (arming, stop file, run lock, permissions, order-test, filters, sizing,
 //! reconciliation, failed-route halt, scope, Spot MARKET only, ≤ 3 legs).
 //!
@@ -12,7 +12,6 @@
 //! - [`evidence`]: multi-horizon evidence and relative momentum.
 //! - [`memory`]: trade memory from the audit log.
 //! - [`context`]: decision context, `context_hash`, `route_id`.
-//! - [`tools`]: omp host tools. [`agent`]: omp session lifecycle and prompts.
 //! - [`executor`]: live route execution. [`audit`]: rows, halt, review marker.
 //! - [`journal`]: notebook + agent state.
 //! - [`exit_plan`]: the Phase 45 sell-plan menu. [`exit_replay`]: its historical replay.
@@ -26,15 +25,14 @@
 //! - [`mdp`]: the long-term value voice, a Markov decision process fitted on cached
 //!   candles (Phase 50).
 //! - [`biz`]: the /biz/ feed from biz-app, recorded per cycle, information only (Phase 51).
-//! - [`decider`]: the Phase 51 rule-based decider (no LLM); backtested as persona
-//!   `biz_algo`, and the cycle's decider with `BOT_SPOT_DECIDER=algo`.
+//! - [`decider`]: the operator's rule (no LLM); backtested as persona `biz_algo`.
+//! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
 //!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `bot-spot-mdp-fit`,
 //!   `bot-spot-persona-backtest`, `gcp2-history`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-pub mod agent;
 pub mod audit;
 pub mod biz;
 pub mod book;
@@ -60,7 +58,6 @@ pub mod memory;
 pub mod persona_backtest;
 pub mod schizo;
 pub mod scope;
-pub mod tools;
 pub mod trades;
 pub mod universe;
 

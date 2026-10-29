@@ -224,7 +224,6 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
             }
             Err(error) => {
                 if !args.daemon {
-                    trader.close().await;
                     return Err(error);
                 }
                 tracing::error!(%error, "Bot Spot cycle failed");
@@ -237,7 +236,6 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
         pause(next_cycle, exit_guard.as_mut(), &shutdown).await;
     }
     runtime.begin_shutdown();
-    trader.close().await;
     Ok(exit)
 }
 

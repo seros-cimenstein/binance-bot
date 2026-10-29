@@ -216,11 +216,8 @@ pub struct AuditRow {
     /// Cycle summaries (Phase 51): the /biz/ feed the cycle read ([`crate::biz::BizNow`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub biz: Option<Value>,
-    /// Every row (Phase 51): who decided, `llm` or `algo` (`BOT_SPOT_DECIDER`). Rows from
-    /// before Phase 51 lack it and were all `llm`.
-    pub decider: String,
-    /// Algo cycle summaries (Phase 51): the rule, the best candidate, the held coins'
-    /// scores and the orders it asked for.
+    /// Cycle summaries: the rule, the best candidate, the held coins' scores and the
+    /// orders it asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub algo: Option<Value>,
 }
@@ -257,7 +254,6 @@ impl AuditRow {
             schizo: None,
             mdp: None,
             biz: None,
-            decider: config.decider.as_str().into(),
             algo: None,
         }
     }

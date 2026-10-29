@@ -29,7 +29,7 @@ Commands below are written as `bb <command>`; substitute the binary or the
 Bot Spot (`bot-spot`) is the only trader in this repo, Spot only. It cannot
 write margin, futures, universal-transfer, withdrawal or prediction endpoints.
 Whether it trades is decided by the live arming variables and the stop file
-(see "Bot Agentic Spot Trader"); whether it runs now and which image is
+(see "Algorithm Spot Trader"); whether it runs now and which image is
 deployed is in `PROGRESS.md`.
 
 ## Safety Posture
@@ -69,7 +69,7 @@ systemctl --user enable --now binance-bot-spot.service
 mode, installs them atomically to `~/.local/share/binance-bot/bin/`, syncs
 `scripts/`, installs every unit from `deploy/user/` and reloads the user
 manager. It preserves `.env`, data, logs, and backups, and it starts no
-service. It warns when `omp` is not on `PATH` (needed by `bot-spot`). Restart
+service. It warns when `omp` is not on `PATH` (no longer needed; removed in Phase 52). Restart
 running services after a deploy to load the new binary.
 
 ### Docker
@@ -145,85 +145,29 @@ touch ~/.local/share/binance-bot/data/bot-spot.stop   # systemd host
 touch docker-data/bot-spot.stop                       # Docker host
 ```
 
-## Bot Agentic Spot Trader
+## Algorithm Spot Trader
 
-`bb bot-spot` lets the bot trade the Spot wallet through omp (the oh-my-pi
-coding agent, npm `@oh-my-pi/pi-coding-agent`) in RPC mode.
+`bb bot-spot` trades the Spot wallet with the operator's rule (operator
+decision 2026-10-29, Phase 52): no LLM, no omp session, no host tools. How it
+decides is in "The algorithm" below; every order goes through `execute_route`
+and the hard safety listed here.
 
-- **Persistent session.** One long-lived omp session per trader, stored in
-  `BOT_SPOT_SESSION_DIR` and resumed after restarts and crashes. omp
-  auto-compaction stays on and the bot also compacts at
-  `BOT_SPOT_COMPACT_AT_PERCENT` or `BOT_SPOT_COMPACT_AT_TOKENS` (deployed
-  150000), logging `compacted trader context tokens_before=… tokens_after=…
-  local_tokens_after=… method=… short_summary=…`. `tokens_after` and
-  `method` are what omp's `compact` reply carries (omp 18.8-18.12 send
-  neither, so `None`); `local_tokens_after` is omp's count of the local
-  transcript, which after a remote compaction (`short_summary="Remote
-  compaction"`) is only a small placeholder: the provider keeps the history
-  and the session file's `compaction` entry records the real `tokensAfter`.
-  The bot's theses survive compaction in the journal at
-  `BOT_SPOT_JOURNAL_PATH`.
-- **Host tools plus web search.** omp runs with all built-in tools disabled
-  except `web_search` (`BOT_SPOT_WEB_SEARCH`, default true; set false for
-  `--no-tools`). The bot acts through the bot's host tools `get_portfolio`,
-  `list_routes`, `get_market_evidence`, `get_klines`, `get_trade_history`, `execute_route`, `journal_read` / `journal_write`, and
-  `end_cycle`. `execute_route` is the only order path.
+The route quote reserves the account's undiscounted taker fee, the
+`BOT_SPOT_SLIPPAGE_BUFFER_BPS` buffer (25) and lot rounding; that is the basis
+for order sizing. Over 40 round trips to 2026-10-18 the real fees were about
+7.5 bps per side, and fills beat the quote by about 25 bps.
 
-The route table shows two costs per route. "Quoted friction" is what the
-order quote reserves: the account's undiscounted taker fee, the
-`BOT_SPOT_SLIPPAGE_BUFFER_BPS` buffer (25) and lot rounding. It stays the
-basis for order sizing. "Expected cost" is the account's effective taker fee
-from `account/commission` (BNB-discounted while the wallet holds BNB) plus
-half the spread, per side. Over 40 round trips to 2026-10-18 the real fees
-were about 7.5 bps per side, and fills beat the quote by about 25 bps.
+### No added trading limits
 
-Trade memory and the "Your record" section use the same fill-based ledger as
-the dashboard (`bb_trader::trades`): each outcome's P&L is net of the buy and
-sell fees. "Your record" summarizes the whole audit log every cycle: closed
-coin trades, wins, net P&L after fees, fees paid and mean hold, all time and
-for the last 7 days, plus entry timing: the mean price move in the 30
-minutes before the bot's buys and 20 and 90 minutes after them, from 1-minute
-candles against the entry fill. Each finished entry is measured once and kept
-in `bot-spot-entry-timing.json` next to the audit log. It is information,
-never a gate.
-
-### Trading guardrails removed
-
-By operator decision Bot Spot has no trading guardrails. Fees, spread,
-slippage, momentum, market evidence and trade memory are
-information the bot weighs; none of them blocks a trade. Removed: the
-edge/market-evidence minimum, the friction cap, speculative mode, the
-loss-streak limit, the trade cooldown, the daily trade cap, the proven-edge
-gate, the rules-engine decision mode, and the LLM `go_off` decision flag.
-Their variables (`BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS`,
+The trader has no limits beyond the rule the operator chose: no edge minimum,
+friction cap, loss-streak limit, cooldown, daily cap, stop-loss or take-profit.
+Old guardrail variables (`BOT_SPOT_ALLOW_NEGATIVE_FRICTION_BPS`,
 `BOT_SPOT_MARKET_EVIDENCE_MIN_EDGE_BPS`, `BOT_SPOT_SPECULATIVE_*`,
 `BOT_SPOT_MAX_RECENT_LOSS_STREAK`, `BOT_SPOT_MIN_TRADE_INTERVAL_SECONDS`,
 `BOT_SPOT_MAX_SUBMITTED_TRADES_PER_DAY`, `BOT_SPOT_PROVEN_EDGE`,
-`BOT_SPOT_REQUIRE_PROVEN_EDGE`, `BOT_SPOT_DECISION_MODE`, ...) are
-ignored; the trader logs one warning listing any that are still set.
-
-Cost control (not a trading gate): `BOT_SPOT_MAX_DAILY_LLM_COST_USD`
-(0 = unlimited). Model and thinking level: `BOT_SPOT_MODEL` (default
-`anthropic/claude-haiku-5-5`; use provider-qualified ids, a bare `haiku-5.5`
-can resolve to another provider), `BOT_SPOT_THINKING` (default `high`).
-
-Model failover: `BOT_SPOT_FALLBACK_MODELS` (comma list of
-`provider/model-id[:thinking]`, default empty = off; empty on the Pi since
-2026-10-19 by operator decision, so the trader runs on
-`openai-codex/gpt-6.1-sol` at `high` alone, with `retry.modelFallback: false`
-in `omp-agent/config.yml`; a new fallback needs an operator decision; use the
-exact id from
-`omp models <provider>` inside the container, the trader's switch does no fuzzy
-matching), `BOT_SPOT_PRIMARY_TIMEOUT_SECONDS` (150,
-primary per-attempt timeout while fallbacks exist),
-`BOT_SPOT_FALLBACK_COOLDOWN_SECONDS` (1800) and
-`BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3, 0 = never). A failed turn is retried
-on the next model only when the failed attempt made no `execute_route` call
-and recorded no `end_cycle`; a failed compaction moves to the next model and
-compacts there. Model switches and brain outages are logged (warning,
-error) after the cycle's audit row; they change nothing in the hard-safety list
-below. A turn that failed on every model holds with
-`brain unavailable on all models (no orders placed)` as its reason.
+`BOT_SPOT_REQUIRE_PROVEN_EDGE`, `BOT_SPOT_DECISION_MODE`, ...) and the Phase
+52 removals (`BOT_SPOT_DECIDER`, `TELEGRAM_*`, `SOCIAL_SIGNAL_ENABLED`, ...)
+are ignored; the trader logs one warning listing any that are still set.
 
 ### Hard safety (always on, fail closed)
 
@@ -233,7 +177,7 @@ below. A turn that failed on every model holds with
 - The emergency stop file `data/bot-spot.stop` (`BOT_SPOT_STOP_PATH`),
   checked at cycle start, before every route, before every leg and before
   every order. A one-shot run refuses to start under it; the `--daemon`
-  keeps running and idles (no cycle, no LLM call, one log line when the stop
+  keeps running and idles (no cycle, one log line when the stop
   starts and one when it ends), so a paused trader survives restarts and
   deploys. Cycles resume at the next interval after the file is deleted.
 - An exclusive run lock (`BOT_SPOT_LOCK_PATH`).
@@ -248,14 +192,15 @@ below. A turn that failed on every model holds with
 - Margin, futures, transfer, withdrawal, and prediction writes are unavailable.
 
 Each route or cycle is one fsync'd row in `BOT_SPOT_AUDIT_PATH` (default
-`data/bot-spot-decisions.jsonl`), with tool calls, tokens and cost. There
-are no Telegram or phone alerts (operator decision 2026-10-29).
+`data/bot-spot-decisions.jsonl`); cycle summaries carry the rule's verdict
+(`algo`). There are no Telegram or phone alerts (operator decision
+2026-10-29).
 
 ### Commands
 
 ```bash
-bb bot-spot --evidence-only                 # decision context, no LLM call, no orders
-bb bot-spot --plan-only                     # The bot decides; execute_route only records plans
+bb bot-spot --evidence-only                 # decision context, no orders
+bb bot-spot --plan-only                     # the algorithm decides; execute_route only records plans
 bb bot-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
 bb bot-spot --mark-failed-route-reviewed --review-reason "reconciled by hand"
 ```
@@ -266,8 +211,7 @@ Bot Spot is a long-running daemon, not a timer:
 
 - Docker: compose service `bot-spot` (profiles `live` and `all`), running
   `bb bot-spot --submit-live --daemon --interval-seconds 1200` (every 20
-  minutes since 2026-10-15: Sonnet 5.5 on the subscription cannot sustain
-  4-minute cycles).
+  minutes until Phase 52 makes the trader continuous).
 - systemd: `binance-bot-spot.service` (same command, `Restart=always`):
 
 ```bash
@@ -279,6 +223,8 @@ The service always passes `--submit-live`; whether it trades is decided by the
 live arming variables in `.env` and the stop file.
 
 ### Exit plans (Phase 45)
+
+Phase 52 removes this; since the LLM trader is gone (2026-10-29) the prompt and tool parts below no longer run.
 
 The bot may give an open position a sell plan with the `set_exit_plan` tool
 (fixed menu: follow the peak by percent or ATR, take part, stretch, slowdown,
@@ -323,6 +269,8 @@ and sell fees at the trip's fee rate), so it cannot sell a fee-negative
   `BOT_SPOT_AUDIT_PATH`). The dashboard's Exits tab shows the same split.
 
 ### Schizo trader (Phase 49)
+
+Phase 52 removes this; since the LLM trader is gone (2026-10-29) the prompt and tool parts below no longer run.
 
 Prompt `bot-spot-v17-schizo` (deployed 2026-10-21; v15 and v16 ran on
 2026-10-20; operator decisions in
@@ -420,6 +368,8 @@ docker logs bot-spot 2>&1 | grep -E 'keeping the cycle cadence|live exit plans e
 
 ### Long-term value voice (Phase 50)
 
+Phase 52 removes this; since the LLM trader is gone (2026-10-29) the prompt and tool parts below no longer run.
+
 Operator decisions 2026-10-21 (`docs/decisions.md`): a reward-and-discount ("Markov")
 voice with γ = 0.95 per 20-minute cycle, shown to the LLM as its strongest
 voice; information, never a gate. Switch: `BOT_SPOT_MDP_ENABLED` (default
@@ -466,21 +416,19 @@ bearish tags weighted by post score. `scripts/biz_feed_to_pi.sh` copies it to
 `prompt_version`, the coins with an eligible Binance market and the `dropped`
 names, or `unavailable` with the reason (missing or unreadable file, another
 schema, `as_of` older than `BOT_SPOT_BIZ_MAX_AGE_MINUTES` (45) or more than 5
-minutes ahead of the Pi's clock). The LLM prompt never shows it; only the
-rule-based decider (`BOT_SPOT_DECIDER=algo`, below) trades on it. The
-dashboard's /biz/ tab shows the newest recorded feed.
+minutes ahead of the Pi's clock). The algorithm (below) scores its coins on
+it. The dashboard's /biz/ tab shows the newest recorded feed.
 
-### Rule-based decider (Phase 51)
+### The algorithm
 
-`BOT_SPOT_DECIDER` picks who decides each cycle: `llm` (default) or `algo`,
-the rule-based decider `crate::decider` (operator decisions in `CODEX.md`,
-"Phase 51"). With `algo` the trader never starts omp. Each cycle it reads the
-wallet and the /biz/ feed, then reads 1m prices for the coins it may buy (the
-feed's coins with an eligible USDT market, stablecoins left out) and for the
-coins it holds (operator decision 2026-10-29: no market breadth read). It
-scores those coins with `BOT_SPOT_ALGO_WEIGHTS`
-(`talk,stance,momentum,value,buy_above,sell_below`; momentum is the coin's
-own 1h move; stances need `BOT_SPOT_ALGO_MIN_POSTERS`, 2), sells a held coin
+`crate::decider` decides every cycle with the operator's rule
+(`BOT_SPOT_ALGO_WEIGHTS`, required; the trader refuses to start without it).
+Each cycle it reads the wallet and the /biz/ feed, then reads 1m prices for
+the coins it may buy (the feed's coins with an eligible USDT market,
+stablecoins left out) and for the coins it holds (operator decision
+2026-10-29: no market breadth read). It scores those coins with
+`talk,stance,momentum,value,buy_above,sell_below` (momentum is the coin's own
+1h move; stances need `BOT_SPOT_ALGO_MIN_POSTERS`, 2), sells a held coin
 scoring below the sell level into USDT and, with nothing held, buys the best
 coin with all USDT at or above the buy level. Every order is quoted for the
 whole free balance and sent through `execute_route`, so the stop file,
@@ -489,55 +437,21 @@ the first failed order ends the cycle's orders. Without a fresh feed nothing
 is a buy candidate, so it can only hold or sell; a coin whose price read fails
 is left out of that cycle.
 
-- **Records.** Every audit row has `decider` (`llm` or `algo`); algo cycle
-  summaries add `algo` (rule, best candidate and score, held coins and
-  scores, orders), `agent.model` `rule-based decider`, cost 0, and
-  `session_id` `algo`. The Bot tab's cycle details show the decider and the
-  rule's scores.
+- **Records.** Cycle summaries carry `algo` (rule, best candidate and score,
+  held coins and scores, orders), `agent.model` `rule-based decider` and
+  `session_id` `algo`. The Bot tab's cycle details show the rule's scores.
 - **Practice run.** `docker compose --profile algo-paper up -d
-  bot-spot-algo-paper` runs it plan-only next to the live trader with its own
-  files (`bot-spot-algo-paper-{decisions.jsonl,journal.jsonl,state.json}`,
-  lock `bot-spot-algo-paper.lock`) and the shared stop file. Set
-  `BOT_SPOT_ALGO_WEIGHTS` in `.env.docker` first. Plan-only rows do not move
-  the wallet, so it re-decides on the real balances every cycle.
+  bot-spot-algo-paper` runs it plan-only with its own files
+  (`bot-spot-algo-paper-{decisions.jsonl,journal.jsonl,state.json}`, lock
+  `bot-spot-algo-paper.lock`) and the shared stop file. Plan-only rows do not
+  move the wallet, so it re-decides on the real balances every cycle.
 - **Going live** (after the practice run and the operator's go):
-  `docker tag binance-bot:latest binance-bot:pre-algo-<date>`, set
-  `BOT_SPOT_DECIDER=algo` in `~/binance-bot/.env.docker`, `docker compose up
-  -d bot-spot`, watch the first cycles. With `BOT_SPOT_EXIT_PLANS_LIVE=true`
-  the default exit plan still sells positions between cycles; set it to
-  `false` for the rule's own sells only. Back: `BOT_SPOT_DECIDER=llm` and
-  restart. `touch docker-data/bot-spot.stop` stops either decider.
-
-### omp authentication
-
-omp needs model credentials once per data directory: either set
-`ANTHROPIC_API_KEY` in `.env`, or log in once interactively with `omp`
-(`/login`, then exit). omp stores credentials, settings and sessions under
-`PI_CODING_AGENT_DIR`; the Docker image sets it to `/app/data/omp-agent`, on
-the persistent data volume, so the login survives container recreation.
-
-```bash
-docker compose run --rm -it bot-spot omp
-```
-
-The brain (`BOT_SPOT_MODEL`, plus `BOT_SPOT_FALLBACK_MODELS` when set) needs
-one login per provider in that same directory: `openai-codex` (device flow)
-today; `google-antigravity` was the fallback's login until 2026-10-19.
-`omp usage` inside the container shows each account's 5-hour and 7-day
-allowance.
-
-Google Antigravity redirects the browser to `127.0.0.1:51121` on the machine
-running omp, so on the Pi log in from a host-network container and tunnel that
-port from the laptop whose browser signs in:
-
-```bash
-# laptop terminal 1: forward the callback port to the Pi
-ssh -L 51121:127.0.0.1:51121 pi-wired
-# in that session, on the Pi:
-docker run --rm -it --network host -v ~/binance-bot/docker-data:/app/data \
-  binance-bot:latest omp login google-antigravity
-# open the printed URL in the laptop browser and sign in; omp prints success
-```
+  `docker tag binance-bot:latest binance-bot:pre-algo-<date>`, set the
+  operator's `BOT_SPOT_ALGO_WEIGHTS` in `~/binance-bot/.env.docker`, `docker
+  compose up -d bot-spot`, watch the first cycles. With
+  `BOT_SPOT_EXIT_PLANS_LIVE=true` the default exit plan still sells positions
+  between cycles; set it to `false` for the rule's own sells only. Back: retag
+  the rollback image and recreate. `touch docker-data/bot-spot.stop` stops it.
 
 ### Failed-route halt
 

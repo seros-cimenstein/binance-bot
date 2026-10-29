@@ -1,7 +1,7 @@
 # Binance Trading Bot
 
 The Bot Spot trader written in Rust: a native Binance Spot REST client,
-a bot-driven agentic Spot trader (`bb bot-spot`, LLM or rule-based decider),
+the Spot algorithm trader (`bb bot-spot`, the operator's rule, no LLM),
 and its research tools and backtests. It ships as
 one binary, `bb`, next to a read-only web dashboard, `cryptobot-gui`.
 
@@ -49,77 +49,33 @@ Run `bb --help` or `bb <command> --help`.
 | Bot trader | `bot-spot`, `bot-spot-exit-watch`, `bot-spot-exit-replay` |
 | Bot research | `bot-spot-persona-backtest`, `bot-spot-mdp-fit`, `gcp2-history`, `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
 
-## Bot agentic Spot trader (`bb bot-spot`)
+## Algorithm Spot trader (`bb bot-spot`)
 
-The bot trades the Spot wallet through omp (the oh-my-pi coding agent, npm
-`@oh-my-pi/pi-coding-agent`) in RPC mode:
+The trader is an algorithm (operator decision 2026-10-29, Phase 52): no LLM, no
+chat, no host tools. Each cycle it reads the wallet and the /biz/ feed, reads 1m
+prices for the feed's coins with an eligible USDT market and for the coins it
+holds, and runs the operator's rule (`crate::decider`, `BOT_SPOT_ALGO_WEIGHTS`,
+required):
 
-- **Persistent context.** One long-lived omp session per trader, stored in
-  `BOT_SPOT_SESSION_DIR`, resumed after restarts and crashes. omp
-  auto-compaction stays on, and the bot also compacts at
-  `BOT_SPOT_COMPACT_AT_PERCENT`. A durable journal
-  (`BOT_SPOT_JOURNAL_PATH`) holds the bot's theses across compactions.
-- **Tools, not text.** omp runs with every built-in tool disabled except
-  `web_search` (`BOT_SPOT_WEB_SEARCH=true`, the default), so the bot has live
-  web search plus the bot's host tools: `get_portfolio`, `list_routes`,
-  `get_market_evidence`, `get_klines`, `get_trade_history`,
-  `execute_route`, `journal_read` / `journal_write`, and `end_cycle`. No shell or
-  filesystem access. `execute_route` is the only order path. Web results are
-  treated as untrusted data in the system prompt.
-- **No trading guardrails.** Fees, spread, slippage, momentum, evidence and
-  trade memory are information for the bot to weigh. None of them blocks
-  a trade. The old edge, friction, speculative, loss-streak, cooldown,
-  daily-cap, proven-edge and rules-engine gates are gone. Their env vars are
-  ignored, with one warning listing them. There are no stop-loss or
-  take-profit levels either: theses record why, expected move and horizon,
-  and the prompt tells the bot not to set invalidation prices or exit triggers.
-- **Schizo trader (Phase 49, prompt `bot-spot-v17-schizo`, operator
-  decisions 2026-10-20).** The LLM stays the trader but is told it has four
-  personalities (`v13`, `contrarian`, `detached`, `high_variance`, the Phase
-  48 personas) and acts out the one in charge. Each cycle the trader reads
-  GCP2 (gcp2.net, Global Consciousness Project 2.0 network coherence, public
-  and read-only) and works out the schizo state that opens the cycle message
-  (`## Your schizo state`):
-  - **Mood ring, following GCP2:** when GCP2's colour zone changed (up or
-    down) since the previous cycle the mood switches to another personality
-    picked by the GCP2 dice (a hash of the GCP2 value, no seed); while the
-    zone stays the same, or a reading is missing, the mood holds. No timer.
-    The first deploy (`bot-spot-v15-schizo`) ran it inverted: it switched
-    while the zone stayed the same.
-  - **Voices:** the four personalities' rule votes on the live wallet, the
-    mood in charge counting double.
-  - **Bets:** one coin with all cash. Each mood has its own exit plan.
-
-  YOLO (all-in on the hottest coin in GCP2's two highest zones) was removed
-  on 2026-10-21 by operator decision. A failed GCP2 read (timeout, HTTP
-  error, HTTP 429 rate limit) means "GCP2 unavailable" for that cycle: the
-  mood holds. The state is recorded as `schizo` in each cycle audit row and
-  persisted in `bot-spot-schizo-state.json` next to `BOT_SPOT_STATE_PATH`.
-  `BOT_SPOT_GCP2_ENABLED` (default true) switches it; false gives the v14
-  prompts. GCP2 has no shown link to prices. See OPERATIONS.md, "Schizo
-  trader (Phase 49)".
-- **Long-term value voice (Phase 50, operator decision 2026-10-21).** A
-  Markov decision process fitted on cached 1m candles (`bb bot-spot-mdp-fit`,
-  model file `BOT_SPOT_MDP_MODEL_PATH`, default `data/bot-spot-mdp.json`)
-  values holding against selling the held coin, and buying each liquid coin
-  against staying in cash, as the discounted sum of 20-minute rewards after
-  costs (γ = 0.95 per cycle, about 20 cycles of horizon). States: gain since
-  entry, time held, the coin's 1h move, market breadth. The cycle message
-  shows it as `## Your long-term value` (audit field `mdp`); the system prompt
-  calls it the strongest voice and asks for a written reason to act against
-  it. Information, never a gate. `BOT_SPOT_MDP_ENABLED` (default true).
-  Offline, `bb bot-spot-persona-backtest --persona schizo_mdp --mdp-model
-  <file>` lets the model overrule the schizo votes; the model must be fitted
-  on data before the window (`bb bot-spot-mdp-fit --end <time>`).
-- **Rule-based decider (Phase 51).** `crate::decider` picks buy, sell or
-  hold from fixed rules (no LLM) over /biz/ talk and stance, 1h momentum and
-  the long-term value model; `bb bot-spot-persona-backtest --persona
-  biz_algo --biz-feeds <history dir>` tunes it on the older half of the
-  window and judges it on the newer (OPERATIONS.md, "Persona backtest").
-  `BOT_SPOT_DECIDER=algo` (with `BOT_SPOT_ALGO_WEIGHTS`) makes it the
-  cycle's decider instead of the LLM; its orders go through `execute_route`
-  and every hard-safety check. The default stays `llm`; the compose profile
-  `algo-paper` runs it plan-only first (OPERATIONS.md, "Rule-based decider").
+- **Score.** `w_talk·talk + w_stance·stance + w_momentum·momentum + w_value·value`
+  per coin: /biz/ talk surge, /biz/ AI stance (needs
+  `BOT_SPOT_ALGO_MIN_POSTERS`), the coin's own 1h move, and the long-term
+  value model (below, until Phase 52 removes it).
+- **Orders.** A held coin scoring below the sell level is sold into USDT; with
+  nothing held, the best coin at or above the buy level is bought with all
+  USDT. Every order goes through `execute_route` and every hard-safety check
+  below. Without a fresh feed it buys nothing.
+- **No added trading limits.** No stop-loss, take-profit, cooldown or caps
+  beyond the rule the operator chose. Old guardrail env vars are ignored with
+  one warning listing them.
+- **Backtest.** `bb bot-spot-persona-backtest --persona biz_algo --biz-feeds
+  <history dir>` tunes the weights on the older half of the window and judges
+  them on the newer (OPERATIONS.md, "Persona backtest"). The compose profile
+  `algo-paper` runs the trader plan-only.
+- **Still in the code until Phase 52 removes it:** the GCP2 schizo state
+  (recorded per cycle as `schizo` when `BOT_SPOT_GCP2_ENABLED`), the Markov
+  long-term value model (`bb bot-spot-mdp-fit`, `BOT_SPOT_MDP_*`), exit plans
+  and the 20-minute cycle.
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
   - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked at cycle start, before every route, before every leg and before every order;
@@ -138,7 +94,7 @@ The bot trades the Spot wallet through omp (the oh-my-pi coding agent, npm
 
 ```bash
 bb bot-spot --evidence-only                 # decision context, no LLM call, no orders
-bb bot-spot --plan-only                     # The bot decides; execute_route only records plans
+bb bot-spot --plan-only                     # the algorithm decides; execute_route only records plans
 bb bot-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
 bb bot-spot --mark-failed-route-reviewed    # clear the failed-route halt after review
 bb bot-spot-exit-replay --table             # replay the Phase 45 sell-plan menu on real round trips
@@ -166,17 +122,14 @@ the menu yet. Simulated sells pay the entry leg's fee rate plus
 `--slippage-bps` (5); `--interval 1s` gives a finer replay. A round trip whose
 klines are unavailable is listed under `skipped`.
 
-Exit plans: The bot may give an open position one of these plans with the
-`set_exit_plan` host tool (its own parameters; it never writes code; setting
-again replaces it, `clear` removes a plan the bot set). Positions opened from
-`BOT_SPOT_DEFAULT_EXIT_PLAN_FROM` run `BOT_SPOT_DEFAULT_EXIT_PLAN`
-unless the bot sets its own plan. With `BOT_SPOT_EXIT_PLANS_LIVE=true` the
+Exit plans (until Phase 52 removes them): positions opened from
+`BOT_SPOT_DEFAULT_EXIT_PLAN_FROM` run `BOT_SPOT_DEFAULT_EXIT_PLAN`; plans the
+LLM set earlier stay in the plan book. With `BOT_SPOT_EXIT_PLANS_LIVE=true` the
 `bot-spot --submit-live --daemon` process follows those positions' bids
 every `BOT_SPOT_EXIT_POLL_SECONDS` (5) between cycles and sells a position
 into USDT when its plan fires, with the same hard safety as the bot's routes
 (audit rows with `cycle_id` `exit-plan`). Otherwise `bb bot-spot-exit-watch`
-runs the plans on paper and only records would-be sells. Either way the cycle
-prompt shows the bot each plan. Files: `BOT_SPOT_EXIT_PLANS_PATH`,
+runs the plans on paper and only records would-be sells. Files: `BOT_SPOT_EXIT_PLANS_PATH`,
 `BOT_SPOT_EXIT_WATCH_STATE_PATH`, `BOT_SPOT_EXIT_WATCH_LOG_PATH`.
 
 `bb bot-spot-persona-backtest` (Phase 48) is research only and runs offline: it
@@ -189,30 +142,6 @@ touches the live trader. It runs deterministic rule personas over `--days`
 `bb gcp2-history` caches in `--gcp2-cache-dir` (default `data/gcp2-cache`). It
 writes `reports/schizoid_backtest_<end-date>.md`, `.csv`, `_trades.csv` and,
 for `schizo`, `_schizo_trace.csv`. See OPERATIONS.md, "Persona backtest".
-
-Cost control (not a trading gate): `BOT_SPOT_MAX_DAILY_LLM_COST_USD` (0 = unlimited).
-Choose the model and thinking level with `BOT_SPOT_MODEL` (default
-`anthropic/claude-haiku-5-5`; always use provider-qualified ids) and
-`BOT_SPOT_THINKING` (default `high`).
-
-Model failover (bot-owned, independent of omp's `retry.fallbackChains`):
-`BOT_SPOT_FALLBACK_MODELS` is a comma list of `provider/model-id[:thinking]`
-(default empty = no failover). While fallbacks exist the primary gets
-`BOT_SPOT_PRIMARY_TIMEOUT_SECONDS` (150) per attempt. A turn that times
-out, errors, crashes or hits a rate/usage limit is retried once per remaining
-model, but never when the failed attempt called `execute_route` (orders may
-exist) or already recorded `end_cycle`; a failed compaction also moves to the
-next model. After `BOT_SPOT_FALLBACK_COOLDOWN_SECONDS` (1800) the next
-cycle returns to the primary, compacting first if the context exceeds the
-primary's window threshold. Cycle rows record the model that produced the
-outcome, the failed `attempts` and `fallback_active`. Switches to a fallback
-and back are logged as warnings, and an error is logged when
-`BOT_SPOT_BRAIN_DOWN_ALERT_CYCLES` (3) consecutive cycles failed on every
-model (counter persisted in the agent state
-file).
-
-omp needs model credentials: either `ANTHROPIC_API_KEY`, or a one-time
-interactive `omp` login (stored under `PI_CODING_AGENT_DIR`).
 
 ## Dashboard (`cryptobot-gui`)
 

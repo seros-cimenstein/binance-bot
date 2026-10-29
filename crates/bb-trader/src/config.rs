@@ -70,6 +70,8 @@ pub const REMOVED_VARS: &[&str] = &[
     "TELEGRAM_COOLDOWN_PATH",
     // Phase 52: no social-signal (Telegram/X) evidence; /biz/ comes from the biz-app feed.
     "SOCIAL_SIGNAL_ENABLED",
+    // Phase 52: the algorithm always decides; no LLM decider.
+    "BOT_SPOT_DECIDER",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -100,36 +102,6 @@ impl FromStr for MarketPickMode {
             _ => Err(TraderError::config(
                 "BOT_SPOT_MARKET_PICK_MODE must be liquid_top_value or small_market_aggressive",
             )),
-        }
-    }
-}
-
-/// Who decides each cycle (`BOT_SPOT_DECIDER`, Phase 51).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Decider {
-    /// The omp LLM session with its host tools (the default).
-    Llm,
-    /// The rule-based decider ([`crate::decider`]); the LLM is never started.
-    Algo,
-}
-
-impl Decider {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Llm => "llm",
-            Self::Algo => "algo",
-        }
-    }
-}
-
-impl FromStr for Decider {
-    type Err = TraderError;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "llm" => Ok(Self::Llm),
-            "algo" => Ok(Self::Algo),
-            _ => Err(TraderError::config("BOT_SPOT_DECIDER must be llm or algo")),
         }
     }
 }
@@ -273,11 +245,9 @@ pub struct TraderConfig {
     pub biz_feed_path: PathBuf,
     /// A feed whose `as_of` is older than this is recorded as unavailable.
     pub biz_max_age_minutes: u64,
-    /// Phase 51: who decides each cycle.
-    pub decider: Decider,
-    /// The rule of [`Decider::Algo`] (`BOT_SPOT_ALGO_WEIGHTS`, `BOT_SPOT_ALGO_MIN_POSTERS`);
-    /// `None` with the LLM.
-    pub algo_rule: Option<crate::decider::Rule>,
+    /// The operator's rule (`BOT_SPOT_ALGO_WEIGHTS`, `BOT_SPOT_ALGO_MIN_POSTERS`); required:
+    /// the trader never runs on rules the code picked.
+    pub algo_rule: crate::decider::Rule,
     // operator scope
     pub scope: ScopeConfig,
 }
@@ -351,20 +321,14 @@ impl TraderConfig {
         }
         let exit = crate::exit_book::ExitSettings::from_lookup(|name| env.raw(name))
             .map_err(TraderError::config)?;
-        let decider: Decider = env.string("BOT_SPOT_DECIDER", "llm").parse()?;
-        let algo_rule = match decider {
-            Decider::Llm => None,
-            Decider::Algo => {
-                let spec = env.raw("BOT_SPOT_ALGO_WEIGHTS").ok_or_else(|| {
-                    TraderError::config(
-                        "BOT_SPOT_DECIDER=algo needs BOT_SPOT_ALGO_WEIGHTS (talk,stance,momentum,value,buy_above,sell_below)",
-                    )
-                })?;
-                Some(crate::decider::Rule {
-                    weights: crate::decider::Weights::parse(&spec).map_err(TraderError::config)?,
-                    min_posters: env.integer("BOT_SPOT_ALGO_MIN_POSTERS", 2)?,
-                })
-            }
+        let spec = env.raw("BOT_SPOT_ALGO_WEIGHTS").ok_or_else(|| {
+            TraderError::config(
+                "BOT_SPOT_ALGO_WEIGHTS is required (talk,stance,momentum,value,buy_above,sell_below): the operator's rule",
+            )
+        })?;
+        let algo_rule = crate::decider::Rule {
+            weights: crate::decider::Weights::parse(&spec).map_err(TraderError::config)?,
+            min_posters: env.integer("BOT_SPOT_ALGO_MIN_POSTERS", 2)?,
         };
         let config = Self {
             api_key,
@@ -445,7 +409,6 @@ impl TraderConfig {
                 "BOT_SPOT_BIZ_MAX_AGE_MINUTES",
                 crate::biz::DEFAULT_MAX_AGE_MINUTES,
             )?,
-            decider,
             algo_rule,
             scope,
         };
@@ -636,10 +599,9 @@ impl TraderConfig {
                 "feed_path": self.biz_feed_path,
                 "max_age_minutes": self.biz_max_age_minutes,
             },
-            "decider": {
-                "name": self.decider.as_str(),
-                "rule": self.algo_rule.map(|rule| rule.weights.to_string()),
-                "min_posters": self.algo_rule.map(|rule| rule.min_posters),
+            "rule": {
+                "weights": self.algo_rule.weights.to_string(),
+                "min_posters": self.algo_rule.min_posters,
             },
             "scope": self.scope,
         })
@@ -822,6 +784,8 @@ pub(crate) mod tests {
         let mut map: HashMap<String, String> = HashMap::from([
             ("BINANCE_API_KEY".to_owned(), "key".to_owned()),
             ("BINANCE_API_SECRET".to_owned(), "secret".to_owned()),
+            // Tests run on a fixed rule; production requires the operator's.
+            ("BOT_SPOT_ALGO_WEIGHTS".to_owned(), "1,0.5,0.5,0,0.5,0".to_owned()),
         ]);
         for (name, value) in pairs {
             map.insert((*name).to_owned(), (*value).to_owned());
@@ -1054,21 +1018,23 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_algo_decider_needs_its_weights_and_the_llm_stays_the_default() {
-        let default = TraderConfig::from_lookup(lookup(&[])).unwrap();
-        assert_eq!((default.decider, default.algo_rule), (Decider::Llm, None));
-        let err = TraderConfig::from_lookup(lookup(&[("BOT_SPOT_DECIDER", "algo")]))
+    fn the_rule_is_required_and_parsed_from_the_operators_weights() {
+        let without = |name: &str| {
+            let base = lookup(&[]);
+            let skip = name.to_owned();
+            move |key: &str| if key == skip { None } else { base(key) }
+        };
+        let err = TraderConfig::from_lookup(without("BOT_SPOT_ALGO_WEIGHTS"))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("BOT_SPOT_ALGO_WEIGHTS"), "{err}");
-        let algo = TraderConfig::from_lookup(lookup(&[
-            ("BOT_SPOT_DECIDER", "ALGO"),
-            ("BOT_SPOT_ALGO_WEIGHTS", "1,0.5,0.5,0,0.5,0"),
+        assert!(err.contains("BOT_SPOT_ALGO_WEIGHTS is required"), "{err}");
+        let config = TraderConfig::from_lookup(lookup(&[
+            ("BOT_SPOT_ALGO_WEIGHTS", "1,0.25,0.5,0,0.5,0"),
+            ("BOT_SPOT_ALGO_MIN_POSTERS", "3"),
         ]))
         .unwrap();
-        let rule = algo.algo_rule.unwrap();
-        assert_eq!((algo.decider, rule.min_posters, rule.weights.stance), (Decider::Algo, 2, 0.5));
-        assert_eq!(algo.run_config(None)["decider"]["name"], "algo");
-        assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_DECIDER", "rules")])).is_err());
+        assert_eq!((config.algo_rule.min_posters, config.algo_rule.weights.stance), (3, 0.25));
+        assert_eq!(config.run_config(None)["rule"]["min_posters"], 3);
+        assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_ALGO_WEIGHTS", "1,2")])).is_err());
     }
 }

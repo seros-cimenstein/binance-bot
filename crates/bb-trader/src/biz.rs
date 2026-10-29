@@ -1,6 +1,5 @@
-//! Phase 51 /biz/ feed, read once per cycle and recorded in the cycle summary (audit field
-//! `biz`). The LLM prompt never shows it; only the rule-based decider
-//! (`BOT_SPOT_DECIDER=algo`, [`crate::decider`]) trades on it.
+//! The /biz/ feed, read once per cycle and recorded in the cycle summary (audit field
+//! `biz`); the algorithm ([`crate::decider`]) scores its coins on it.
 //!
 //! biz-app writes the feed (`biz-feed-v1`) on the operator's laptop and
 //! `scripts/biz_feed_to_pi.sh` copies it into the trader's data dir. Per coin and per window

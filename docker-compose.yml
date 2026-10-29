@@ -52,7 +52,8 @@ services:
 
   # ---------- LIVE ----------
 
-  # Bot agentic Spot trader: one persistent omp session, a cycle every 20 minutes.
+  # The algorithm trader (no LLM; needs BOT_SPOT_ALGO_WEIGHTS), a cycle every 20 minutes until
+  # Phase 52 makes it continuous.
   # Live submission still requires BOT_SPOT_ENABLED=true, BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot,
   # USE_TESTNET=false, DRY_RUN=false, CONFIRM_LIVE_TRADING=yes. Emergency stop: touch data/bot-spot.stop.
   bot-spot:
@@ -71,7 +72,7 @@ services:
     restart: "no"
     command: ["bb", "bot-spot-exit-watch", "--daemon", "--poll-seconds", "5"]
 
-  # Phase 51 practice run of the rule-based decider (BOT_SPOT_DECIDER=algo, no LLM): plan-only,
+  # Practice run of the algorithm (no LLM): plan-only,
   # so it records `planned` routes and places no order, next to the live trader. Its own audit,
   # journal, state and lock; the emergency stop file is shared, so data/bot-spot.stop stops it
   # too. Needs BOT_SPOT_ALGO_WEIGHTS (talk,stance,momentum,value,buy_above,sell_below) in the
@@ -84,7 +85,6 @@ services:
       TZ: UTC
       BINANCE_BOT_BACKUP_DIR: /app/backups
       BINANCE_BOT_PROJECT_DIR: /app
-      BOT_SPOT_DECIDER: algo
       BOT_SPOT_AUDIT_PATH: /app/data/bot-spot-algo-paper-decisions.jsonl
       BOT_SPOT_JOURNAL_PATH: /app/data/bot-spot-algo-paper-journal.jsonl
       BOT_SPOT_STATE_PATH: /app/data/bot-spot-algo-paper-state.json
