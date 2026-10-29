@@ -5,10 +5,9 @@
 # supercronic (docker/crontab). Bot Spot is the only trader.
 #
 # Layout:
-#   - The `bb` binary and `omp` (agent CLI) are baked into the image.
+#   - The `bb` binary and the dashboard are baked into the image.
 #   - /app/data     <- bind-mounted host state dir; relative paths in the env file
 #                      (e.g. BOT_SPOT_AUDIT_PATH=data/...) resolve against /app.
-#                      Also holds omp credentials + bot sessions (PI_CODING_AGENT_DIR).
 #   - /app/backups  <- bind-mounted backups dir
 #   - env_file      <- BOT_ENV_FILE, defaults to ./.env.docker
 #
@@ -19,8 +18,6 @@
 #   exit-paper -> bot-spot-exit-watch: the Phase 45 exit-plan paper watcher (no orders)
 #   algo-paper -> bot-spot-algo-paper: the Phase 51 rule-based decider, plan-only (no orders)
 #
-# Model (omp) auth, once per data dir: either set ANTHROPIC_API_KEY in the env file, or
-#   docker compose run --rm -it bot-spot omp      # then /login inside omp, then exit
 
 x-base: &base
   image: binance-bot:latest

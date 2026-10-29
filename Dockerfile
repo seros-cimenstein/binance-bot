@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
-# Binance Bot Spot image: one static-ish `bb` binary, the read-only `cryptobot-gui`
-# dashboard, plus the `omp` agent CLI (Bot Spot's LLM decisions run through omp RPC).
+# Binance Bot Spot image: one static-ish `bb` binary (the algorithm trader) and the
+# read-only `cryptobot-gui` dashboard, plus supercronic for the scheduler.
 
 # ---------- build ----------
 FROM rust:1-bookworm AS build
@@ -20,18 +20,14 @@ RUN cargo build --release --locked -p bb-cli -p cryptobot-gui \
 # ---------- runtime ----------
 FROM debian:bookworm-slim AS runtime
 
-ENV TZ=UTC \
-    BUN_INSTALL=/opt/bun \
-    PATH=/opt/bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV TZ=UTC
 
 ARG TARGETARCH
 ARG SUPERCRONIC_VERSION=v0.2.30
-ARG BUN_VERSION=bun-v1.3.14
-ARG OMP_VERSION=18.8.9
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-        ca-certificates curl unzip tini tzdata \
+        ca-certificates curl tini tzdata \
  && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -45,13 +41,6 @@ RUN set -eux; \
     chmod +x /usr/local/bin/supercronic; \
     /usr/local/bin/supercronic -test /dev/null
 
-# omp (oh-my-pi coding agent) on Bun, pinned. Used only in RPC mode with --no-tools.
-RUN set -eux; \
-    curl -fsSL https://bun.sh/install | bash -s "${BUN_VERSION}"; \
-    bun add -g "@oh-my-pi/pi-coding-agent@${OMP_VERSION}"; \
-    ln -s /opt/bun/bin/omp /usr/local/bin/omp; \
-    omp --version
-
 COPY --from=build /usr/local/bin/bb /usr/local/bin/cryptobot-gui /usr/local/bin/
 
 WORKDIR /app
@@ -63,10 +52,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash bot \
  && chown -R bot:bot /app
 USER bot
 
-# omp keeps credentials, settings and sessions under PI_CODING_AGENT_DIR: put it on the
-# persistent data volume so a one-time `omp` login (or ANTHROPIC_API_KEY) survives recreates.
-ENV BINANCE_BOT_BACKUP_DIR=/app/backups \
-    PI_CODING_AGENT_DIR=/app/data/omp-agent
+ENV BINANCE_BOT_BACKUP_DIR=/app/backups
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bb", "--help"]

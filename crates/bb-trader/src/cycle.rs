@@ -1,5 +1,5 @@
-//! Cycle runtime: the per-cycle market snapshot shared with the host tools, route
-//! planning/execution with audit rows, and the [`Trader`] loop that drives the omp agent.
+//! Cycle runtime: the per-cycle market snapshot, route
+//! planning/execution with audit rows, and the [`Trader`] cycle the algorithm decides.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1040,7 +1040,7 @@ impl Runtime {
 pub const EXIT_QUOTE: &str = "USDT";
 /// `cycle_id` of exit-plan route rows (they run between cycles).
 pub const EXIT_CYCLE_ID: &str = "exit-plan";
-/// `session_id` of algo cycles (no omp session exists).
+/// `session_id` of algorithm cycles.
 pub const ALGO_SESSION_ID: &str = "algo";
 
 /// Why an exit-plan sell did not complete.

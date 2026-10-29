@@ -1,11 +1,10 @@
 [Unit]
-Description=Binance Bot Agentic Spot Trader (omp session, cycle every 20 minutes)
+Description=Binance Bot Spot algorithm trader (cycle every 20 minutes until Phase 52 D7)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Long-running daemon: one persistent omp RPC session; a decision cycle every
-# --interval-seconds. SIGTERM finishes any in-flight route before exiting.
+# Long-running daemon: the operator's rule decides once every --interval-seconds. SIGTERM finishes any in-flight route before exiting.
 Type=simple
 WorkingDirectory=%h/.local/share/binance-bot
 EnvironmentFile=%h/.local/share/binance-bot/.env

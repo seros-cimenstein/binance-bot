@@ -28,10 +28,6 @@ if [ ! -f "$PROJECT_DIR/.env" ]; then
 fi
 chmod 0600 "$PROJECT_DIR/.env"
 
-if ! command -v omp >/dev/null 2>&1; then
-    echo "Warning: omp is not on PATH; bot-spot needs it (BOT_SPOT_COMMAND)." >&2
-fi
-
 install -m 0644 "$SOURCE_DIR"/deploy/user/*.service "$UNIT_DIR/"
 systemctl --user daemon-reload
 

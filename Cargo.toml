@@ -30,7 +30,6 @@ large_futures = "warn"
 # internal
 bb-core = { path = "crates/bb-core" }
 bb-binance = { path = "crates/bb-binance" }
-bb-omp = { path = "crates/bb-omp" }
 bb-pool = { path = "crates/bb-pool" }
 bb-trader = { path = "crates/bb-trader" }
 bb-strategies = { path = "crates/bb-strategies" }

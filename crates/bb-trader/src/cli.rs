@@ -16,7 +16,7 @@ use crate::error::{Result, TraderError};
 /// Trader commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Run the agentic Spot trader (one cycle, or a daemon with --daemon).
+    /// Run the algorithm Spot trader (one cycle, or a daemon with --daemon).
     BotSpot(BotSpotArgs),
     /// Replay the exit-plan menu on Bot Spot's real round trips (public klines, no orders).
     BotSpotExitReplay(crate::exit_replay::ExitReplayArgs),
@@ -47,7 +47,7 @@ pub struct BotSpotArgs {
     /// Reason stored with --mark-failed-route-reviewed.
     #[arg(long, default_value = DEFAULT_REVIEW_REASON)]
     pub review_reason: String,
-    /// Keep one omp session alive and run a cycle every --interval-seconds.
+    /// Keep running and decide once every --interval-seconds.
     #[arg(long)]
     pub daemon: bool,
     #[arg(long, default_value_t = 240)]

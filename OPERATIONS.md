@@ -69,7 +69,7 @@ systemctl --user enable --now binance-bot-spot.service
 mode, installs them atomically to `~/.local/share/binance-bot/bin/`, syncs
 `scripts/`, installs every unit from `deploy/user/` and reloads the user
 manager. It preserves `.env`, data, logs, and backups, and it starts no
-service. It warns when `omp` is not on `PATH` (no longer needed; removed in Phase 52). Restart
+service. Restart
 running services after a deploy to load the new binary.
 
 ### Docker
@@ -120,8 +120,8 @@ machine: `ssh -L 8787:localhost:8787 <host>`. On a systemd host,
 
 Laptop on the Pi's live data: `scripts/cryptobot_gui_pi.sh --open` (the
 `cryptobot-gui` fish command). It rsyncs the Pi's `docker-data` into
-`~/.cache/binance-bot/pi-data` every 30 s (omp logins, the bot session and
-the Telegram session are not copied; nothing is written on the Pi), maps the
+`~/.cache/binance-bot/pi-data` every 30 s (old omp logins, the old bot
+session and session files are not copied; nothing is written on the Pi), maps the
 trader's file paths and the exit-plan settings from the Pi's `.env.docker`,
 and runs the local release build against the mirror with the laptop's
 read-only keys for the wallet. Started without Pi data, the page says so

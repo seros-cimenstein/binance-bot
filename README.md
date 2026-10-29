@@ -16,8 +16,7 @@ Polymarket, airdrop, funding arb, trend filter, mean reversion) were moved to
 |---|---|
 | `bb-core` | env config, `Decimal` money helpers, fsync'd JSONL audit, run locks, stop files |
 | `bb-binance` | native Binance Spot REST client: HMAC/Ed25519 signing, time sync, rate-limit tracking, exchange rules, spot market data and orders, wallet balance totals, klines history |
-| `bb-omp` | omp RPC client (LLM sessions with persistent context + host tools) |
-| `bb-trader` | `bot-spot`: the agentic Spot trader, exit plans, persona backtests, the Markov value model, the rule-based decider |
+| `bb-trader` | `bot-spot`: the algorithm trader (the operator's rule), exit plans, persona backtests, the Markov value model (the last three until Phase 52 removes them) |
 | `bb-pool` | library for the trader: market catalog, commission/fee service, multi-leg route engine, models (no commands, no order path) |
 | `bb-strategies` | bot research: `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
 | `bb-cli` | the `bb` binary |
@@ -213,11 +212,10 @@ modelled costs.
 ## Deployment
 
 Docker is the primary target (Raspberry Pi 5 / ARM64 and x86_64). The image
-contains `bb`, `cryptobot-gui`, `omp` (on Bun) and supercronic.
+contains `bb`, `cryptobot-gui` and supercronic.
 
 ```bash
 docker compose build
-docker compose run --rm -it bot-spot omp             # one-time omp login (or set ANTHROPIC_API_KEY)
 docker compose --profile all up -d --remove-orphans
 touch docker-data/bot-spot.stop                      # emergency stop for the bot trader
 # dashboard: http://localhost:8787 on the Docker host (published on 127.0.0.1 only)

@@ -5,8 +5,8 @@
 # pulls the Pi's bot data dir into a local mirror with rsync (once, then every
 # MIRROR_SECONDS), points cryptobot-gui at the mirror and runs it in the foreground. Ctrl+C
 # stops both. Nothing is written on the Pi: the only remote commands are rsync reads and one
-# grep of the non-secret exit-plan settings in the Pi's env file. omp logins, the bot
-# session and the Telegram session file are not copied.
+# grep of the non-secret exit-plan settings in the Pi's env file. Old omp logins, the old bot
+# session and session files are not copied.
 #
 # Extra arguments go to cryptobot-gui, e.g. `scripts/cryptobot_gui_pi.sh --open`.
 #
