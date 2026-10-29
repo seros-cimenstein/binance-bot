@@ -1,6 +1,6 @@
 [package]
 name = "bb-pool"
-description = "Paper-only Binance asset pool: market catalog, commissions, route search, scoring, SQLite ledger, replays, unified valuation."
+description = "Binance Spot market catalog, commission schedules and route search for Bot Spot (no order path)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,21 +12,13 @@ workspace = true
 [dependencies]
 bb-core.workspace = true
 bb-binance.workspace = true
-tokio.workspace = true
 async-trait.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 rust_decimal.workspace = true
 chrono.workspace = true
-rusqlite.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true
-tracing.workspace = true
-clap.workspace = true
 parking_lot = "0.12"
 
 [dev-dependencies]
-tempfile.workspace = true
-wiremock.workspace = true
+tokio.workspace = true
 rust_decimal_macros.workspace = true
-pretty_assertions.workspace = true

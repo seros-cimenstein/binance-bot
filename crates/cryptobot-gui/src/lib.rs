@@ -1,4 +1,4 @@
-//! `cryptobot-gui`: read-only, localhost-only web dashboard for the bot fleet.
+//! `cryptobot-gui`: read-only, localhost-only web dashboard for Bot Spot.
 //!
 //! One embedded page plus GET endpoints built from what the bots already write and from
 //! signed Binance GET requests. Nothing here writes a file or calls an order, transfer or
@@ -10,13 +10,10 @@
 //! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
-//! - `GET /api/fleet`: `bb bot-status --json` bots (activity, trades, P&L).
 //! - `GET /api/exits`: Phase 45 exit plans: settings, running plans with their sell lines,
 //!   plans waiting for the watcher and the newest watch-log events ([`exits`]).
 //! - `GET /api/sessions`: results per trading session (setup), ranked, with the winner and
 //!   each session's configuration ([`sessions`]).
-//! - `GET /api/signals`: Phase 43 X insighter (paper only): collector health, focus, traction
-//!   curves, Haiku takes, recent signals and the weekly report ([`signals`]).
 //! - `GET /api/market`: market mood, bearish to bullish, from the breadth of the most-traded
 //!   USDT coins, with its last 24 hours ([`market`]; public market data).
 //!
@@ -29,7 +26,6 @@ pub mod exits;
 pub mod history;
 pub mod market;
 pub mod sessions;
-pub mod signals;
 pub mod wallet;
 
 use std::path::PathBuf;
@@ -43,8 +39,6 @@ use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use bb_binance::BinanceClient;
-use bb_capital::status::{collect_snapshot, render_json};
-use bb_signals::x_insighter::schema::XPaths;
 use bb_trader::exit_book::ExitPaths;
 use bb_trader::audit::failed_route_halt;
 use bb_trader::config::{
@@ -57,7 +51,6 @@ use serde_json::{Value, json};
 use crate::history::{ParsedAudit, parse_audit};
 use bb_trader::trades::build_trades;
 use crate::market::MarketView;
-use crate::signals::SignalsCache;
 use crate::wallet::WalletView;
 
 /// Newest cycle summaries sent to the page.
@@ -108,8 +101,6 @@ struct AuditCache {
 /// Shared handler state.
 #[derive(Debug)]
 pub struct AppState {
-    /// Fleet data dir (`BOT_STATUS_DATA_DIR` layout).
-    data_dir: PathBuf,
     bot_spot: BotSpotFiles,
     /// Mainnet read client; `None` leaves the wallet empty.
     client: Option<BinanceClient>,
@@ -119,27 +110,17 @@ pub struct AppState {
     wallet_cache: tokio::sync::Mutex<Option<(Instant, Arc<WalletView>)>>,
     market_cache: tokio::sync::Mutex<Option<(Instant, Arc<MarketView>)>>,
     audit_cache: Mutex<Option<AuditCache>>,
-    /// Phase 43 files, in the fleet data dir.
-    x_paths: XPaths,
-    signals_cache: Mutex<SignalsCache>,
 }
 
 impl AppState {
-    pub fn new(
-        data_dir: PathBuf,
-        bot_spot: BotSpotFiles,
-        client: Option<BinanceClient>,
-    ) -> Self {
+    pub fn new(bot_spot: BotSpotFiles, client: Option<BinanceClient>) -> Self {
         Self {
-            x_paths: XPaths::in_dir(&data_dir),
-            data_dir,
             bot_spot,
             market_client: client.clone().or_else(public_client),
             client,
             wallet_cache: tokio::sync::Mutex::new(None),
             market_cache: tokio::sync::Mutex::new(None),
             audit_cache: Mutex::new(None),
-            signals_cache: Mutex::new(SignalsCache::default()),
         }
     }
 
@@ -190,14 +171,6 @@ impl AppState {
         });
         parsed
     }
-
-    fn signals(&self) -> Value {
-        let mut cache = self
-            .signals_cache
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        signals::signals_view(&mut cache, &self.x_paths, bb_core::time::now_ms())
-    }
 }
 
 /// Mainnet client without credentials, for public market data.
@@ -207,6 +180,26 @@ fn public_client() -> Option<BinanceClient> {
         .ok()
 }
 
+/// Mainnet client from `BINANCE_API_KEY`/`BINANCE_API_SECRET` for the signed wallet reads;
+/// `None` (with a warning on bad input) when credentials are missing or invalid.
+pub fn wallet_client() -> Option<BinanceClient> {
+    let credentials = match bb_binance::Credentials::from_env() {
+        Ok(Some(credentials)) => credentials,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::warn!(%error, "invalid Binance credentials; wallet skipped");
+            return None;
+        }
+    };
+    match BinanceClient::new(bb_binance::BinanceConfig::new(false).with_credentials(credentials)) {
+        Ok(client) => Some(client),
+        Err(error) => {
+            tracing::warn!(%error, "Binance client unavailable; wallet skipped");
+            None
+        }
+    }
+}
+
 /// The dashboard: GET routes only, behind the localhost `Host` check.
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -214,9 +207,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(status))
         .route("/api/history", get(history_handler))
         .route("/api/wallet", get(wallet_handler))
-        .route("/api/fleet", get(fleet))
         .route("/api/exits", get(exits_handler))
-        .route("/api/signals", get(signals_handler))
         .route("/api/market", get(market_handler))
         .route("/api/sessions", get(sessions_handler))
         .layer(middleware::from_fn(localhost_only))
@@ -294,17 +285,6 @@ async fn market_handler(State(app): State<Arc<AppState>>) -> Response {
     json_response(json!(*view))
 }
 
-async fn fleet(State(app): State<Arc<AppState>>) -> Response {
-    // The client prices bot holdings in the state summaries; the wallet itself is the
-    // wallet tab's job, so it is dropped from this payload.
-    let snapshot = collect_snapshot(app.client.as_ref(), &app.data_dir).await;
-    let mut view = render_json(&snapshot);
-    if let Some(object) = view.as_object_mut() {
-        object.remove("wallet");
-    }
-    json_response(view)
-}
-
 async fn exits_handler(State(app): State<Arc<AppState>>) -> Response {
     let paths = app.bot_spot.exits.clone();
     blocking_json(move || {
@@ -317,10 +297,6 @@ async fn exits_handler(State(app): State<Arc<AppState>>) -> Response {
         )
     })
     .await
-}
-
-async fn signals_handler(State(app): State<Arc<AppState>>) -> Response {
-    blocking_json(move || app.signals()).await
 }
 
 async fn blocking_json(work: impl FnOnce() -> Value + Send + 'static) -> Response {
@@ -562,7 +538,7 @@ mod tests {
         let files = files(dir.path());
         let route = json!({"timestamp": "t1", "status": "submitted", "submission_attempted": true});
         write_lines(&files.audit_path, std::slice::from_ref(&route));
-        let state = AppState::new(dir.path().into(), files.clone(), None);
+        let state = AppState::new(files.clone(), None);
 
         assert_eq!(state.audit().routes.len(), 1);
         write_lines(&files.audit_path, &[route.clone(), route]);

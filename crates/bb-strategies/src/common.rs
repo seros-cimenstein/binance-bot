@@ -1,9 +1,7 @@
-//! Helpers shared by the strategy runtimes and the backtest harnesses:
-//! kline rows, the cached concurrent kline fetcher, ISO parsing, Python-compatible
-//! rounding/statistics and sorted-key JSON persistence.
+//! Helpers shared by the research harnesses: kline rows, the cached concurrent kline
+//! fetcher, ISO parsing, Python-compatible rounding/statistics and sorted-key JSON output.
 
 use std::collections::BTreeMap;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use bb_binance::history::HistoryFetcher;
@@ -17,10 +15,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{Result, StrategyError};
-
-/// Binance REST hosts the Python modules hard-coded for public market data.
-pub const SPOT_REST_URL: &str = "https://api.binance.com";
-pub const FUTURES_REST_URL: &str = "https://fapi.binance.com";
 
 /// Bars per year for each Binance kline interval (identical table in every
 /// Python backtest module; each module supplies its own fallback default).
@@ -128,48 +122,6 @@ impl<'de> Deserialize<'de> for Bar {
 /// Python `float(str(d))`: correctly rounded, unlike a mantissa/scale division.
 pub fn decimal_f64(value: Decimal) -> f64 {
     value.to_string().parse().unwrap_or(f64::NAN)
-}
-
-/// Python `bool` env helper: unset/blank → `default`, else `{1,true,yes,on}` (case-insensitive).
-pub fn env_flag(name: &str, default: bool) -> bool {
-    match std::env::var(name) {
-        Ok(value) if !value.is_empty() => matches!(
-            value.trim().to_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
-        _ => default,
-    }
-}
-
-/// `os.getenv(name, default)`: set-but-empty stays empty.
-pub fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_owned())
-}
-
-/// `T(os.getenv(name) or default)`: unset/blank → `default`; `Err(raw value)` when unparsable.
-pub fn env_parse<T: std::str::FromStr>(name: &str, default: T) -> std::result::Result<T, String> {
-    match std::env::var(name) {
-        Ok(value) if !value.is_empty() => value.trim().parse().map_err(|_| value),
-        _ => Ok(default),
-    }
-}
-
-/// Decimal variant of [`env_parse`] accepting Python float syntax (`1e3`).
-pub fn env_decimal(name: &str, default: Decimal) -> std::result::Result<Decimal, String> {
-    match std::env::var(name) {
-        Ok(value) if !value.is_empty() => value_decimal(&Value::String(value.clone())).ok_or(value),
-        _ => Ok(default),
-    }
-}
-
-/// `tuple(s.strip() for s in os.getenv(name, "").split(",") if s.strip())`.
-pub fn env_csv(name: &str) -> Vec<String> {
-    split_csv(&std::env::var(name).unwrap_or_default())
-}
-
-/// Python `os.getenv(name, "").strip().lower() == "yes"`.
-pub fn env_yes(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|v| v.trim().eq_ignore_ascii_case("yes"))
 }
 
 /// Python `float(x)` over a JSON scalar.
@@ -436,34 +388,6 @@ pub fn py_sum(values: impl IntoIterator<Item = f64>) -> f64 {
     total
 }
 
-/// Python `repr(float)` (shortest round-trip; `1.0`, `0.0001`, `1e-05`, `1e+16`).
-pub fn py_float_repr(x: f64) -> String {
-    if x.is_nan() {
-        return "nan".into();
-    }
-    if x.is_infinite() {
-        return if x > 0.0 { "inf" } else { "-inf" }.into();
-    }
-    let magnitude = x.abs();
-    if magnitude == 0.0 || (1e-4..1e16).contains(&magnitude) {
-        let plain = x.to_string();
-        return if plain.contains('.') {
-            plain
-        } else {
-            format!("{plain}.0")
-        };
-    }
-    let sci = format!("{x:e}");
-    match sci.split_once('e') {
-        Some((mantissa, exp)) => {
-            let exp: i32 = exp.parse().unwrap_or(0);
-            let sign = if exp < 0 { '-' } else { '+' };
-            format!("{mantissa}e{sign}{:02}", exp.unsigned_abs())
-        }
-        None => sci,
-    }
-}
-
 /// Annualised Sharpe of per-step returns (`mean / pstdev * sqrt(bars_per_year)`), `0.0`
 /// with fewer than two returns or zero variance — the formula every replay shares.
 pub fn sharpe_annualized(returns: &[f64], bars_per_year: f64) -> f64 {
@@ -514,106 +438,10 @@ pub fn print_json<T: Serialize + ?Sized>(value: &T) -> Result<()> {
     Ok(())
 }
 
-/// Append one sorted-key JSON line, creating parent directories.
-pub fn append_jsonl<T: Serialize + ?Sized>(path: &Path, record: &T) -> Result<()> {
-    append_jsonl_many(path, std::slice::from_ref(&sorted_value(record)?))
-}
-
-/// Append many sorted-key JSON lines in one write.
-pub fn append_jsonl_many<T: Serialize>(path: &Path, records: &[T]) -> Result<()> {
-    if records.is_empty() {
-        return Ok(());
-    }
-    let mut buf = Vec::new();
-    for record in records {
-        serde_json::to_writer(&mut buf, &sorted_value(record)?)?;
-        buf.push(b'\n');
-    }
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(|e| StrategyError::io(parent, e))?;
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| StrategyError::io(path, e))?;
-    file.write_all(&buf)
-        .map_err(|e| StrategyError::io(path, e))?;
-    file.sync_data().map_err(|e| StrategyError::io(path, e))
-}
-
-/// Atomic `json.dumps(state, indent=2, sort_keys=True)` state write.
-pub fn save_json_sorted<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
-    let text = to_pretty_sorted(value)?;
-    bb_core::fsutil::atomic_write(path, text.as_bytes()).map_err(|e| StrategyError::io(path, e))
-}
-
 /// Write a report file (`Path(output).write_text(json.dumps(..., indent=2, sort_keys=True))`).
 pub fn write_report<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
     let text = to_pretty_sorted(value)?;
     std::fs::write(path, text).map_err(|e| StrategyError::io(path, e))
-}
-
-/// `int(datetime.now(tz=timezone.utc).timestamp() * 1000)`.
-pub fn utc_now_ms() -> i64 {
-    bb_core::time::now_ms()
-}
-
-/// `datetime.now(tz=timezone.utc).isoformat()`.
-pub fn utc_timestamp() -> String {
-    python_isoformat(bb_core::time::now())
-}
-
-/// Python `datetime.isoformat()` for an aware UTC timestamp.
-pub fn python_isoformat(ts: DateTime<Utc>) -> String {
-    if ts.timestamp_subsec_micros() == 0 {
-        ts.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
-    } else {
-        ts.format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string()
-    }
-}
-
-/// Python `src.alerts.maybe_telegram(message)`: escape plain text, send if configured,
-/// never fails.
-pub async fn alert(message: &str) -> bool {
-    bb_core::telegram::maybe_send(&bb_core::telegram::escape(message)).await
-}
-
-/// Parse a JSON scalar (number or numeric string, incl. Python float reprs like `1e-05`).
-pub fn value_decimal(value: &Value) -> Option<Decimal> {
-    let text = match value {
-        Value::Number(n) => n.to_string(),
-        Value::String(s) => s.trim().to_owned(),
-        _ => return None,
-    };
-    Decimal::from_str_exact(&text)
-        .or_else(|_| Decimal::from_scientific(&text))
-        .ok()
-}
-
-/// Serde adapter keeping money fields as plain JSON numbers (the Python state/ledger
-/// files hold floats) while the Rust side stays `Decimal`.
-pub mod decimal_number {
-    use rust_decimal::Decimal;
-    use serde::de::Error as _;
-    use serde::ser::Error as _;
-    use serde::{Deserialize as _, Deserializer, Serialize as _, Serializer};
-    use serde_json::Value;
-
-    pub fn serialize<S: Serializer>(value: &Decimal, serializer: S) -> Result<S::Ok, S::Error> {
-        let number: serde_json::Number = value
-            .normalize()
-            .to_string()
-            .parse()
-            .map_err(S::Error::custom)?;
-        number.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Decimal, D::Error> {
-        let value = Value::deserialize(deserializer)?;
-        super::value_decimal(&value)
-            .ok_or_else(|| D::Error::custom(format!("expected a decimal number, got {value}")))
-    }
 }
 
 #[cfg(test)]

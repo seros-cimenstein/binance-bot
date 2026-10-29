@@ -27,7 +27,7 @@ pub enum ErrorKind {
     Unavailable,
     /// Malformed request parameters or unknown symbol.
     BadRequest,
-    /// Anything else (decode failures, configuration, WebSocket protocol...).
+    /// Anything else (decode failures, configuration, history paging...).
     Other,
 }
 
@@ -70,9 +70,6 @@ pub enum BinanceError {
     /// A symbol that cannot be normalised or is not listed.
     #[error("invalid symbol: {0}")]
     InvalidSymbol(String),
-    /// WebSocket connect/protocol/subscription failure.
-    #[error("binance websocket error: {0}")]
-    WebSocket(String),
     /// Paged history backfill failure (e.g. pagination did not advance).
     #[error("binance history error: {0}")]
     History(String),
@@ -143,9 +140,7 @@ impl BinanceError {
                 msg,
                 ..
             } => classify(*http_status, *code, msg),
-            Self::Decode { .. } | Self::Config(_) | Self::WebSocket(_) | Self::History(_) => {
-                ErrorKind::Other
-            }
+            Self::Decode { .. } | Self::Config(_) | Self::History(_) => ErrorKind::Other,
         }
     }
 

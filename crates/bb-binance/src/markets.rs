@@ -1,4 +1,4 @@
-//! `exchangeInfo` cache and unified-symbol lookup for spot and USD-M futures.
+//! Spot `exchangeInfo` cache and unified-symbol lookup.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,7 +8,6 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 use crate::error::{BinanceError, Result};
-use crate::futures::FuturesSymbolInfo;
 use crate::rest::BinanceClient;
 use crate::rules::{MarketKind, SymbolRules};
 use crate::spot::SpotSymbolInfo;
@@ -135,61 +134,15 @@ impl SymbolRules {
         rules.apply_filters(info.filters.clone());
         rules
     }
-
-    /// Rules for a USD-M futures symbol. Perpetuals map to `BASE/QUOTE:MARGIN`;
-    /// dated contracts to `BASE/QUOTE:MARGIN-YYMMDD` (ccxt convention).
-    pub fn from_futures(info: &FuturesSymbolInfo) -> Self {
-        let mut unified = format!(
-            "{}/{}:{}",
-            info.base_asset, info.quote_asset, info.margin_asset
-        );
-        if !info.contract_type.is_empty()
-            && info.contract_type != "PERPETUAL"
-            && let Some(suffix) = info
-                .symbol
-                .rsplit('_')
-                .next()
-                .filter(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()))
-        {
-            unified = format!("{unified}-{suffix}");
-        }
-        let mut rules = Self {
-            market: MarketKind::UsdmFutures,
-            symbol: info.symbol.clone(),
-            unified,
-            status: info.status.clone(),
-            base_asset: info.base_asset.clone(),
-            quote_asset: info.quote_asset.clone(),
-            settle_asset: Some(info.margin_asset.clone()),
-            contract_type: Some(info.contract_type.clone()).filter(|c| !c.is_empty()),
-            permissions: Vec::new(),
-            order_types: info.order_types.clone(),
-            spot_trading_allowed: false,
-            margin_trading_allowed: false,
-            quote_order_qty_market_allowed: false,
-            base_asset_precision: info.base_asset_precision,
-            quote_asset_precision: info.quote_precision,
-            price: None,
-            lot: None,
-            market_lot: None,
-            notional: None,
-            percent_price: None,
-            max_num_orders: None,
-            filters: Vec::new(),
-        };
-        rules.apply_filters(info.filters.clone());
-        rules
-    }
 }
 
 type Slot = Mutex<Option<(Instant, Arc<Markets>)>>;
 
-/// TTL cache of spot and futures [`Markets`], shared by client clones.
+/// TTL cache of spot [`Markets`], shared by client clones.
 #[derive(Debug)]
 pub(crate) struct MarketsCache {
     ttl: Duration,
     spot: Slot,
-    futures: Slot,
 }
 
 impl MarketsCache {
@@ -197,7 +150,6 @@ impl MarketsCache {
         Self {
             ttl,
             spot: Mutex::new(None),
-            futures: Mutex::new(None),
         }
     }
 }
@@ -222,30 +174,8 @@ impl BinanceClient {
         Ok(markets)
     }
 
-    /// USD-M futures markets from `GET /fapi/v1/exchangeInfo`, cached like [`Self::spot_markets`].
-    pub async fn futures_markets(&self, reload: bool) -> Result<Arc<Markets>> {
-        let mut slot = self.markets_cache().futures.lock().await;
-        if !reload
-            && let Some((at, markets)) = slot.as_ref()
-            && at.elapsed() < self.markets_cache().ttl
-        {
-            return Ok(markets.clone());
-        }
-        let info = self.futures_exchange_info().await?;
-        let markets = Arc::new(Markets::from_rules(
-            info.symbols.iter().map(SymbolRules::from_futures),
-        ));
-        *slot = Some((Instant::now(), markets.clone()));
-        Ok(markets)
-    }
-
     /// Spot rules for one symbol (any spelling), from the cache.
     pub async fn symbol_rules(&self, symbol: &str) -> Result<SymbolRules> {
         self.spot_markets(false).await?.require(symbol).cloned()
-    }
-
-    /// Futures rules for one symbol (any spelling), from the cache.
-    pub async fn futures_symbol_rules(&self, symbol: &str) -> Result<SymbolRules> {
-        self.futures_markets(false).await?.require(symbol).cloned()
     }
 }

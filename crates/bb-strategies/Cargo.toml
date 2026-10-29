@@ -1,6 +1,6 @@
 [package]
 name = "bb-strategies"
-description = "Deterministic strategy runtimes (funding arb, trend filter, mean reversion) and backtest harnesses"
+description = "Bot Spot research harnesses: momentum backtest, entry study, /biz/ lead study, speculation snapshot"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,6 @@ bb-core.workspace = true
 bb-binance.workspace = true
 tokio.workspace = true
 futures.workspace = true
-async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rust_decimal.workspace = true
@@ -27,8 +26,6 @@ csv.workspace = true
 tempfile.workspace = true
 wiremock.workspace = true
 pretty_assertions.workspace = true
-rust_decimal_macros.workspace = true
-parking_lot = "0.12"
 
 [lints]
 workspace = true

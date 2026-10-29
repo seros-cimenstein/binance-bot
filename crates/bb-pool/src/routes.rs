@@ -7,14 +7,13 @@ use std::sync::Arc;
 use bb_core::money::floor_to_step;
 use rust_decimal::Decimal;
 
-use crate::config::PoolSettings;
 use crate::error::Result;
 use crate::fees::CommissionService;
 use crate::models::{LegSide, MarketSnapshot, RouteLeg, RouteQuote};
 
 const BPS: Decimal = Decimal::from_parts(10_000, 0, 0, false, 0);
 
-/// Search and costing bounds (subset of [`PoolSettings`]).
+/// Search and costing bounds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteConfig {
     /// Maximum legs per route (1..=3).
@@ -25,17 +24,6 @@ pub struct RouteConfig {
     pub max_candidate_routes: usize,
     /// Adverse price buffer applied to every leg.
     pub slippage_buffer_bps: Decimal,
-}
-
-impl From<&PoolSettings> for RouteConfig {
-    fn from(settings: &PoolSettings) -> Self {
-        Self {
-            max_route_legs: settings.max_route_legs,
-            max_route_expansions: settings.max_route_expansions,
-            max_candidate_routes: settings.max_candidate_routes,
-            slippage_buffer_bps: settings.slippage_buffer_bps,
-        }
-    }
 }
 
 /// One hop of a candidate path: market index, side, and the asset received.

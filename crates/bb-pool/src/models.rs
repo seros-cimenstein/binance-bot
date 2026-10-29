@@ -1,6 +1,5 @@
-//! Domain models for market discovery, routing, and paper portfolios.
+//! Domain models for market discovery and routing.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use chrono::{DateTime, Utc};
@@ -193,64 +192,6 @@ impl RouteQuote {
     pub fn symbols(&self) -> Vec<&str> {
         self.legs.iter().map(|leg| leg.symbol.as_str()).collect()
     }
-}
-
-/// Value of a holding measured in one configured benchmark asset.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AssetValuation {
-    pub asset: String,
-    pub amount: Decimal,
-    pub benchmark: String,
-    pub benchmark_amount: Option<Decimal>,
-    pub route: Option<RouteQuote>,
-}
-
-/// Paper holdings owned by one allocation/scoring experiment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VirtualPortfolio {
-    pub portfolio_id: String,
-    pub scorer_name: String,
-    pub balances: BTreeMap<String, Decimal>,
-    pub seeded_at: DateTime<Utc>,
-}
-
-/// Outcome of one scorer decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DecisionAction {
-    Hold,
-    Rebalance,
-}
-
-impl DecisionAction {
-    /// Ledger spelling.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Hold => "hold",
-            Self::Rebalance => "rebalance",
-        }
-    }
-}
-
-impl fmt::Display for DecisionAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// A scorer's proposed or rejected paper reallocation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PaperDecision {
-    pub portfolio_id: String,
-    pub scorer_name: String,
-    pub source_asset: Option<String>,
-    pub destination_asset: Option<String>,
-    pub input_amount: Option<Decimal>,
-    pub route: Option<RouteQuote>,
-    pub action: DecisionAction,
-    pub reason: String,
-    pub score: Option<f64>,
-    pub decided_at: DateTime<Utc>,
 }
 
 #[cfg(test)]

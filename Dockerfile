@@ -1,13 +1,12 @@
 # syntax=docker/dockerfile:1
 #
-# Binance bot fleet image: one static-ish `bb` binary, the read-only `cryptobot-gui`
-# dashboard, plus the `omp` agent CLI (bot decisions for bot-spot and the capital
-# allocator run through omp RPC).
+# Binance Bot Spot image: one static-ish `bb` binary, the read-only `cryptobot-gui`
+# dashboard, plus the `omp` agent CLI (Bot Spot's LLM decisions run through omp RPC).
 
 # ---------- build ----------
 FROM rust:1-bookworm AS build
 
-# aws-lc-rs (rustls crypto provider) needs cmake + clang; rusqlite bundles SQLite via cc.
+# aws-lc-rs (rustls crypto provider) needs cmake + clang.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends cmake clang \
  && rm -rf /var/lib/apt/lists/*
@@ -32,7 +31,7 @@ ARG OMP_VERSION=18.8.9
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-        sqlite3 ca-certificates curl unzip tini tzdata \
+        ca-certificates curl unzip tini tzdata \
  && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \

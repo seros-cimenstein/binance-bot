@@ -1,8 +1,8 @@
-# docker-compose.yml — Binance bot fleet (Rust `bb` binary)
+# docker-compose.yml — Binance Bot Spot trader (Rust `bb` binary)
 #
 # Every long-running runtime is a container running one `bb <command>`.
-# Periodic jobs (airdrop digest, backups) run in the `scheduler` container via
-# supercronic (docker/crontab). Bot Spot is the only live trader.
+# Periodic jobs (the Bot Spot data backup) run in the `scheduler` container via
+# supercronic (docker/crontab). Bot Spot is the only trader.
 #
 # Layout:
 #   - The `bb` binary and `omp` (agent CLI) are baked into the image.
@@ -13,15 +13,10 @@
 #   - env_file      <- BOT_ENV_FILE, defaults to ./.env.docker
 #
 # Profiles:
-#   paper   -> paper/research workloads + scheduler
-#   live    -> Bot Spot trader + scheduler
-#   all     -> paper + live
-#   v2      -> signals-dexscreener-launches (V2 launch snapshotter)
-#   main-bot-> legacy SMA bot (disabled in production)
-#   listing-sniper-live -> live momentum listing sniper (disabled in production)
-#   gui     -> cryptobot-gui read-only dashboard (also in paper/live/all)
-#   x-collector -> x-camoufox read-only X collector (Phase 43, own image, no bot secrets)
-#   x-insighter -> bb x-insighter paper daemon (Phase 43, needs X_INSIGHTER_ENABLED=true)
+#   live       -> Bot Spot trader + dashboard + scheduler
+#   all        -> same as live (deploy/seref/binance-bot-compose.service runs --profile all)
+#   gui        -> cryptobot-gui read-only dashboard only
+#   exit-paper -> bot-spot-exit-watch: the Phase 45 exit-plan paper watcher (no orders)
 #   algo-paper -> bot-spot-algo-paper: the Phase 51 rule-based decider, plan-only (no orders)
 #
 # Model (omp) auth, once per data dir: either set ANTHROPIC_API_KEY in the env file, or
@@ -46,11 +41,8 @@ x-base: &base
     TZ: UTC
     BINANCE_BOT_BACKUP_DIR: /app/backups
     BINANCE_BOT_PROJECT_DIR: /app
-    AIRDROP_DATA_DIR: /app/data
-    # bot-status / cash-distributor / capital-pool read fleet state from the volume.
-    BOT_STATUS_DATA_DIR: /app/data
   stop_grace_period: 60s
-  logging: &logging
+  logging:
     driver: json-file
     options:
       max-size: "10m"
@@ -60,7 +52,7 @@ services:
 
   # ---------- LIVE ----------
 
-  # Bot agentic Spot trader: one persistent omp session, a cycle every 20 minutes (Sonnet, operator decision 2026-10-15).
+  # Bot agentic Spot trader: one persistent omp session, a cycle every 20 minutes.
   # Live submission still requires BOT_SPOT_ENABLED=true, BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot,
   # USE_TESTNET=false, DRY_RUN=false, CONFIRM_LIVE_TRADING=yes. Emergency stop: touch data/bot-spot.stop.
   bot-spot:
@@ -92,177 +84,12 @@ services:
       TZ: UTC
       BINANCE_BOT_BACKUP_DIR: /app/backups
       BINANCE_BOT_PROJECT_DIR: /app
-      AIRDROP_DATA_DIR: /app/data
-      BOT_STATUS_DATA_DIR: /app/data
       BOT_SPOT_DECIDER: algo
       BOT_SPOT_AUDIT_PATH: /app/data/bot-spot-algo-paper-decisions.jsonl
       BOT_SPOT_JOURNAL_PATH: /app/data/bot-spot-algo-paper-journal.jsonl
       BOT_SPOT_STATE_PATH: /app/data/bot-spot-algo-paper-state.json
       BOT_SPOT_LOCK_PATH: /app/data/bot-spot-algo-paper.lock
     command: ["bb", "bot-spot", "--plan-only", "--daemon", "--interval-seconds", "1200"]
-
-  # ---------- DISABLED / OPT-IN (live) ----------
-  # Off since 2026-10-12: Bot Spot is the only live trader on the shared wallet.
-  listing-sniper-momentum:
-    <<: *base
-    container_name: listing-sniper-momentum
-    profiles: ["listing-sniper-live"]
-    environment:
-      TZ: UTC
-      BINANCE_BOT_BACKUP_DIR: /app/backups
-      BINANCE_BOT_PROJECT_DIR: /app
-      LISTING_SNIPER_HOLD_MODE: momentum
-      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-momentum-state.json
-      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-momentum-events.jsonl
-      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-momentum-ledger.jsonl
-      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-momentum.stop
-      LISTING_WATCHLIST_PATH: /app/data/listing-watchlist.json
-    command: ["bb", "listing-sniper", "--submit-live", "--daemon"]
-
-  # ---------- PAPER ----------
-
-  mean-reversion-paper:
-    <<: *base
-    container_name: mean-reversion-paper
-    profiles: ["paper", "all"]
-    command: ["bb", "mean-reversion", "--paper", "--daemon"]
-
-  pool-paper:
-    <<: *base
-    container_name: pool-paper
-    profiles: ["paper", "all"]
-    environment:
-      TZ: UTC
-      BINANCE_BOT_BACKUP_DIR: /app/backups
-      BINANCE_BOT_PROJECT_DIR: /app
-      POOL_MODE: paper
-    command: ["bb", "pool"]
-
-  sniper-paper:
-    <<: *base
-    container_name: sniper-paper
-    profiles: ["paper", "all"]
-    command:
-      - "bb"
-      - "sniper-paper"
-      - "--entry-sol"
-      - "0.005"
-      - "--hold-seconds"
-      - "300"
-      - "--slippage-bps"
-      - "500"
-      - "--max-concurrent"
-      - "5"
-      - "--ledger-path"
-      - "/app/data/sniper-paper-ledger.jsonl"
-      - "--summary-path"
-      - "/app/data/sniper-paper-summary.json"
-
-  listing-sniper-flat:
-    <<: *base
-    container_name: listing-sniper-flat
-    profiles: ["paper", "all"]
-    environment:
-      TZ: UTC
-      BINANCE_BOT_BACKUP_DIR: /app/backups
-      BINANCE_BOT_PROJECT_DIR: /app
-      LISTING_SNIPER_HOLD_MODE: flat
-      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-flat-state.json
-      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-flat-events.jsonl
-      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-flat-ledger.jsonl
-      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-flat.stop
-      LISTING_WATCHLIST_PATH: /app/data/listing-watchlist.json
-    command: ["bb", "listing-sniper", "--paper", "--daemon"]
-
-  listing-sniper-trailing:
-    <<: *base
-    container_name: listing-sniper-trailing
-    profiles: ["paper", "all"]
-    environment:
-      TZ: UTC
-      BINANCE_BOT_BACKUP_DIR: /app/backups
-      BINANCE_BOT_PROJECT_DIR: /app
-      LISTING_SNIPER_HOLD_MODE: trailing
-      LISTING_SNIPER_STATE_PATH: /app/data/listing-sniper-trailing-state.json
-      LISTING_SNIPER_AUDIT_PATH: /app/data/listing-sniper-trailing-events.jsonl
-      LISTING_SNIPER_LEDGER_PATH: /app/data/listing-sniper-trailing-ledger.jsonl
-      LISTING_SNIPER_EMERGENCY_STOP_PATH: /app/data/listing-sniper-trailing.stop
-      LISTING_WATCHLIST_PATH: /app/data/listing-watchlist.json
-    command: ["bb", "listing-sniper", "--paper", "--daemon"]
-
-  signals-dexscreener:
-    <<: *base
-    container_name: signals-dexscreener
-    profiles: ["paper", "all"]
-    command: ["bb", "signals-dexscreener", "--daemon"]
-
-  signals-dexscreener-launches:
-    <<: *base
-    container_name: signals-dexscreener-launches
-    profiles: ["v2"]
-    command: ["bb", "signals-dexscreener-launches", "--daemon"]
-
-  # One-time login first: docker compose run --rm -it signals-telegram bb signals-telegram-setup
-  signals-telegram:
-    <<: *base
-    container_name: signals-telegram
-    profiles: ["paper", "all"]
-    command: ["bb", "signals-telegram-ingester", "--daemon"]
-
-  signals-smart-money:
-    <<: *base
-    container_name: signals-smart-money
-    profiles: ["paper", "all"]
-    command: ["bb", "signals-smart-money", "--daemon"]
-
-  # ---------- DISABLED / OPT-IN ----------
-
-  main-bot:
-    <<: *base
-    container_name: main-bot
-    profiles: ["main-bot"]
-    command: ["bb", "main"]
-
-  # ---------- PHASE 43 X INSIGHTER (paper only, no order path) ----------
-
-  # Read-only X collector (Camoufox) on a burner account. Own image and no env_file:
-  # it never sees the bot's secrets, only X_COLLECTOR_* below. Lists: x-accounts.txt and
-  # x-searches.txt in the data dir. One-time login: collectors/x-camoufox/README.md.
-  x-camoufox:
-    image: binance-bot-x-camoufox:latest
-    build:
-      context: collectors/x-camoufox
-      dockerfile: Dockerfile
-    container_name: x-camoufox
-    profiles: ["x-collector"]
-    restart: unless-stopped
-    volumes:
-      - ${BOT_DATA_DIR:-./docker-data}:/app/data
-    environment:
-      TZ: UTC
-      X_COLLECTOR_DATA_DIR: /app/data
-      X_COLLECTOR_ACCOUNTS_FILE: /app/data/x-accounts.txt
-      X_COLLECTOR_SEARCHES_FILE: /app/data/x-searches.txt
-      X_COLLECTOR_PROFILE_DIR: /app/data/x-camoufox-profile
-      X_COLLECTOR_MAX_PAGES_PER_HOUR: ${X_COLLECTOR_MAX_PAGES_PER_HOUR:-120}
-      X_COLLECTOR_MAX_REPLIES_PER_HOUR: ${X_COLLECTOR_MAX_REPLIES_PER_HOUR:-400}
-      X_COLLECTOR_POLL_SECONDS: ${X_COLLECTOR_POLL_SECONDS:-300}
-      X_COLLECTOR_FOCUS_POLL_SECONDS: ${X_COLLECTOR_FOCUS_POLL_SECONDS:-180}
-      X_COLLECTOR_HEADLESS: ${X_COLLECTOR_HEADLESS:-true}
-    # Firefox needs more shared memory than Docker's 64 MB default.
-    shm_size: "1gb"
-    stop_grace_period: 30s
-    logging: *logging
-
-  # Phase 43 engine: reads the collector files, scores traction, asks Claude Haiku via omp
-  # (same image, data volume and omp credentials under /app/data/omp-agent as bot-spot)
-  # and writes paper signals. Set X_INSIGHTER_ENABLED=true in the env file; while it is
-  # unset the daemon exits with a message.
-  x-insighter:
-    <<: *base
-    container_name: x-insighter
-    profiles: ["x-insighter"]
-    command: ["bb", "x-insighter", "--daemon"]
 
   # ---------- DASHBOARD ----------
 
@@ -272,12 +99,11 @@ services:
   cryptobot-gui:
     <<: *base
     container_name: cryptobot-gui
-    profiles: ["gui", "paper", "live", "all"]
+    profiles: ["gui", "live", "all"]
     volumes:
       - ${BOT_DATA_DIR:-./docker-data}:/app/data:ro
     environment:
       TZ: UTC
-      BOT_STATUS_DATA_DIR: /app/data
       # Inside the container only; the published port below stays on 127.0.0.1.
       CRYPTOBOT_GUI_BIND: 0.0.0.0:8787
     ports:
@@ -289,5 +115,5 @@ services:
   scheduler:
     <<: *base
     container_name: scheduler
-    profiles: ["paper", "live", "all"]
+    profiles: ["live", "all"]
     command: ["/usr/local/bin/supercronic", "-passthrough-logs", "/app/docker/crontab"]

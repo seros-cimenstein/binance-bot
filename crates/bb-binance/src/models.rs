@@ -141,12 +141,8 @@ impl<'de> Deserialize<'de> for Kline {
     }
 }
 
-/// Deserialize an `i64` that may arrive as a number or a numeric string.
-pub(crate) fn de_i64_flexible<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
-    value_to_i64(serde_json::Value::deserialize(d)?)
-}
-
-/// Optional variant of [`de_i64_flexible`] (`null`/missing → `None`).
+/// Deserialize an optional `i64` that may arrive as a number or a numeric string
+/// (`null`/missing → `None`).
 pub(crate) fn de_opt_i64_flexible<'de, D: Deserializer<'de>>(
     d: D,
 ) -> Result<Option<i64>, D::Error> {
@@ -154,16 +150,6 @@ pub(crate) fn de_opt_i64_flexible<'de, D: Deserializer<'de>>(
         serde_json::Value::Null => Ok(None),
         other => value_to_i64(other).map(Some),
     }
-}
-
-/// Binance `/sapi` paging envelope `{"total": n, "rows": [...]}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Rows<T> {
-    #[serde(default)]
-    pub total: u64,
-    #[serde(default = "Vec::new")]
-    pub rows: Vec<T>,
 }
 
 #[cfg(test)]

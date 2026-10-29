@@ -21,6 +21,3 @@
 
 # local-only helper dirs
 .antigravitycli
-
-# Python collector sidecar (own image, collectors/x-camoufox/Dockerfile)
-collectors/

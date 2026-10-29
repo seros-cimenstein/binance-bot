@@ -1,27 +1,22 @@
-//! `cryptobot-gui` — read-only localhost web dashboard for the bot fleet.
+//! `cryptobot-gui` — read-only localhost web dashboard for Bot Spot.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context;
-use bb_capital::status::{default_data_dir, wallet_client};
 use clap::Parser;
-use cryptobot_gui::{AppState, BotSpotFiles, router};
+use cryptobot_gui::{AppState, BotSpotFiles, router, wallet_client};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "cryptobot-gui",
     version,
-    about = "Read-only localhost web dashboard: wallet, Bot Spot activity, fleet status, X insighter signals"
+    about = "Read-only localhost web dashboard: wallet and Bot Spot activity"
 )]
 struct Cli {
     /// Listen address. Requests must still address localhost in their Host header.
     #[arg(long, env = "CRYPTOBOT_GUI_BIND", default_value = "127.0.0.1:8787")]
     bind: SocketAddr,
-    /// Fleet data dir read by the fleet and signals views (BOT_STATUS_DATA_DIR).
-    #[arg(long, default_value_os_t = default_data_dir())]
-    data_dir: PathBuf,
     /// Open the dashboard in the default browser once it is listening. If another instance
     /// already holds the address, just open that one.
     #[arg(long)]
@@ -60,11 +55,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     if client.is_none() {
         tracing::warn!("no Binance credentials; the wallet tab stays empty");
     }
-    let app = router(AppState::new(
-        cli.data_dir,
-        BotSpotFiles::from_env(),
-        client,
-    ));
+    let app = router(AppState::new(BotSpotFiles::from_env(), client));
     let addr = listener.local_addr()?;
     let url = dashboard_url(addr.port());
     tracing::info!(%addr, "cryptobot-gui listening (read-only)");

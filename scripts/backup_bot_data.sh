@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly archive of the Bot Spot files the SQLite backups do not cover: the decisions audit
+# Nightly archive of the Bot Spot data files: the decisions audit
 # (the only record of every trade), journal, agent state, exit-plan book and watch files,
 # the entry-timing cache and the omp session directory. Keeps the newest
 # BINANCE_BOT_BACKUP_RETENTION archives (default 14) in BINANCE_BOT_BACKUP_DIR.

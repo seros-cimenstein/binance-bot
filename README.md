@@ -1,27 +1,26 @@
 # Binance Trading Bot
 
-A Binance trading fleet written in Rust: a native Binance REST/WebSocket client,
-a bot-driven agentic Spot trader, systematic strategies (funding arb, trend
-filter, mean reversion), a capital pool with a bot allocator, a listing
-sniper, Solana launch sniping, signal collectors, and research backtests. All
-of it ships as one binary, `bb`, next to a read-only web dashboard,
-`cryptobot-gui`.
+The Bot Spot trader written in Rust: a native Binance Spot REST client,
+a bot-driven agentic Spot trader (`bb bot-spot`, LLM or rule-based decider),
+its research tools and backtests, and read-only social evidence. It ships as
+one binary, `bb`, next to a read-only web dashboard, `cryptobot-gui`.
+
+The other modules this repo used to hold (legacy runtime, paper pool runtime,
+capital pool, listing sniper, products and canaries, signals, Solana sniper,
+Polymarket, airdrop, funding arb, trend filter, mean reversion) were moved to
+`../redundancy/binance-bot-modules/` on 2026-10-29; they are also in git history.
 
 ## Layout
 
 | Crate | Purpose |
 |---|---|
 | `bb-core` | env config, `Decimal` money helpers, fsync'd JSONL audit, Telegram alerts (persisted 429 cooldown), run locks, stop files |
-| `bb-binance` | native Binance client: HMAC/Ed25519 signing, time sync, rate-limit tracking, exchange rules, spot/wallet/convert/margin/USD-M futures, fills, klines history, WebSocket streams, feeds |
+| `bb-binance` | native Binance Spot REST client: HMAC/Ed25519 signing, time sync, rate-limit tracking, exchange rules, spot market data and orders, wallet balance totals, klines history |
 | `bb-omp` | omp RPC client (LLM sessions with persistent context + host tools) |
-| `bb-trader` | `bot-spot`: the agentic Spot trader |
-| `bb-pool` | paper asset pool, market catalog, multi-leg route engine, commissions, replays, reports |
-| `bb-strategies` | funding arb, trend filter, mean reversion, all backtests, `spec-snapshot` |
-| `bb-capital` | capital pool + bot allocator, auto-convert, fleet status, cash distributor |
-| `bb-listing` | listing-announcement detector + listing sniper (flat / trailing / momentum) |
-| `bb-products` | API permissions, scope audit, margin/futures/transfer/withdrawal/prediction modelling, canaries, live probe |
-| `bb-runtime` | legacy strategy runtime (`main`, demo SMA, risk guard, order manager), `ops-check` |
-| `bb-signals`, `bb-sniper`, `bb-social`, `bb-polymarket`, `bb-airdrop` | DexScreener/Telegram/smart-money signals, Solana pump.fun sniper, social evidence, Polymarket scanner, airdrop scheduler |
+| `bb-trader` | `bot-spot`: the agentic Spot trader, exit plans, persona backtests, the Markov value model, the rule-based decider |
+| `bb-pool` | library for the trader: market catalog, commission/fee service, multi-leg route engine, models (no commands, no order path) |
+| `bb-social` | read-only social evidence (Telegram Bot API, official X API) for `get_social_evidence`, `social-signal` |
+| `bb-strategies` | bot research: `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
 | `bb-cli` | the `bb` binary |
 | `cryptobot-gui` | read-only localhost web dashboard (`cryptobot-gui` binary) |
 
@@ -35,30 +34,22 @@ cargo build --release -p bb-cli          # -> target/release/bb
 cargo build --release -p cryptobot-gui   # -> target/release/cryptobot-gui
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-scripts/pool_replay.sh                   # deterministic paper-pool fixture replay
+scripts/smoke.sh                         # bash -n on every script
 ```
 
 Copy `.env.example` to `.env` and fill in your keys. Never commit `.env` or
 `.env.*` files. `bb` loads `.env` from the working directory; process
 variables win. Logs go to stderr (`LOG_LEVEL`, `RUST_LOG`, `LOG_FORMAT=json`);
 stdout is reserved for command output.
-
 ## Commands
 
-Run `bb --help` or `bb <command> --help`. Every former `python -m src.<module>`
-entry point is now `bb <module-in-kebab-case>` with the same flags, env vars,
-defaults and data files.
+Run `bb --help` or `bb <command> --help`.
 
 | Area | Commands |
 |---|---|
-| Bot trader | `bot-spot` |
-| Live / scheduled strategies | `funding-arb`, `trend-filter`, `mean-reversion`, `listing-detector`, `listing-sniper` |
-| Capital | `capital-pool`, `auto-convert`, `bot-status`, `cash-distributor` |
-| Paper pool | `pool`, `pool-report`, `pool-replay`, `pool-history-replay`, `pool-unified` |
-| Products / diagnostics | `api-permissions`, `scope-audit`, `product-modules`, `advanced-readiness`, `margin`, `margin-canary`, `futures`, `futures-canary`, `transfers`, `transfer-canary`, `withdrawals`, `prediction`, `spot-canary`, `live-spot-allocator`, `live-probe`, `ops-check` |
-| Legacy runtime | `main` |
-| Signals / Solana / misc | `signals-*`, `sniper-*`, `social-signal`, `polymarket-scanner`, `airdrop-scheduler` |
-| Research | `*-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study`, `gcp2-history` |
+| Bot trader | `bot-spot`, `bot-spot-exit-watch`, `bot-spot-exit-replay` |
+| Bot research | `bot-spot-persona-backtest`, `bot-spot-mdp-fit`, `gcp2-history`, `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
+| Social evidence | `social-signal` |
 
 ## Bot agentic Spot trader (`bb bot-spot`)
 
@@ -226,7 +217,7 @@ interactive `omp` login (stored under `PI_CODING_AGENT_DIR`).
 
 ## Dashboard (`cryptobot-gui`)
 
-A read-only web page for the fleet, in six tabs that refresh every 30 s:
+A read-only web page for the trader, in seven tabs that refresh every 30 s:
 
 - **Overview:** portfolio value and 24h change, the bot's P&L and win rate, the
   open position, the bot's status (running / idle / stopped by the stop file /
@@ -236,18 +227,19 @@ A read-only web page for the fleet, in six tabs that refresh every 30 s:
   win rate, average win/loss, profit factor, fees and hold time; cumulative
   P&L, per-trade and daily P&L charts, outcome mix, P&L by coin and a trade
   table (click a row for the bot's reasoning); 24h / 7d / 30d / all ranges.
+- **Sessions:** results per trading session (one setup of the trader: prompt
+  version, omp session, run configuration), ranked by realized P&L, with each
+  session's configuration and the exit plans it ran.
 - **Wallet:** spot balances (free and in orders) with price, 24h change, value
   and share, Simple Earn positions, Binance wallet totals, account fees and an
   API-key safety check (withdrawals, IP restriction, extra permissions).
 - **The bot:** cycles with the bot's summaries, tool calls and cost, and its
   journal.
-- **Fleet:** every bot from `bb bot-status` with activity and P&L.
-- **Signals:** the Phase 43 X insighter (paper only): collector health (stale
-  after 5 min without a heartbeat), the focus list, 6h traction and exhaustion
-  curves of focus/hot tokens with stage changes and the latest Haiku take, the
-  newest 50 signals, and the weekly report (per-venue hit, rug and late rates,
-  lead time, arm P&L, gate criteria, paper equity curve). It reads the `x-*`
-  files in `--data-dir`; the growing JSONL files are tailed incrementally.
+- **Exits:** the Phase 45 exit plans: run settings, the plan book, running
+  plans with their sell lines, and the newest watch-log events.
+- **/biz/:** the /biz/ feed the trader read in its newest cycle (mentions,
+  posters and stance per coin, coins without a Binance market); only the
+  rule-based decider trades on it.
 
 Trade results come from the route quotes the trader logs: each submitted route
 opens a trade in the coin it bought, which closes when the bot later sells that
@@ -260,16 +252,15 @@ wins and losses.
 cryptobot-gui                                  # http://localhost:8787/
 cryptobot-gui --open                           # same, and open it in the default browser
                                                # (if one is already running, just open it)
-cryptobot-gui --bind 127.0.0.1:9000 --data-dir ~/.local/share/binance-bot/data
+cryptobot-gui --bind 127.0.0.1:9000
 ssh -L 8787:localhost:8787 <bot-host>          # view a remote box from your laptop
 ```
 
 - **Read-only.** GET routes only. It reads the Bot Spot files
-  (`BOT_SPOT_AUDIT_PATH`, `_JOURNAL_PATH`, `_STATE_PATH`, `_STOP_PATH`,
-  relative to the working directory like the trader), the fleet and X
-  insighter files under `BOT_STATUS_DATA_DIR`, and Binance through signed GETs
-  (account, 24h tickers, wallet totals, API-key restrictions; one read is
-  reused for 20 s).
+  (`BOT_SPOT_AUDIT_PATH`, `_JOURNAL_PATH`, `_STATE_PATH`, `_STOP_PATH`, the
+  exit-plan files, relative to the working directory like the trader) and
+  Binance through signed GETs (account, 24h tickers, wallet totals, API-key
+  restrictions; one read is reused for 20 s).
   It never writes a file or calls an order endpoint. Stopping the trader is
   still `touch` on the stop file.
 - **Localhost only.** It listens on `127.0.0.1:8787` (`--bind` /
@@ -278,73 +269,38 @@ ssh -L 8787:localhost:8787 <bot-host>          # view a remote box from your lap
   so don't publish it on a network interface.
 - Without Binance credentials the wallet tab stays empty and open trades are
   not marked; everything else still works.
-
-## Capital pool, bot allocator, auto-convert
-
-`bb capital-pool` shows the plan: a reserve (`CAPITAL_RESERVE_PCT`), per-module
-min/max (`CAPITAL_MIN/MAX_MODULE_ALLOCATION_USD`), and score-weighted splits
-from ledger scorecards or lifetime PnL. `--advise` asks the bot allocator,
-an omp session with fleet/scorecard/balance tools. Its proposal can only clamp
-within the deterministic bounds; any failure falls back to the deterministic
-plan.
-
-With `CAPITAL_POOL_ENABLED=true` the `main` runtime requests a lease before
-every buy. With `AUTO_CONVERT_TO_QUOTE=true` it market-sells
-`AUTO_CONVERT_ASSETS` to cover a quote shortfall, after an `order/test`.
-`bb auto-convert --plan-only` previews that conversion. `bb bot-status` and
-`bb cash-distributor` report fleet health and an advisory distribution.
-
-## Listing sniper
-
-`bb listing-detector --detect-only` polls Binance listing announcements and
-arms a shared watchlist (`LISTING_WATCHLIST_PATH`). `bb listing-sniper` diffs
-exchangeInfo against known symbols plus the watchlist and fires flat, trailing
-or momentum round trips, in paper (`--paper`) or live (`--submit-live`) mode. A
-live fire needs `LISTING_SNIPER_ENABLED=true`, `CONFIRM_LIVE_LISTING_SNIPER=yes`
-and `LISTING_SNIPER_PROVEN_EDGE=yes`, and is bounded by
-`LISTING_SNIPER_NOTIONAL_USDT` and `LISTING_SNIPER_DAILY_SPEND_CAP_USDT`.
-
-## Research and diagnostics
+## Research
 
 ```bash
-bb pool --once
-bb pool-report --db-path ~/.local/share/binance-bot/data/pool-paper.db
-bb pool-history-replay --balance BNB=0.0169745 --symbol ETH/USDT --symbol SOL/USDT \
-  --start 2026-05-20T00:00:00Z --end 2026-05-26T00:00:00Z --db-path /tmp/history-replay.db
 bb spec-snapshot                      # data/speculation/<UTC date>/ CSVs + SUMMARY.md
-bb api-permissions --feature bot_spot_autonomous
-bb scope-audit --symbol BNB/USDT --asset BNB
-bb funding-arb                        # plan-only by default
 bb bot-spot-backtest --help
+bb entry-study --help
+bb biz-lead-study --help
 ```
 
 Historical replay is for strategy research only: it uses public candles and
-modelled costs. The margin, futures, transfer, withdrawal and prediction
-modules model and plan only; their live writes are not implemented.
+modelled costs.
 
 ## Deployment
 
 Docker is the primary target (Raspberry Pi 5 / ARM64 and x86_64). The image
-contains `bb`, `omp` (on Bun), supercronic and sqlite3.
+contains `bb`, `cryptobot-gui`, `omp` (on Bun) and supercronic.
 
 ```bash
 docker compose build
 docker compose run --rm -it bot-spot omp             # one-time omp login (or set ANTHROPIC_API_KEY)
-docker compose run --rm -it signals-telegram bb signals-telegram-setup   # one-time Telegram user login
-docker compose --profile all up -d
+docker compose --profile all up -d --remove-orphans
 touch docker-data/bot-spot.stop                      # emergency stop for the bot trader
 # dashboard: http://localhost:8787 on the Docker host (published on 127.0.0.1 only)
 ```
 
 Profiles:
-- `live`: the bot trader (the only live trader) and the scheduler.
-- `paper`: paper and signal workloads plus the scheduler.
-- `all`: both of the above.
-- `v2`: the launch detector.
-- `main-bot`: the legacy SMA runtime.
-- `gui`: the `cryptobot-gui` dashboard alone (it also starts with `paper`, `live` and `all`; the data volume is mounted read-only).
-- `listing-sniper-live`: the live momentum listing sniper (off in production).
+- `live` / `all`: the bot trader, the dashboard and the scheduler.
+- `gui`: the `cryptobot-gui` dashboard alone (the data volume is mounted read-only).
+- `exit-paper`: the paper exit-plan watcher `bot-spot-exit-watch`.
+- `algo-paper`: the plan-only rule-based decider `bot-spot-algo-paper`.
 
-Periodic jobs live in `docker/crontab`. systemd user units for non-Docker
-hosts are in `deploy/user/`, installed by `scripts/setup_user_deploy.sh`. See
-`OPERATIONS.md` for backup, restore and verification procedures.
+Periodic jobs (the nightly Bot Spot data backup) live in `docker/crontab`.
+systemd user units for non-Docker hosts are in `deploy/user/`, installed by
+`scripts/setup_user_deploy.sh`. See `OPERATIONS.md` for deploy, backup and
+verification procedures.

@@ -94,6 +94,8 @@ The five best test buckets at any horizon:
 
 ## C4. Dip buying: `bb mean-reversion-backtest` sweep
 
+(The command moved to `../redundancy/binance-bot-modules/` with the 2026-10-29 prune.)
+
 Same 20 coins and windows (train 2026-07-20 09:00 to 2026-09-18 08:43, test to 2026-10-18 08:43),
 1m candles, fee 7.5 bps per side plus 5 bps slippage, 100 USDT per position, at most 5 open.
 Default exits: take profit at a 50% retrace of the dump, stop at a further -3%, or 60 minutes.

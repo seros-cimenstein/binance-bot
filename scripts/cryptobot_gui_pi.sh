@@ -51,7 +51,7 @@ port="${bind##*:}"
 if holder="$(ss -Hltnp "sport = :$port" 2>/dev/null | grep -o 'pid=[0-9]*' | head -n1 | cut -d= -f2)" \
     && [[ -n "$holder" ]] \
     && [[ "$(cat "/proc/$holder/comm" 2>/dev/null)" == "cryptobot-gui" ]] \
-    && ! tr '\0' ' ' < "/proc/$holder/cmdline" | grep -qF -- "--data-dir $MIRROR_DIR"; then
+    && ! tr '\0' '\n' 2>/dev/null < "/proc/$holder/environ" | grep -qxF -- "BOT_SPOT_AUDIT_PATH=$MIRROR_DIR/bot-spot-decisions.jsonl"; then
     echo "cryptobot-gui-pi: stopping the old dashboard on port $port (pid $holder, not on the Pi data)" >&2
     kill "$holder"
     for _ in {1..50}; do kill -0 "$holder" 2>/dev/null || break; sleep 0.1; done
@@ -110,4 +110,4 @@ refresher=$!
 trap 'kill "$refresher" 2>/dev/null || true' EXIT
 
 cd "$RUNTIME_DIR"
-"$GUI_BIN" --data-dir "$MIRROR_DIR" "$@"
+"$GUI_BIN" "$@"

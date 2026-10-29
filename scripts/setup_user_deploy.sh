@@ -5,7 +5,6 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_DIR="${BINANCE_BOT_USER_PROJECT_DIR:-$HOME/.local/share/binance-bot}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SOURCE_ENV="${BINANCE_BOT_SOURCE_ENV_FILE:-/opt/binance-bot/.env}"
-SOURCE_DB="${BINANCE_BOT_SOURCE_DB:-/opt/binance-bot/data/live.db}"
 
 echo "Staging user-owned Binance Bot in $PROJECT_DIR..."
 mkdir -p "$PROJECT_DIR" "$PROJECT_DIR/bin" "$PROJECT_DIR/data" "$PROJECT_DIR/logs" "$PROJECT_DIR/backups" "$UNIT_DIR"
@@ -29,32 +28,13 @@ if [ ! -f "$PROJECT_DIR/.env" ]; then
 fi
 chmod 0600 "$PROJECT_DIR/.env"
 
-if [ ! -f "$PROJECT_DIR/data/live.db" ] && [ -r "$SOURCE_DB" ]; then
-    staging_db="$PROJECT_DIR/data/live.db.stage.$$"
-    sqlite3 "$SOURCE_DB" ".backup '$staging_db'"
-    if [ "$(sqlite3 "$staging_db" "PRAGMA quick_check;" | tr -d '\r')" != "ok" ]; then
-        rm -f -- "$staging_db"
-        echo "Staged database failed integrity check" >&2
-        exit 1
-    fi
-    mv -f -- "$staging_db" "$PROJECT_DIR/data/live.db"
-    echo "Seeded initial user database from $SOURCE_DB."
-else
-    echo "Preserving existing user database at $PROJECT_DIR/data/live.db."
-fi
-
 if ! command -v omp >/dev/null 2>&1; then
-    echo "Warning: omp is not on PATH; bot-spot and capital-pool --advise need it (BOT_SPOT_COMMAND)." >&2
+    echo "Warning: omp is not on PATH; bot-spot needs it (BOT_SPOT_COMMAND)." >&2
 fi
 
-install -m 0644 "$SOURCE_DIR"/deploy/user/*.service "$SOURCE_DIR"/deploy/user/*.timer "$UNIT_DIR/"
+install -m 0644 "$SOURCE_DIR"/deploy/user/*.service "$UNIT_DIR/"
 systemctl --user daemon-reload
 
-if systemctl --user is-active --quiet binance-pool-paper.service; then
-    echo "Paper pool deployment refreshed. Restart binance-pool-paper.service to load updated code."
-elif systemctl --user is-active --quiet binance-bot.service; then
-    echo "Legacy trading service is active; disable it before starting binance-pool-paper.service." >&2
-else
-    echo "User deployment staged. No trading service has been started."
-    echo "Start paper evaluation with: systemctl --user enable --now binance-pool-paper.service"
-fi
+echo "User deployment staged. No service has been started or restarted."
+echo "Start the trader with: systemctl --user enable --now binance-bot-spot.service"
+echo "(if it already runs, restart it to load the new binary)."

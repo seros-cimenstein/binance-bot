@@ -1,7 +1,7 @@
 //! Symbol conversion between ccxt-style unified symbols and Binance ids.
 //!
-//! - Spot unified: `BTC/USDT`; USD-M futures unified: `BTC/USDT:USDT`.
-//! - Exchange id: `BTCUSDT`; stream name: `btcusdt`.
+//! - Spot unified: `BTC/USDT` (a ccxt futures suffix `:USDT` is accepted and dropped).
+//! - Exchange id: `BTCUSDT`.
 //!
 //! [`normalize_symbol`] keeps the exact semantics of `src/data/feeds.py`
 //! (separator handling + known quote-asset suffix inference). When exchange
@@ -107,18 +107,6 @@ pub fn exchange_id(symbol: &str) -> Result<String> {
     })
 }
 
-/// Lower-case stream name (`btcusdt`) used in `<symbol>@<stream>` names.
-pub fn stream_symbol(symbol: &str) -> Result<String> {
-    exchange_id(symbol).map(|id| id.to_lowercase())
-}
-
-/// USD-M futures unified symbol (`BTC/USDT:USDT`) from any spelling.
-pub fn futures_unified(symbol: &str) -> Result<String> {
-    let spot = normalize_symbol(symbol)?;
-    let quote = spot.rsplit('/').next().unwrap_or_default().to_owned();
-    Ok(format!("{spot}:{quote}"))
-}
-
 /// Split a unified symbol into `(base, quote)`.
 pub fn split_unified(symbol: &str) -> Result<(String, String)> {
     let normalized = normalize_symbol(symbol)?;
@@ -154,13 +142,11 @@ mod tests {
     }
 
     #[test]
-    fn exchange_and_stream_ids() -> Result<()> {
+    fn exchange_ids() -> Result<()> {
         assert_eq!(exchange_id("BTC/USDT")?, "BTCUSDT");
         assert_eq!(exchange_id("BTC/USDT:USDT")?, "BTCUSDT");
         assert_eq!(exchange_id("eth-usdt")?, "ETHUSDT");
         assert_eq!(exchange_id("BTCUSDT")?, "BTCUSDT");
-        assert_eq!(stream_symbol("BTC/USDT")?, "btcusdt");
-        assert_eq!(futures_unified("BTCUSDT")?, "BTC/USDT:USDT");
         assert_eq!(split_unified("ETH/BTC")?, ("ETH".into(), "BTC".into()));
         Ok(())
     }

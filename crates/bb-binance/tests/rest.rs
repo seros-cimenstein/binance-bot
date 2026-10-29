@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-use bb_binance::fills::FillSummary;
 use bb_binance::history::HistoryFetcher;
 use bb_binance::spot::NewOrder;
 use bb_binance::{BinanceClient, BinanceConfig, BinanceError, Credentials, ErrorKind, Side};
@@ -21,7 +20,6 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 fn client(server: &MockServer, signed: bool) -> Result<BinanceClient, BinanceError> {
     let mut config = BinanceConfig::new(false)
         .with_spot_rest_url(server.uri())
-        .with_futures_rest_url(server.uri())
         .with_retries(2, Duration::from_millis(1), Duration::from_millis(5));
     config.max_retry_after = Duration::from_secs(2);
     if signed {
@@ -284,7 +282,7 @@ async fn live_order_is_not_retried_on_ambiguous_5xx_and_errors_are_sanitised() -
 }
 
 #[tokio::test]
-async fn order_test_and_full_order_fills() -> TestResult {
+async fn order_test_and_full_order_parse() -> TestResult {
     let server = MockServer::start().await;
     mount_time(&server).await;
     Mock::given(method("POST"))
@@ -325,9 +323,9 @@ async fn order_test_and_full_order_fills() -> TestResult {
                 .client_order_id("bb-1"),
         )
         .await?;
-    let fills = FillSummary::from_order(&order);
-    assert_eq!(fills.avg_price, Some(dec!(60000.5)));
-    assert_eq!(fills.net_base_received("BTC"), dec!(0.0000999));
+    assert_eq!(order.executed_qty, dec!(0.0001));
+    assert_eq!(order.fills.len(), 1);
+    assert_eq!(order.fills[0].commission, dec!(0.0000001));
     Ok(())
 }
 
@@ -456,44 +454,5 @@ async fn history_sorts_partial_page_normalises_symbol_and_rejects_bad_range() ->
         .err()
         .ok_or("expected error")?;
     assert!(err.to_string().contains("start_time"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn futures_premium_index_and_leverage_brackets_parse() -> TestResult {
-    let server = MockServer::start().await;
-    mount_time(&server).await;
-    Mock::given(method("GET"))
-        .and(path("/fapi/v1/time"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({ "serverTime": Utc::now().timestamp_millis() })),
-        )
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/fapi/v1/premiumIndex"))
-        .and(query_param("symbol", "BTCUSDT"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "symbol": "BTCUSDT", "markPrice": "11793.63104562", "indexPrice": "11781.80495970",
-            "estimatedSettlePrice": "11781.16138815", "lastFundingRate": "0.00038246", "interestRate": "0.00010000",
-            "nextFundingTime": 1597392000000_i64, "time": 1597370495002_i64
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/fapi/v1/leverageBracket"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "symbol": "ETHUSDT", "notionalCoef": 1.5,
-            "brackets": [{"bracket": 1, "initialLeverage": 75, "notionalCap": 10000, "notionalFloor": 0, "maintMarginRatio": 0.0065, "cum": 0}]
-        })))
-        .mount(&server)
-        .await;
-    let client = client(&server, true)?;
-    let premium = client.premium_index("BTC/USDT:USDT").await?;
-    assert_eq!(premium.last_funding_rate, dec!(0.00038246));
-    let brackets = client.leverage_brackets(Some("ETH/USDT:USDT")).await?;
-    assert_eq!(brackets[0].brackets[0].maint_margin_ratio, dec!(0.0065));
-    assert_eq!(brackets[0].brackets[0].initial_leverage, 75);
     Ok(())
 }

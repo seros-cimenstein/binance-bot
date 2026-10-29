@@ -1,62 +1,42 @@
 # Binance Bot Progress
 
 Current state only; rewrite it, do not append (`CODEX.md`, "Required
-Workflow"). History: git log, `docs/decisions.md`, and the old log in
-`docs/archive/progress-2026-05-25_to_2026-10-29.md`.
+Workflow"). History: git log, `docs/decisions.md`, `docs/archive/`.
 
 Updated 2026-10-29.
 
+## Direction
+
+The trader becomes a nonstop algorithm: Binance data plus /biz/ scores from
+biz-app, no LLM, no chat, no timer, no Telegram (`docs/decisions.md`,
+"2026-10-29 algorithm trader"). Plan: `IMPLEMENTATION_PLAN.md`, Phase 52.
+
 ## Live trader
 
-- Bot Spot (`bot-spot` on the Pi, `ssh pi-wired`, `~/binance-bot`, env
+- `bot-spot` on the Pi (`ssh pi-wired`, `~/binance-bot`, env
   `.env.docker`, data `docker-data/`) is **stopped** since 2026-10-22 05:00
-  UTC (operator: "stop the bot aight"). `docker compose stop`, exit 0. No stop
-  file exists. No open position: about 17.41 USDT, 15.05 of it USDT cash, plus
-  BNB and dust.
-- The deployed image is still `bot-spot-v17-schizo` with `BOT_SPOT_DECIDER`
-  unset (`llm`); the Phase 51 code is not on the Pi. Restarting it now would
-  run the v17 LLM trader: `cd ~/binance-bot && docker compose up -d bot-spot`.
-- Rollback tags on the Pi: `binance-bot:pre-v17-20261021` (v16),
-  `binance-bot:pre-v16-20261020` (v15), `binance-bot:pre-c4-20261020` (v14).
-- Every other live runtime is off since 2026-10-12 (`OPERATIONS.md`, "Live
-  Posture").
+  UTC. No open position: about 17.41 USDT, 15.05 of it USDT cash, plus BNB
+  and dust. No stop file exists.
+- The Pi still has the old LLM trader image. Do not start it: `docker compose
+  up -d` with no service names, or a Pi reboot (the boot unit
+  `binance-bot-compose.service` runs `--profile all up -d`), would start it.
+- The Pi also runs the old compose file. The next deploy uses
+  `docker compose --profile all up -d --remove-orphans`, or names the
+  services (`... up -d --remove-orphans cryptobot-gui scheduler`) while the
+  trader must stay stopped (`OPERATIONS.md`, "Docker").
 
-## Active work: Phase 51, /biz/ feed and rule-based decider
+## Repo
 
-Plan and boxes: `IMPLEMENTATION_PLAN.md`, Phase 51. Rules: `CODEX.md`,
-"Phase 51 rule-based decider". Commit `4a31d5f`.
-
-- Done in code: `bb biz-lead-study`, `crate::biz` (feed read every cycle,
-  audit field `biz`), `crate::decider` and the `biz_algo` backtest persona,
-  `BOT_SPOT_DECIDER=llm|algo`, compose service `bot-spot-algo-paper`
-  (profile `algo-paper`, plan-only), `scripts/biz_feed_to_pi.sh`, dashboard
-  /biz/ tab.
-- Verified 2026-10-29: `cargo check -p bb-trader -p bb-strategies -p
-  cryptobot-gui --all-targets` passed; `cargo test -p bb-trader -p
-  bb-strategies` passed (0 failed). The full workspace suite, clippy and the
-  smoke scripts have not been run on this code yet.
-- Blocked: biz-app (`~/projects/automation/imageboards/biz-app`, outside this
-  repository) does not write `biz-feed-v1` yet (Levels 1-2), so there are no
-  feeds to run the lead study or the `biz_algo` backtest on, and the algo
-  weights have no evidence behind them.
+- Pruned to the trader on 2026-10-29 (`docs/decisions.md`); the moved modules
+  are in `../redundancy/binance-bot-modules/`.
+- The code is still the LLM trader; Phase 52 removes it and builds the
+  algorithm. `README.md` and `OPERATIONS.md` describe the code as it is until
+  then.
 
 ## Next steps
 
-1. biz-app: `biz-insights feed` and `--history --step 60`.
-2. Run `bb biz-lead-study` and the `biz_algo` backtest on the real history;
-   record the `@newer` verdict in `IMPLEMENTATION_PLAN.md`.
-3. Full checks (`cargo test --workspace`, clippy `-D warnings`,
-   `scripts/smoke.sh`, `scripts/pool_replay.sh`), then deploy Level 3 to the
-   Pi and start the feed copier.
-4. `bot-spot-algo-paper` practice run. Going live needs the operator's go and
-   a rollback tag `binance-bot:pre-algo-<date>`.
-
-## Other open items
-
-- Phase 43 X collector: image built and launch-tested on the Pi; not
-  collecting (no burner login there, service not started).
-- The laptop's untracked `.env.docker` still has
-  `BOT_SPOT_MARKET_PICK_MODE=small_market_aggressive` (the Pi has
-  `liquid_top_value`); deploys never copy it.
-- Phase 50 note: refit the Markov model (`bb bot-spot-mdp-fit`) when the
-  candle cache is extended.
+1. Decide the algorithm's rules and the live price source with the operator
+   (Phase 52, "Decide with the operator").
+2. Remove the old trader code (Phase 52, "Remove the old trader").
+3. biz-app writes `biz-feed-v1` and its hourly history; run the lead study.
+4. Build the nonstop trader and its backtest, then a plan-only run on the Pi.

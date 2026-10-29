@@ -10,14 +10,6 @@ use crate::error::{BinanceError, Result};
 pub struct Endpoints {
     /// Spot REST + `sapi` (`https://api.binance.com`).
     pub spot_rest: String,
-    /// USD-M futures REST (`https://fapi.binance.com`).
-    pub futures_rest: String,
-    /// Spot market streams (`wss://stream.binance.com:9443`).
-    pub spot_ws_stream: String,
-    /// Spot WebSocket API used for the user-data stream.
-    pub spot_ws_api: String,
-    /// USD-M futures market streams (`wss://fstream.binance.com`).
-    pub futures_ws_stream: String,
 }
 
 impl Endpoints {
@@ -25,21 +17,13 @@ impl Endpoints {
     pub fn mainnet() -> Self {
         Self {
             spot_rest: "https://api.binance.com".into(),
-            futures_rest: "https://fapi.binance.com".into(),
-            spot_ws_stream: "wss://stream.binance.com:9443".into(),
-            spot_ws_api: "wss://ws-api.binance.com:443/ws-api/v3".into(),
-            futures_ws_stream: "wss://fstream.binance.com".into(),
         }
     }
 
-    /// Spot testnet (`testnet.binance.vision`) and futures testnet endpoints.
+    /// Spot testnet endpoints (`testnet.binance.vision`).
     pub fn testnet() -> Self {
         Self {
             spot_rest: "https://testnet.binance.vision".into(),
-            futures_rest: "https://testnet.binancefuture.com".into(),
-            spot_ws_stream: "wss://stream.testnet.binance.vision".into(),
-            spot_ws_api: "wss://ws-api.testnet.binance.vision/ws-api/v3".into(),
-            futures_ws_stream: "wss://fstream.binancefuture.com".into(),
         }
     }
 
@@ -56,7 +40,7 @@ impl Endpoints {
 /// Env names for the testnet flag (`USE_TESTNET`, legacy `BINANCE_TESTNET`).
 pub const TESTNET_ENV: [&str; 2] = ["USE_TESTNET", "BINANCE_TESTNET"];
 
-/// Runtime settings for [`crate::BinanceClient`] and the WebSocket manager.
+/// Runtime settings for [`crate::BinanceClient`].
 ///
 /// Defaults mirror the Python client: `recvWindow` 10 000 ms, 4 retries,
 /// 0.5 s → 8 s exponential backoff, client-side budget of 1 100 weight / 60 s.
@@ -131,30 +115,6 @@ impl BinanceConfig {
     /// Override the spot/sapi REST base URL.
     pub fn with_spot_rest_url(mut self, url: impl Into<String>) -> Self {
         self.endpoints.spot_rest = trim_url(url.into());
-        self
-    }
-
-    /// Override the USD-M futures REST base URL.
-    pub fn with_futures_rest_url(mut self, url: impl Into<String>) -> Self {
-        self.endpoints.futures_rest = trim_url(url.into());
-        self
-    }
-
-    /// Override the spot market-stream base URL.
-    pub fn with_spot_ws_stream_url(mut self, url: impl Into<String>) -> Self {
-        self.endpoints.spot_ws_stream = trim_url(url.into());
-        self
-    }
-
-    /// Override the spot WebSocket API URL (user-data stream).
-    pub fn with_spot_ws_api_url(mut self, url: impl Into<String>) -> Self {
-        self.endpoints.spot_ws_api = trim_url(url.into());
-        self
-    }
-
-    /// Override the futures market-stream base URL.
-    pub fn with_futures_ws_stream_url(mut self, url: impl Into<String>) -> Self {
-        self.endpoints.futures_ws_stream = trim_url(url.into());
         self
     }
 

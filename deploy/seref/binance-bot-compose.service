@@ -1,5 +1,5 @@
 [Unit]
-Description=Bring up Binance bot docker-compose fleet on boot
+Description=Bring up the Binance Bot Spot docker-compose services on boot
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target

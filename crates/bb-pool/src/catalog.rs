@@ -5,7 +5,6 @@ use std::collections::{BinaryHeap, HashMap};
 
 use rust_decimal::Decimal;
 
-use crate::config::PoolSettings;
 use crate::error::Result;
 use crate::models::MarketSnapshot;
 use crate::source::{MarketRules, MarketSource, TickerQuote};
@@ -14,7 +13,7 @@ const BPS: Decimal = Decimal::from_parts(10_000, 0, 0, false, 0);
 const VOLUME_RATE_MAX_LEGS: usize = 3;
 const VOLUME_RATE_MAX_EXPANSIONS: usize = 20_000;
 
-/// Eligibility thresholds (subset of [`PoolSettings`]).
+/// Eligibility thresholds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatalogConfig {
     /// Minimum 24h quote volume valued in USDT.
@@ -25,17 +24,6 @@ pub struct CatalogConfig {
     pub ticker_stale_seconds: f64,
     /// Bound on [`MarketCatalog::scoring_assets`]; `0` = unbounded.
     pub max_scoring_assets: usize,
-}
-
-impl From<&PoolSettings> for CatalogConfig {
-    fn from(settings: &PoolSettings) -> Self {
-        Self {
-            min_quote_volume_usdt: settings.min_quote_volume_usdt,
-            max_spread_bps: settings.max_spread_bps,
-            ticker_stale_seconds: settings.ticker_stale_seconds,
-            max_scoring_assets: settings.max_scoring_assets,
-        }
-    }
 }
 
 /// Classified Binance spot-market universe, in exchange order.

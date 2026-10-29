@@ -1,9 +1,8 @@
 //! Core REST transport: signing, server-time sync, retries, rate limits.
 //!
-//! Every typed endpoint in [`crate::spot`], [`crate::wallet`], [`crate::convert`],
-//! [`crate::margin`] and [`crate::futures`] is a thin wrapper around
-//! [`BinanceClient::request`], which callers may also use directly for
-//! endpoints without a typed wrapper.
+//! Every typed endpoint in [`crate::spot`] and [`crate::wallet`] is a thin wrapper around
+//! [`BinanceClient::request`], which callers may also use directly for endpoints without
+//! a typed wrapper.
 
 use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -26,22 +25,18 @@ use crate::ratelimit::{RateLimitUsage, WeightLimiter, backoff_delay};
 pub enum Api {
     /// `api.binance.com`: `/api/*` and `/sapi/*`.
     Spot,
-    /// `fapi.binance.com`: `/fapi/*` (USD-M futures).
-    Futures,
 }
 
 impl Api {
     fn index(self) -> usize {
         match self {
             Self::Spot => 0,
-            Self::Futures => 1,
         }
     }
 
     fn time_path(self) -> &'static str {
         match self {
             Self::Spot => "/api/v3/time",
-            Self::Futures => "/fapi/v1/time",
         }
     }
 }
@@ -197,8 +192,8 @@ struct Inner {
     http: reqwest::Client,
     config: BinanceConfig,
     limiter: WeightLimiter,
-    clocks: [Clock; 2],
-    usage: Mutex<[RateLimitUsage; 2]>,
+    clocks: [Clock; 1],
+    usage: Mutex<[RateLimitUsage; 1]>,
     blocked_until: Mutex<Option<Instant>>,
     markets: MarketsCache,
 }
@@ -420,7 +415,6 @@ impl BinanceClient {
     fn base_url(&self, api: Api) -> &str {
         match api {
             Api::Spot => &self.inner.config.endpoints.spot_rest,
-            Api::Futures => &self.inner.config.endpoints.futures_rest,
         }
     }
 

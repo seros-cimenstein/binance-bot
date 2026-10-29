@@ -5,9 +5,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 
 use crate::error::{BinanceError, Result};
-use crate::futures::RangeQuery;
 use crate::models::{Kline, Ohlcv};
-use crate::rest::{Api, BinanceClient};
+use crate::rest::BinanceClient;
 use crate::symbols::exchange_id;
 
 /// Rows per page requested from Binance.
@@ -17,7 +16,6 @@ pub const PAGE_LIMIT: u32 = 1_000;
 #[derive(Debug, Clone)]
 pub struct HistoryFetcher {
     client: BinanceClient,
-    api: Api,
     limit: u32,
 }
 
@@ -26,16 +24,6 @@ impl HistoryFetcher {
     pub fn spot(client: BinanceClient) -> Self {
         Self {
             client,
-            api: Api::Spot,
-            limit: PAGE_LIMIT,
-        }
-    }
-
-    /// USD-M futures klines (`/fapi/v1/klines`).
-    pub fn futures(client: BinanceClient) -> Self {
-        Self {
-            client,
-            api: Api::Futures,
             limit: PAGE_LIMIT,
         }
     }
@@ -74,29 +62,16 @@ impl HistoryFetcher {
         let mut page_number = 0u32;
         while end_ms.is_none_or(|e| next_start <= e) {
             page_number += 1;
-            let range = RangeQuery {
-                start_time: Some(next_start),
-                end_time: end_ms,
-                limit: Some(self.limit),
-            };
-            let mut page = match self.api {
-                Api::Spot => {
-                    self.client
-                        .klines(
-                            &rest_symbol,
-                            interval,
-                            range.start_time,
-                            range.end_time,
-                            range.limit,
-                        )
-                        .await?
-                }
-                Api::Futures => {
-                    self.client
-                        .futures_klines(&rest_symbol, interval, &range)
-                        .await?
-                }
-            };
+            let mut page = self
+                .client
+                .klines(
+                    &rest_symbol,
+                    interval,
+                    Some(next_start),
+                    end_ms,
+                    Some(self.limit),
+                )
+                .await?;
             if page.is_empty() {
                 tracing::info!(symbol = %rest_symbol, page_number, total_klines = by_open_time.len(), "No klines returned; stopping history fetch");
                 break;

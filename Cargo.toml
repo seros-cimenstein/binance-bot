@@ -35,14 +35,6 @@ bb-social = { path = "crates/bb-social" }
 bb-pool = { path = "crates/bb-pool" }
 bb-trader = { path = "crates/bb-trader" }
 bb-strategies = { path = "crates/bb-strategies" }
-bb-runtime = { path = "crates/bb-runtime" }
-bb-products = { path = "crates/bb-products" }
-bb-capital = { path = "crates/bb-capital" }
-bb-listing = { path = "crates/bb-listing" }
-bb-signals = { path = "crates/bb-signals" }
-bb-sniper = { path = "crates/bb-sniper" }
-bb-airdrop = { path = "crates/bb-airdrop" }
-bb-polymarket = { path = "crates/bb-polymarket" }
 
 # runtime
 tokio = { version = "1", features = ["full"] }
@@ -50,9 +42,8 @@ tokio-util = "0.7"
 futures = "0.3"
 async-trait = "0.1"
 
-# http / ws
+# http
 reqwest = { version = "0.13", features = ["json", "gzip", "query", "form"] }
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 url = "2"
 axum = "0.8"
 
@@ -65,14 +56,12 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 csv = "1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
 
 # crypto / encoding
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
-bs58 = "0.5"
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 rand = "0.8"
 
