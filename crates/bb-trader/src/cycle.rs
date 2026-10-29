@@ -14,10 +14,11 @@ use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::agent::{TraderAgent, TurnReport, cycle_prompt};
+use crate::agent::{TraderAgent, cycle_prompt};
 use crate::alerts::{Alerter, BRAIN_UNAVAILABLE};
 use crate::audit::{
-    AgentRecord, AuditLog, AuditRow, Decision, EndCycle, RowStatus, RowType, failed_route_halt,
+    AgentRecord, AttemptEntry, AuditLog, AuditRow, Decision, EndCycle, RowStatus, RowType,
+    ToolCallEntry, UsageEntry, failed_route_halt,
 };
 use crate::config::TraderConfig;
 use crate::context::{DecisionContext, decimal_json, execution_invariants, route_scope};
@@ -33,6 +34,31 @@ use crate::universe::{
 
 /// The exit-plan watcher saves its state every few seconds; older state means it is down.
 const EXIT_WATCHER_STALE_MS: i64 = 60_000;
+
+/// What one cycle turn produced.
+#[derive(Debug, Clone, Default)]
+pub struct TurnReport {
+    /// `completed`, `aborted`, `error`, `timeout` or `crashed`.
+    pub status: String,
+    pub error: Option<String>,
+    pub final_text: Option<String>,
+    /// Every tool call of the cycle (failed attempts first).
+    pub tool_calls: Vec<ToolCallEntry>,
+    /// Usage summed over every attempt.
+    pub usage: UsageEntry,
+    /// `provider/model-id` that produced the final outcome (empty = the configured model).
+    pub model: String,
+    /// Thinking level of `model` (empty = the configured level).
+    pub thinking: String,
+    /// Failures that moved this cycle to another model (compactions and turn attempts).
+    pub attempts: Vec<AttemptEntry>,
+    /// `model` is not the primary.
+    pub fallback_active: bool,
+    /// `Some(true)`: the turn failed on every configured model (no orders were placed);
+    /// `Some(false)`: a model completed the turn; `None`: neither (shutdown, aborted, or a
+    /// retry refused because the failed attempt called `execute_route`).
+    pub all_models_failed: Option<bool>,
+}
 
 /// Whether `execute_route` may place orders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

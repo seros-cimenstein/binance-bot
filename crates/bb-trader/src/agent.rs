@@ -19,7 +19,7 @@ use crate::alerts::BRAIN_UNAVAILABLE;
 use crate::audit::{AttemptEntry, ToolCallEntry, UsageEntry};
 use crate::config::{ModelSpec, TraderConfig};
 use crate::context::{DecisionContext, MISSION, execution_invariants};
-use crate::cycle::CycleMode;
+use crate::cycle::{CycleMode, TurnReport};
 use crate::error::{Result, TraderError};
 use crate::journal::{JournalEntry, LastCycle};
 use crate::tools::tool_definitions;
@@ -637,31 +637,6 @@ get_klines, get_social_evidence, get_trade_history, journal_read",
 call end_cycle.\n",
     );
     out
-}
-
-/// What one cycle turn produced.
-#[derive(Debug, Clone, Default)]
-pub struct TurnReport {
-    /// `completed`, `aborted`, `error`, `timeout` or `crashed`.
-    pub status: String,
-    pub error: Option<String>,
-    pub final_text: Option<String>,
-    /// Every tool call of the cycle (failed attempts first).
-    pub tool_calls: Vec<ToolCallEntry>,
-    /// Usage summed over every attempt.
-    pub usage: UsageEntry,
-    /// `provider/model-id` that produced the final outcome (empty = the configured model).
-    pub model: String,
-    /// Thinking level of `model` (empty = the configured level).
-    pub thinking: String,
-    /// Failures that moved this cycle to another model (compactions and turn attempts).
-    pub attempts: Vec<AttemptEntry>,
-    /// `model` is not the primary.
-    pub fallback_active: bool,
-    /// `Some(true)`: the turn failed on every configured model (no orders were placed);
-    /// `Some(false)`: a model completed the turn; `None`: neither (shutdown, aborted, or a
-    /// retry refused because the failed attempt called `execute_route`).
-    pub all_models_failed: Option<bool>,
 }
 
 impl TurnReport {
