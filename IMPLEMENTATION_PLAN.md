@@ -57,11 +57,24 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
   `BOT_SPOT_BIZ_MAX_AGE_MINUTES`) and the copier `scripts/biz_feed_to_pi.sh`.
 - [x] `bb biz-lead-study`: the move after each feed against the same coin's
   random hours, older and newer half.
-- [ ] biz-app, outside this repo: `biz-insights feed` writes
+- [x] biz-app, outside this repo: `biz-insights feed` writes
   `out/biz-feed.json`; `biz-insights feed --history --step 60` writes one
-  feed per hour into `out/biz-feed-history/`.
-- [ ] Run `bb biz-lead-study` on the real feed history and record the verdict
-  here.
+  feed per hour into `out/biz-feed-history/`; `feed --watch` keeps the live
+  feed fresh (`LOOP_ALGO.md` D1-D3).
+- [x] Run `bb biz-lead-study` on the real feed history and record the verdict
+  here. Verdict (2026-10-29, `reports/biz_lead_study_2026-10-29.{md,csv}`):
+  no lead. The window is short: 590 hourly feeds from 2026-10-01 to
+  2026-10-25T13:00Z (24.5 days; older half to 2026-10-13T06:31Z), 30 coins,
+  17,700 coin-feed samples, one AI reader (gemini-3.8-flash, `stance-1`), and
+  poster IDs only on most posts from 2026-10-22. Of 45 signal buckets (24h
+  talk rank, 6h-vs-24h talk surge, 6h and 24h stance; +1h/+6h/+24h), none has
+  an excess over the coin's own random hours with |t_c| >= 2 in the older
+  half. In the newer half only "24h stance bearish" does (+0.05% at +1h, t_c
+  2.4; +0.29% at +6h, t_c 2.2): contrarian, and the older half has the other
+  sign (-0.03% at +6h). Nothing holds in both halves. After the 15 bps fee 88
+  of the 90 half-period bucket rows lose on average; the two that gain (24h
+  talk rank 11+, older, +24h: +0.13%; 6h stance untagged, newer, +24h, n=48:
+  +0.17%) lose in the other half (-1.48%, -2.02%). Thin evidence either way.
 - [ ] Nonstop trader: reacts to new prices and new feeds, runs the chosen
   rules, orders only through the route path with every hard-safety item,
   writes an audit row per decision and per route.
