@@ -2,7 +2,7 @@
 //!
 //! One long-lived omp RPC session per trader (persistent session dir, resumed after
 //! restarts) decides; host tools are its only hands. Trading guardrails are gone — costs,
-//! evidence, social data and trade memory are information — while hard safety stays in
+//! evidence and trade memory are information — while hard safety stays in
 //! [`executor`] (arming, stop file, run lock, permissions, order-test, filters, sizing,
 //! reconciliation, failed-route halt, scope, Spot MARKET only, ≤ 3 legs).
 //!

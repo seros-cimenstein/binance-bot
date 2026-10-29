@@ -23,9 +23,6 @@ pub enum TraderError {
     /// omp agent failure.
     #[error(transparent)]
     Agent(#[from] bb_omp::OmpError),
-    /// Social evidence failure.
-    #[error(transparent)]
-    Social(#[from] bb_social::SocialSignalError),
     /// Audit / journal write failure.
     #[error(transparent)]
     Audit(#[from] bb_core::audit::AuditError),

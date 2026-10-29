@@ -15,7 +15,6 @@ path = "src/main.rs"
 
 [dependencies]
 bb-core.workspace = true
-bb-social.workspace = true
 bb-strategies.workspace = true
 bb-trader.workspace = true
 anyhow.workspace = true

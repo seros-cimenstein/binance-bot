@@ -166,8 +166,7 @@ coding agent, npm `@oh-my-pi/pi-coding-agent`) in RPC mode.
 - **Host tools plus web search.** omp runs with all built-in tools disabled
   except `web_search` (`BOT_SPOT_WEB_SEARCH`, default true; set false for
   `--no-tools`). The bot acts through the bot's host tools `get_portfolio`,
-  `list_routes`, `get_market_evidence`, `get_klines`, `get_social_evidence`,
-  `get_trade_history`, `execute_route`, `journal_read` / `journal_write`, and
+  `list_routes`, `get_market_evidence`, `get_klines`, `get_trade_history`, `execute_route`, `journal_read` / `journal_write`, and
   `end_cycle`. `execute_route` is the only order path.
 
 The route table shows two costs per route. "Quoted friction" is what the
@@ -191,7 +190,7 @@ never a gate.
 ### Trading guardrails removed
 
 By operator decision Bot Spot has no trading guardrails. Fees, spread,
-slippage, momentum, market evidence, social data and trade memory are
+slippage, momentum, market evidence and trade memory are
 information the bot weighs; none of them blocks a trade. Removed: the
 edge/market-evidence minimum, the friction cap, speculative mode, the
 loss-streak limit, the trade cooldown, the daily trade cap, the proven-edge

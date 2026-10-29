@@ -68,6 +68,8 @@ pub const REMOVED_VARS: &[&str] = &[
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
     "TELEGRAM_COOLDOWN_PATH",
+    // Phase 52: no social-signal (Telegram/X) evidence; /biz/ comes from the biz-app feed.
+    "SOCIAL_SIGNAL_ENABLED",
 ];
 
 /// How destination assets are picked for the candidate table.

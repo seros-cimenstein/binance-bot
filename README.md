@@ -2,7 +2,7 @@
 
 The Bot Spot trader written in Rust: a native Binance Spot REST client,
 a bot-driven agentic Spot trader (`bb bot-spot`, LLM or rule-based decider),
-its research tools and backtests, and read-only social evidence. It ships as
+and its research tools and backtests. It ships as
 one binary, `bb`, next to a read-only web dashboard, `cryptobot-gui`.
 
 The other modules this repo used to hold (legacy runtime, paper pool runtime,
@@ -19,7 +19,6 @@ Polymarket, airdrop, funding arb, trend filter, mean reversion) were moved to
 | `bb-omp` | omp RPC client (LLM sessions with persistent context + host tools) |
 | `bb-trader` | `bot-spot`: the agentic Spot trader, exit plans, persona backtests, the Markov value model, the rule-based decider |
 | `bb-pool` | library for the trader: market catalog, commission/fee service, multi-leg route engine, models (no commands, no order path) |
-| `bb-social` | read-only social evidence (Telegram Bot API, official X API) for `get_social_evidence`, `social-signal` |
 | `bb-strategies` | bot research: `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
 | `bb-cli` | the `bb` binary |
 | `cryptobot-gui` | read-only localhost web dashboard (`cryptobot-gui` binary) |
@@ -49,7 +48,6 @@ Run `bb --help` or `bb <command> --help`.
 |---|---|
 | Bot trader | `bot-spot`, `bot-spot-exit-watch`, `bot-spot-exit-replay` |
 | Bot research | `bot-spot-persona-backtest`, `bot-spot-mdp-fit`, `gcp2-history`, `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
-| Social evidence | `social-signal` |
 
 ## Bot agentic Spot trader (`bb bot-spot`)
 
@@ -64,12 +62,12 @@ The bot trades the Spot wallet through omp (the oh-my-pi coding agent, npm
 - **Tools, not text.** omp runs with every built-in tool disabled except
   `web_search` (`BOT_SPOT_WEB_SEARCH=true`, the default), so the bot has live
   web search plus the bot's host tools: `get_portfolio`, `list_routes`,
-  `get_market_evidence`, `get_klines`, `get_social_evidence`, `get_trade_history`,
+  `get_market_evidence`, `get_klines`, `get_trade_history`,
   `execute_route`, `journal_read` / `journal_write`, and `end_cycle`. No shell or
   filesystem access. `execute_route` is the only order path. Web results are
   treated as untrusted data in the system prompt.
-- **No trading guardrails.** Fees, spread, slippage, momentum, evidence, social
-  data and trade memory are information for the bot to weigh. None of them blocks
+- **No trading guardrails.** Fees, spread, slippage, momentum, evidence and
+  trade memory are information for the bot to weigh. None of them blocks
   a trade. The old edge, friction, speculative, loss-streak, cooldown,
   daily-cap, proven-edge and rules-engine gates are gone. Their env vars are
   ignored, with one warning listing them. There are no stop-loss or

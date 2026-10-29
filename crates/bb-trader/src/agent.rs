@@ -139,8 +139,8 @@ spend_amount), and run several routes in one cycle.\n\
 {style}\
 - Trading costs are real and shown to you per route (expected one-way cost in bps = effective fee + half spread; quoted friction \
 includes the sizing reserve). Weigh them against the move you expect; they are information, not rules.\n\
-- Market breadth, market evidence (returns over 5m/15m/1h/4h/24h/7d, volatility, volume change, relative momentum), social \
-evidence, trade memory and your record are information for your judgement. Nothing blocks a route on their behalf.\n\
+- Market breadth, market evidence (returns over 5m/15m/1h/4h/24h/7d, volatility, volume change, relative momentum), trade memory \
+and your record are information for your judgement. Nothing blocks a route on their behalf.\n\
 - Write down every thesis (why, expected move, horizon) with journal_write, and review open theses at the \
 start of each cycle. Record lessons from closed trades.\n\
 {value_rule}\
@@ -629,7 +629,7 @@ fee (BNB discount when held) plus half the spread, per side.\n");
     }
     out.push_str(
         "\nDeeper data: get_portfolio, list_routes (any source/destination, fresh quotes), get_market_evidence, \
-get_klines, get_social_evidence, get_trade_history, journal_read",
+get_klines, get_trade_history, journal_read",
     );
     if config.web_search {
         out.push_str(", web_search (news and catalysts)");

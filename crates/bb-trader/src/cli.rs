@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use bb_binance::{BinanceClient, BinanceConfig, Credentials};
 use bb_omp::CancellationToken;
-use bb_social::SocialSettings;
 use serde_json::json;
 
 use crate::audit::{DEFAULT_REVIEW_REASON, mark_failed_route_reviewed};
@@ -161,12 +160,10 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
         // Hard safety: refuse before any LLM call, lock or order.
         config.check_live_arming()?;
     }
-    let social = SocialSettings::from_env()?;
     let runtime = Arc::new(Runtime::new(
         Arc::clone(&config),
         mode,
         binance_client(&config)?,
-        Some(social),
     ));
     let _ = runtime
         .run_config

@@ -98,15 +98,6 @@ pub fn tool_definitions(config: &TraderConfig) -> Vec<HostTool> {
             ),
         ),
         HostTool::new(
-            "get_social_evidence",
-            "Social evidence",
-            "Social-signal summaries (mentions, bullish/bearish balance, manipulation-risk score) per asset; status disabled when collection is off.",
-            object(
-                json!({"assets": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}}),
-                &["assets"],
-            ),
-        ),
-        HostTool::new(
             "get_trade_history",
             "Trade history",
             "Outcomes of submitted routes from the audit log (entry/exit/current USDT value, pnl bps, status). limit 1-50 (default 8).",
@@ -305,7 +296,6 @@ impl TraderTools {
             "list_routes" => self.list_routes(parse(arguments)?).await,
             "get_market_evidence" => self.get_market_evidence(parse(arguments)?).await,
             "get_klines" => self.get_klines(parse(arguments)?).await,
-            "get_social_evidence" => self.get_social_evidence(parse(arguments)?),
             "get_trade_history" => self.get_trade_history(parse(arguments)?).await,
             "execute_route" => self.execute_route(parse(arguments)?).await,
             "journal_write" => self.journal_write(parse(arguments)?).await,
@@ -458,21 +448,6 @@ impl TraderTools {
         Ok(
             json!({"symbol": symbol, "interval": interval, "columns": ["open_time_ms", "open", "high", "low", "close", "volume"], "rows": rows}),
         )
-    }
-
-    fn get_social_evidence(&self, args: AssetsArgs) -> ToolResult {
-        let assets = normalized_assets(&args.assets, 20)?;
-        match self.runtime.social.as_ref().filter(|s| s.enabled) {
-            None => Ok(json!(
-                assets
-                    .into_iter()
-                    .map(|a| (a, json!({"status": "disabled"})))
-                    .collect::<BTreeMap<_, _>>()
-            )),
-            Some(settings) => bb_social::load_evidence(settings, &assets)
-                .map(|evidence| json!(evidence))
-                .map_err(|e| format!("social evidence failed: {e}")),
-        }
     }
 
     async fn get_trade_history(&self, args: LimitArgs) -> ToolResult {

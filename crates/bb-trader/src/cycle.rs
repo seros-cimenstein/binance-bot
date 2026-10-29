@@ -9,7 +9,6 @@ use std::time::Duration;
 use bb_binance::BinanceClient;
 use bb_omp::CancellationToken;
 use bb_pool::CommissionService;
-use bb_social::SocialSettings;
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -119,7 +118,6 @@ pub struct Runtime {
     pub audit: AuditLog,
     pub journal: Journal,
     pub evidence: EvidenceService,
-    pub social: Option<SocialSettings>,
     /// Live GCP2 reader (`None` unless `BOT_SPOT_GCP2_ENABLED`).
     pub gcp2: Option<crate::gcp2::Gcp2LiveReader>,
     pub(crate) cycle: Mutex<Option<CycleState>>,
@@ -135,7 +133,6 @@ impl Runtime {
         config: Arc<TraderConfig>,
         mode: CycleMode,
         client: BinanceClient,
-        social: Option<SocialSettings>,
     ) -> Self {
         let evidence = EvidenceService::new(
             bb_binance::history::HistoryFetcher::spot(client.clone()),
@@ -148,7 +145,6 @@ impl Runtime {
             evidence,
             mode,
             client,
-            social,
             gcp2: config.gcp2_enabled.then(|| {
                 crate::gcp2::Gcp2LiveReader::new(&config.gcp2_base_url, crate::gcp2::LIVE_TIMEOUT)
             }),
@@ -229,7 +225,7 @@ impl Runtime {
         Some(record)
     }
 
-    /// Catalog, balances, candidate routes, evidence, social evidence, trade memory, GCP2,
+    /// Catalog, balances, candidate routes, evidence, trade memory, GCP2,
     /// the schizo state, the long-term value voice and the /biz/ feed.
     pub async fn build_snapshot(&self) -> Result<Snapshot> {
         let balances = self.balances().await?;
@@ -258,21 +254,6 @@ impl Runtime {
         } else {
             None
         };
-        if let Some(settings) = self.social.as_ref().filter(|s| s.enabled)
-            && !candidates.is_empty()
-        {
-            let evidence = bb_social::load_evidence(
-                settings,
-                candidates.iter().map(|c| c.route.destination_asset.clone()),
-            )?;
-            for candidate in &mut candidates {
-                candidate.social_signal_evidence = Some(
-                    evidence
-                        .get(&candidate.route.destination_asset)
-                        .map_or_else(|| json!({"status": "empty"}), |e| json!(e)),
-                );
-            }
-        }
         let gcp2 = match &self.gcp2 {
             Some(reader) => Some(reader.now(crate::audit::utc_timestamp()).await),
             None => None,
@@ -946,7 +927,6 @@ impl Runtime {
         })?;
         let mut fresh = RouteCandidate {
             market_evidence: quoted.market_evidence.clone(),
-            social_signal_evidence: quoted.social_signal_evidence.clone(),
             ..fresh
         };
         if let Some(evidence) = &mut fresh.market_evidence {
@@ -1572,7 +1552,6 @@ mod tests {
             Arc::clone(&config),
             mode,
             client,
-            None,
         ));
         let view = Arc::new(view(&config));
         let balances = Balances {
@@ -1980,12 +1959,7 @@ mod tests {
                 .is_empty()
         );
 
-        // Social disabled, journal round trip, trade history and end_cycle succeed offline.
-        let social = tools
-            .dispatch("get_social_evidence", json!({"assets": ["sol"]}))
-            .await
-            .unwrap();
-        assert_eq!(social["SOL"]["status"], "disabled");
+        // Journal round trip, trade history and end_cycle succeed offline.
         tools
             .dispatch("journal_write", json!({"text": "SOL thesis: breakout"}))
             .await

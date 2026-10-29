@@ -21,8 +21,6 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     #[command(flatten)]
-    Social(bb_social::cli::Command),
-    #[command(flatten)]
     Strategies(bb_strategies::cli::Command),
     #[command(flatten)]
     Trader(bb_trader::cli::Command),
@@ -30,7 +28,6 @@ enum Command {
 
 async fn dispatch(command: Command) -> anyhow::Result<ExitCode> {
     match command {
-        Command::Social(cmd) => bb_social::cli::run(cmd).await,
         Command::Strategies(cmd) => bb_strategies::cli::run(cmd).await,
         Command::Trader(cmd) => bb_trader::cli::run(cmd).await,
     }

@@ -257,7 +257,6 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "bb-core",
- "bb-social",
  "bb-strategies",
  "bb-trader",
  "clap",
@@ -315,30 +314,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bb-social"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bb-core",
- "bb-omp",
- "chrono",
- "clap",
- "hex",
- "pretty_assertions",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "shlex 1.3.0",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "wiremock",
-]
-
-[[package]]
 name = "bb-strategies"
 version = "0.2.0"
 dependencies = [
@@ -371,7 +346,6 @@ dependencies = [
  "bb-core",
  "bb-omp",
  "bb-pool",
- "bb-social",
  "chrono",
  "clap",
  "futures",
@@ -453,7 +427,7 @@ dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex 2.0.1",
+ "shlex",
 ]
 
 [[package]]
@@ -2216,12 +2190,6 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
-
-[[package]]
-name = "shlex"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shlex"

@@ -158,7 +158,6 @@ pub struct RouteCandidate {
     pub spread_bps: Option<Decimal>,
     pub liquidity_tier: &'static str,
     pub market_evidence: Option<RouteEvidence>,
-    pub social_signal_evidence: Option<Value>,
 }
 
 impl RouteCandidate {
@@ -200,7 +199,6 @@ impl RouteCandidate {
             "spread_bps": opt_decimal_json(self.spread_bps),
             "liquidity_tier": self.liquidity_tier,
             "market_evidence": self.market_evidence.as_ref().map_or_else(|| json!({}), |e| json!(e)),
-            "social_signal_evidence": self.social_signal_evidence.clone().unwrap_or_else(|| json!({})),
             "slippage_bps": decimal_json(self.route.slippage_bps),
             "legs": legs,
         })
@@ -500,7 +498,6 @@ pub async fn quote_candidate(
         spread_bps: market.and_then(|m| m.spread_bps),
         liquidity_tier: liquidity_tier(market.and_then(|m| m.quote_volume_usdt)),
         market_evidence: None,
-        social_signal_evidence: None,
         route,
     }))
 }
