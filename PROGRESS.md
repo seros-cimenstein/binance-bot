@@ -18,8 +18,10 @@ biz-app, no LLM, no chat, no timer, no Telegram (`docs/decisions.md`,
   UTC. No open position: about 17.41 USDT, 15.05 of it USDT cash, plus BNB
   and dust. No stop file exists.
 - The Pi still has the old LLM trader image. Do not start it: `docker compose
-  up -d` with no service names, or a Pi reboot (the boot unit
-  `binance-bot-compose.service` runs `--profile all up -d`), would start it.
+  up -d` with no service names would start it. A reboot does not: the boot
+  unit `binance-bot-compose.service` is disabled, and `bot-spot` (restart
+  `unless-stopped`) was stopped by hand, so Docker leaves it exited (checked
+  2026-10-29).
 - The Pi also runs the old compose file. The next deploy uses
   `docker compose --profile all up -d --remove-orphans`, or names the
   services (`... up -d --remove-orphans cryptobot-gui scheduler`) while the
