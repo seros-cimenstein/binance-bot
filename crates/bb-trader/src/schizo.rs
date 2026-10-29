@@ -17,17 +17,14 @@
 
 use std::path::{Path, PathBuf};
 
-use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::gcp2::Gcp2View;
-use crate::persona_backtest::engine::{Book, Holding, Snapshot};
+use crate::book::{Book, Snapshot};
 use crate::persona_backtest::personas::{
     MoodStep, Votes, base_personas, next_mood,
 };
-use crate::universe::Balances;
 
 /// The persisted schizo memory, next to `bot-spot-agent-state.json`.
 pub const STATE_FILE: &str = "bot-spot-schizo-state.json";
@@ -192,55 +189,14 @@ fn reason(
     }
 }
 
-fn float(value: Decimal) -> f64 {
-    value.to_f64().unwrap_or(0.0)
-}
-
-/// The live book the personas vote on: USDT cash, the portfolio value, and every free
-/// balance worth at least its USDT market's minimum order (`min_notional`), leaving out
-/// USDT itself and cash-like coins (`evidence::is_low_upside`). Dust a market order could
-/// not sell is not a position.
-pub fn live_book(
-    t: i64,
-    balances: &Balances,
-    equity: Decimal,
-    value_usdt: impl Fn(&str, Decimal) -> Option<Decimal>,
-    min_notional_usdt: impl Fn(&str) -> Option<Decimal>,
-) -> Book {
-    let holdings = balances
-        .free
-        .iter()
-        .filter(|(asset, _)| *asset != "USDT" && !crate::evidence::is_low_upside(asset))
-        .filter_map(|(asset, qty)| {
-            let value = value_usdt(asset, *qty)?;
-            let min = min_notional_usdt(asset)?;
-            (value > Decimal::ZERO && value >= min).then(|| {
-                let holding = Holding {
-                    qty: float(*qty),
-                    value: float(value),
-                    entry: None,
-                };
-                (asset.clone(), holding)
-            })
-        })
-        .collect();
-    Book {
-        t,
-        cash: float(balances.free("USDT")),
-        equity: float(equity),
-        holdings,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use rust_decimal_macros::dec;
 
     use super::*;
     use crate::gcp2::{ColorZones, Gcp2Reading, parse_color_zones};
-    use crate::persona_backtest::engine::CoinView;
+    use crate::book::{CoinView, Holding};
 
     const T: i64 = 1_792_487_580_000;
 
@@ -489,31 +445,6 @@ mod tests {
         assert_eq!(json["dice"], serde_json::json!(view(230.5, 1).dice));
         assert_eq!(json["votes"]["by_persona"].as_array().unwrap().len(), 4);
         assert!(json.get("memory").is_none());
-    }
-
-    #[test]
-    fn the_live_book_skips_usdt_cash_like_coins_and_unsellable_dust() {
-        let balances = Balances {
-            free: [
-                ("USDT".to_string(), dec!(12)),
-                ("USDC".to_string(), dec!(50)),
-                ("SOL".to_string(), dec!(0.1)),
-                ("PEPE".to_string(), dec!(100)),
-                ("ODD".to_string(), dec!(1)),
-            ]
-            .into(),
-            ..Balances::default()
-        };
-        let value = |asset: &str, qty: Decimal| match asset {
-            "USDC" => Some(qty),
-            "SOL" => Some(qty * dec!(180)),
-            "PEPE" => Some(dec!(0.4)),
-            _ => None,
-        };
-        let book = live_book(T, &balances, dec!(80), value, |_| Some(dec!(5)));
-        assert_eq!(book.holdings.keys().collect::<Vec<_>>(), vec!["SOL"]);
-        assert_eq!(book.holdings["SOL"].value, 18.0);
-        assert_eq!((book.cash, book.equity), (12.0, 80.0));
     }
 
     #[test]

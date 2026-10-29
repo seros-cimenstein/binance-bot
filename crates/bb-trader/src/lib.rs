@@ -38,6 +38,7 @@ pub mod agent;
 pub mod alerts;
 pub mod audit;
 pub mod biz;
+pub mod book;
 pub mod cli;
 pub mod config;
 pub mod context;

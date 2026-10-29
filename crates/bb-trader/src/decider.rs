@@ -29,8 +29,9 @@ use std::fmt;
 
 use crate::biz::CoinWindows;
 use crate::mdp::{Model, State};
-use crate::persona_backtest::data::MINUTE_MS;
-use crate::persona_backtest::engine::{Book, Holding, Snapshot};
+use crate::book::{Book, Holding, Snapshot};
+
+const MINUTE_MS: i64 = 60_000;
 
 /// 24h mentions a coin needs before its talk surge counts.
 pub const SURGE_MIN_MENTIONS: u64 = 4;
@@ -277,7 +278,7 @@ pub fn decide(inputs: &Inputs<'_>, rule: &Rule) -> Verdict {
 mod tests {
     use super::*;
     use crate::biz::Window;
-    use crate::persona_backtest::personas::tests::{flat_book, holding, snap};
+    use crate::book::tests::{flat_book, holding, snap};
 
     fn rule(talk: f64, stance: f64, momentum: f64, buy_above: f64, sell_below: f64) -> Rule {
         Rule {

@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use super::data::{BizHistory, MINUTE_MS, Market};
-use super::engine::{Account, Book, Config, Intent, Persona, Snapshot, Trace};
+use super::engine::{Account, Config, Intent, Persona, Trace};
+use crate::book::{Book, Snapshot};
 use crate::error::{Result, TraderError};
 use crate::exit_plan::ExitPlan;
 use crate::market_mood::LEAN_SCORE;
@@ -937,7 +938,7 @@ impl SchizoMdp {
     }
 
     /// `true` when the model values selling `asset` now above holding it.
-    fn sells(&self, snap: &Snapshot, asset: &str, holding: &super::engine::Holding) -> Option<bool> {
+    fn sells(&self, snap: &Snapshot, asset: &str, holding: &crate::book::Holding) -> Option<bool> {
         let (entry_price, entry_ms) = holding.entry?;
         if holding.qty <= 0.0 || entry_price <= 0.0 {
             return None;
@@ -1150,81 +1151,13 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::gcp2::{ColorZones, Gcp2Reading, Gcp2View};
-    use crate::market_mood::HorizonBreadth;
     use crate::persona_backtest::data::{MINUTE_MS, Market};
     use crate::persona_backtest::engine::tests::{
         T0, cfg, coin, gcp2_feed, gcp2_wave, gcp2_zones, truncated, wavy_market,
     };
-    use crate::persona_backtest::engine::{CoinView, Holding, run};
-
-    /// `(asset, 15m, 1h, 4h, 24h quote volume)`.
-    pub type Row<'a> = (&'a str, f64, f64, f64, f64);
-
-    /// A snapshot with the given breadth score, 4h median and coins; every coin is a liquid
-    /// candidate in the given order.
-    pub fn snap(score: f64, median_4h: f64, rows: &[Row<'_>]) -> Snapshot {
-        let horizon = |name: &'static str, median: Option<f64>| HorizonBreadth {
-            name,
-            weight: 0.25,
-            up: 0,
-            down: 0,
-            flat: 0,
-            breadth: 0.0,
-            median_return_pct: median,
-        };
-        Snapshot {
-            t: T0,
-            score: Some(score),
-            horizons: vec![
-                horizon("15m", None),
-                horizon("1h", None),
-                horizon("4h", Some(median_4h)),
-                horizon("24h", None),
-            ],
-            coins: rows
-                .iter()
-                .map(|&(a, r15, r1, r4, qv)| {
-                    let view = CoinView {
-                        ret_15m: Some(r15),
-                        ret_1h: Some(r1),
-                        ret_4h: Some(r4),
-                        quote_volume_24h: qv,
-                    };
-                    (a.to_string(), view)
-                })
-                .collect(),
-            liquid_top: rows.iter().map(|r| r.0.to_string()).collect(),
-            gcp2: None,
-        }
-    }
-
-    pub fn flat_book() -> Book {
-        Book {
-            t: T0,
-            cash: 1000.0,
-            equity: 1000.0,
-            holdings: BTreeMap::new(),
-        }
-    }
-
-    pub fn holding(assets: &[&str]) -> Book {
-        Book {
-            t: T0,
-            cash: 0.0,
-            equity: 1000.0,
-            holdings: assets
-                .iter()
-                .map(|a| {
-                    let h = Holding {
-                        qty: 1.0,
-                        value: 1000.0 / assets.len() as f64,
-                        entry: None,
-                    };
-                    (a.to_string(), h)
-                })
-                .collect(),
-        }
-    }
+    pub use crate::book::tests::{Row, flat_book, holding, snap};
+    use crate::book::Holding;
+    use crate::persona_backtest::engine::run;
 
     pub fn bought(intents: &[Intent]) -> Vec<&str> {
         intents

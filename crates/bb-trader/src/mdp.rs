@@ -32,7 +32,8 @@ use crate::error::{Result, TraderError};
 use crate::market_mood::LEAN_SCORE;
 use crate::memory::CurrentHolding;
 use crate::persona_backtest::data::{MINUTE_MS, Market, floor_to};
-use crate::persona_backtest::engine::{LIQUID, Snapshot};
+use crate::book::Snapshot;
+use crate::persona_backtest::engine::LIQUID;
 
 /// Model file format; a file of another version is refused.
 pub const MODEL_VERSION: &str = "mdp-v1";
@@ -961,7 +962,7 @@ mod tests {
     fn the_live_voice_values_the_open_position_and_ranks_buys_without_it() {
         use rust_decimal_macros::dec;
 
-        use crate::persona_backtest::engine::CoinView;
+        use crate::book::CoinView;
         let value = |samples: usize, q: f64| StateValue {
             samples,
             mean_reward_pct: 0.0,

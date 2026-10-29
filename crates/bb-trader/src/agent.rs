@@ -2153,7 +2153,7 @@ mod tests {
         memory: &crate::schizo::SchizoMemory,
     ) -> DecisionContext {
         use crate::gcp2::{Gcp2Live, Gcp2Now, Gcp2Reading, parse_color_zones};
-        use crate::persona_backtest::engine::{Book, CoinView, Snapshot};
+        use crate::book::{Book, CoinView, Snapshot};
         let zones = parse_color_zones(
             &serde_json::json!({"colorzones": [
                 {"label": "Normal", "range_start": 0, "range_end": 140},

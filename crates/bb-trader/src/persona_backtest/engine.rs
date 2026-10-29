@@ -23,8 +23,9 @@ use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use super::data::{Bar, MINUTE_MS, Market, Series};
 use crate::error::{Result, TraderError};
 use crate::exit_plan::{ATR_PERIODS, ExitPlan, ExitWatch, PriceBar, average_true_range};
+use crate::book::{Book, CoinView, Holding, Snapshot};
 use crate::gcp2::Gcp2View;
-use crate::market_mood::{self, HorizonBreadth, breadth_score_at};
+use crate::market_mood::{self, breadth_score_at};
 
 /// The 20-coin liquid universe: the `bb entry-study` top 20 by quote volume on 2026-10-18
 /// (the Phase 47 basket). Fixed, so the backtest has survivorship bias.
@@ -86,31 +87,6 @@ impl Config {
     fn is_step(&self, t: i64) -> bool {
         (t - self.start_ms) % self.step_ms() == 0
     }
-}
-
-/// One coin at a step: returns of the close at `T` over 15m/1h/4h and its trailing 24h
-/// quote volume. Only coins with a bar closing at `T` are present.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CoinView {
-    pub ret_15m: Option<f64>,
-    pub ret_1h: Option<f64>,
-    pub ret_4h: Option<f64>,
-    pub quote_volume_24h: f64,
-}
-
-/// What every persona may see at step time `T`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Snapshot {
-    pub t: i64,
-    /// 20-coin breadth score (−100..100), as the live `## Market breadth` section.
-    pub score: Option<f64>,
-    pub horizons: Vec<HorizonBreadth>,
-    pub coins: BTreeMap<String, CoinView>,
-    /// The [`LIQUID`] coins present at `T`, top [`CANDIDATE_LIMIT`] by 24h quote volume.
-    pub liquid_top: Vec<String>,
-    /// GCP2 at `T` (the hour ending at the last second before `T`'s minute); `None` without
-    /// GCP2 history or a reading.
-    pub gcp2: Option<Gcp2View>,
 }
 
 impl Snapshot {
@@ -202,18 +178,6 @@ impl Snapshot {
             gcp2,
         })
     }
-
-    pub fn coin(&self, asset: &str) -> Option<&CoinView> {
-        self.coins.get(asset)
-    }
-
-    /// Median coin return over a breadth horizon (`15m`, `1h`, `4h`, `24h`).
-    pub fn median_return_pct(&self, horizon: &str) -> Option<f64> {
-        self.horizons
-            .iter()
-            .find(|h| h.name == horizon)
-            .and_then(|h| h.median_return_pct)
-    }
 }
 
 /// What a persona asks for at a step.
@@ -223,31 +187,6 @@ pub enum Intent {
     Buy { asset: String, equity_fraction: f64 },
     /// Sell all of `asset`; `reason` goes to the trade list.
     Sell { asset: String, reason: &'static str },
-}
-
-/// One holding as the persona sees it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Holding {
-    pub qty: f64,
-    /// `qty` at the last close.
-    pub value: f64,
-    /// Buy fill price and time (`None` in the live book, which has no entry per coin).
-    pub entry: Option<(f64, i64)>,
-}
-
-/// The persona's account at a step.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Book {
-    pub t: i64,
-    pub cash: f64,
-    pub equity: f64,
-    pub holdings: BTreeMap<String, Holding>,
-}
-
-impl Book {
-    pub fn is_flat(&self) -> bool {
-        self.holdings.is_empty()
-    }
 }
 
 /// A deterministic trading rule set.
@@ -799,7 +738,7 @@ pub fn run(market: &Market, cfg: &Config, persona: Box<dyn Persona>) -> Result<R
 pub(crate) mod tests {
     use super::*;
 
-    pub const T0: i64 = 1_784_448_000_000; // 2026-07-19T08:00Z, an hour boundary
+    pub use crate::book::tests::T0;
 
     pub fn cfg(start_minute: i64, end_minute: i64, step_minutes: i64) -> Config {
         Config {

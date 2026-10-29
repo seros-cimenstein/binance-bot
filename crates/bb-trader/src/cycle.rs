@@ -107,7 +107,7 @@ pub struct Snapshot {
     pub balances: Balances,
     /// The personas' point-in-time market view (`None` when the breadth read failed or
     /// market evidence is off); the rule-based decider reads it.
-    pub step: Option<crate::persona_backtest::engine::Snapshot>,
+    pub step: Option<crate::book::Snapshot>,
 }
 
 /// Shared by the cycle loop and the host tools.
@@ -285,7 +285,7 @@ impl Runtime {
         let t = bb_core::time::now_ms();
         let latest = gcp2.as_ref().and_then(|g| g.live()).map(|live| live.latest.clone());
         let snap = breadth.as_ref().and_then(|mood| {
-            crate::persona_backtest::engine::Snapshot::from_breadth(t, mood, latest.clone())
+            crate::book::Snapshot::from_breadth(t, mood, latest.clone())
         });
         let schizo = match &gcp2 {
             Some(_) => self.schizo_state(t, latest.as_ref(), snap.as_ref(), &balances, &view, portfolio_value_usdt),
@@ -327,7 +327,7 @@ impl Runtime {
         &self,
         t: i64,
         latest: Option<&crate::gcp2::Gcp2View>,
-        snap: Option<&crate::persona_backtest::engine::Snapshot>,
+        snap: Option<&crate::book::Snapshot>,
         balances: &Balances,
         view: &MarketView,
         equity: Decimal,
@@ -340,7 +340,7 @@ impl Runtime {
                 return None;
             }
         };
-        let book = crate::schizo::live_book(
+        let book = crate::book::live_book(
             t,
             balances,
             equity,
@@ -367,7 +367,7 @@ impl Runtime {
     fn mdp_voice(
         &self,
         holding: Option<&crate::memory::CurrentHolding>,
-        snap: Option<&crate::persona_backtest::engine::Snapshot>,
+        snap: Option<&crate::book::Snapshot>,
     ) -> crate::mdp::MdpNow {
         match crate::mdp::Model::load(&self.config.mdp_model_path) {
             Ok(model) => crate::mdp::MdpNow::Ready(Box::new(crate::mdp::voice(&model, holding, snap, chrono::Utc::now()))),
@@ -410,7 +410,7 @@ impl Runtime {
             );
         };
         let view = &snapshot.view;
-        let mut book = crate::schizo::live_book(
+        let mut book = crate::book::live_book(
             step.t,
             &snapshot.balances,
             snapshot.context.portfolio_value_usdt,
@@ -2284,7 +2284,7 @@ mod tests {
             },
             &zones,
         );
-        let book = crate::persona_backtest::engine::Book {
+        let book = crate::book::Book {
             t: 0,
             cash: 100.0,
             equity: 100.0,
