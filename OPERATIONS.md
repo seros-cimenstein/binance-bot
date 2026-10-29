@@ -527,7 +527,7 @@ and sell fees at the trip's fee rate), so it cannot sell a fee-negative
 
 Prompt `bot-spot-v17-schizo` (deployed 2026-10-21; v15 and v16 ran on
 2026-10-20; operator decisions in
-`LOOP_SCHIZO_LIVE.md` and `CODEX.md`). The LLM stays the trader and acts only
+`docs/decisions.md`). The LLM stays the trader and acts only
 through the host tools; the hard safety above and the default exit plan
 `atr=3.5:1h,deadline=360` are unchanged, and there is no panic sell. It runs
 on the full wallet with no size cap. Switch: `BOT_SPOT_GCP2_ENABLED` (default
@@ -621,7 +621,7 @@ docker logs bot-spot 2>&1 | grep -E 'keeping the cycle cadence|live exit plans e
 
 ### Long-term value voice (Phase 50)
 
-Operator decisions 2026-10-21 (`CODEX.md`): a reward-and-discount ("Markov")
+Operator decisions 2026-10-21 (`docs/decisions.md`): a reward-and-discount ("Markov")
 voice with γ = 0.95 per 20-minute cycle, shown to the LLM as its strongest
 voice; information, never a gate. Switch: `BOT_SPOT_MDP_ENABLED` (default
 true); model file `BOT_SPOT_MDP_MODEL_PATH` (default

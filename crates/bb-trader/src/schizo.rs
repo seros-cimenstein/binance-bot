@@ -1,4 +1,4 @@
-//! The live trader's schizo state (Phase 49, `LOOP_SCHIZO_LIVE.md` C2).
+//! The live trader's schizo state (Phase 49, `docs/archive/loops/LOOP_SCHIZO_LIVE.md` C2).
 //!
 //! Each cycle runs the backtest `schizo` persona's rules on live inputs, as information for
 //! the LLM trader (it still decides and acts only through the host tools):

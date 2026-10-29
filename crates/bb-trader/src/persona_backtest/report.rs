@@ -52,7 +52,7 @@ const DAY_MS: i64 = 86_400_000;
 const WARM_UP_MS: i64 = 48 * 3_600_000;
 /// Binance minimum order value the engine enforces on buys.
 const MIN_NOTIONAL_USDT: f64 = 5.0;
-/// Measured live cost per round trip (40 trips, `LOOP_MONEY.md`).
+/// Measured live cost per round trip (40 trips, `docs/archive/loops/LOOP_MONEY.md`).
 const MEASURED_ROUND_TRIP_BPS: f64 = 14.8;
 /// Phase 47 (`bot-spot-v13-agentic`) went live at 2026-10-18T14:02:04Z.
 const PHASE_47_DEPLOY_MS: i64 = 1_792_332_124_000;
@@ -552,7 +552,7 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
     );
     let _ = writeln!(
         out,
-        "Research only: `bb bot-spot-persona-backtest`, offline on `{}` ({} coins), no network, no orders. Phase 48, `IMPLEMENTATION_PLAN.md`.\n",
+        "Research only: `bb bot-spot-persona-backtest`, offline on `{}` ({} coins), no network, no orders. Phase 48, `docs/archive/implementation-plan-phases-1-50.md`.\n",
         ctx.cache_dir, ctx.coins
     );
     let _ = writeln!(out, "## Settings\n");
@@ -766,7 +766,7 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         if ctx.split.is_some() {
             "Out of sample: `biz_algo`'s weights were picked on the older half only, so its `@newer` row is the honest result; the other personas' rules were fixed before any run. Each half is about half the window: few trades, a small sample.".to_string()
         } else {
-            "No out-of-sample split: the rules were fixed in `LOOP_SCHIZOID.md` before any real-cache run and not tuned on it, but they are tested on this one period only.".to_string()
+            "No out-of-sample split: the rules were fixed in `docs/archive/loops/LOOP_SCHIZOID.md` before any real-cache run and not tuned on it, but they are tested on this one period only.".to_string()
         },
     ] {
         let _ = writeln!(out, "- {line}");
@@ -774,7 +774,7 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
     if ctx.gcp2_zone_minutes.is_some() {
         let _ = writeln!(
             out,
-            "- GCP2 (gcp2.net, a network of random-number generators) has no shown link to crypto prices; `schizo` reads it only because the operator chose it (`LOOP_SCHIZO_LIVE.md`)."
+            "- GCP2 (gcp2.net, a network of random-number generators) has no shown link to crypto prices; `schizo` reads it only because the operator chose it (`docs/decisions.md`)."
         );
     }
     out
