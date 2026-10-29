@@ -228,6 +228,11 @@ some posts), and its AI's bullish and bearish tags on every post, weighted by
 the post's 1-3 score. `as_of` is the scraper's last fetch, so a stopped
 scraper makes the feed go stale. The real output of 2026-10-25T13:00Z is the
 test fixture `crates/bb-trader/tests/fixtures/biz-feed-v1.json`.
+`biz-insights feed --history --step 60` writes one point-in-time feed per
+hour into `biz_insights/out/biz-feed-history/<as_of>.json` (from 2026-10-01;
+590 files to 2026-10-25T13:00Z), the input of `bb biz-lead-study --feeds`
+and `bb algo-backtest --biz-feeds`. Every post is tagged once (cache
+`out/feed.sqlite3`), so a rerun makes no model call.
 `scripts/biz_feed_to_pi.sh` copies it to
 `~/binance-bot/docker-data/biz-feed.json` on the Pi every 5 minutes
 (`--once` for one copy; `PI_HOST`, `PI_DATA_DIR`, `BIZ_FEED`,
