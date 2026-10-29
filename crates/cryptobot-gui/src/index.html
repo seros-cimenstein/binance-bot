@@ -163,8 +163,6 @@
   .chart .bar:hover { opacity: .8; }
   .chart .guide { stroke: var(--faint); stroke-dasharray: 3 3; }
   .chart .line.accent { stroke: var(--accent); }
-  .token-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .token-head .val { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
 
   .donut { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: center; }
   .donut svg circle.seg-arc { transition: stroke-width .15s; cursor: default; }
@@ -222,14 +220,6 @@
   .tool-row.open .args { white-space: pre-wrap; word-break: break-word; overflow: visible; color: var(--fg); }
   .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-  .rules { margin: 0; padding-left: 18px; }
-  .ladder { position: relative; height: 52px; margin: 2px 8px; }
-  .ladder-track { position: absolute; left: 0; right: 0; top: 22px; height: 4px; border-radius: 2px; background: var(--surface-2); }
-  .ladder-mark { position: absolute; top: 16px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 2px;
-                 font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; }
-  .ladder-mark.up { top: 0; flex-direction: column-reverse; }
-  .ladder-mark::before { content: ""; width: 3px; height: 16px; border-radius: 2px; background: currentColor; }
-  .ladder-mark.neg { color: var(--neg); } .ladder-mark.pos { color: var(--pos); } .ladder-mark.accent { color: var(--accent); }
 
   .tip { position: fixed; z-index: 50; pointer-events: none; background: var(--fg); color: var(--bg); padding: 7px 10px; border-radius: 8px;
          font-size: 12px; max-width: 280px; box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
@@ -258,7 +248,6 @@
       <a href="#sessions" data-tab="sessions">Sessions</a>
       <a href="#wallet" data-tab="wallet">Wallet</a>
       <a href="#bot" data-tab="bot">Bot</a>
-      <a href="#exits" data-tab="exits">Exits</a>
       <a href="#biz" data-tab="biz">/biz/</a>
     </nav>
     <div class="top-right">
@@ -278,8 +267,8 @@
 // textContent / createTextNode; nothing is parsed as HTML.
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
-const TABS = ["overview", "history", "sessions", "wallet", "bot", "exits", "biz"];
-const ENDPOINTS = { status: "/api/status", history: "/api/history", sessions: "/api/sessions", wallet: "/api/wallet", exits: "/api/exits", market: "/api/market" };
+const TABS = ["overview", "history", "sessions", "wallet", "bot", "biz"];
+const ENDPOINTS = { status: "/api/status", history: "/api/history", sessions: "/api/sessions", wallet: "/api/wallet", market: "/api/market" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
@@ -728,7 +717,7 @@ function equityTimeline(s) {
     const tip = open
       ? [head, "Bought " + stamp(t.opened_at) + " for " + usd(t.cost_usdt), "Held " + duration((now - t0) / 1000) + " so far, marked at the current price", "Running total incl. open " + usd(y1, { sign: true })]
       : [head, "Bought " + stamp(t.opened_at) + " for " + usd(t.cost_usdt), "Sold " + stamp(t.closed_at) + " for " + usd(t.exit_usdt),
-        "Held " + duration((t1 - t0) / 1000) + " · sold by " + (t.closed_by_plan ? "the exit plan" : "the bot"),
+        "Held " + duration((t1 - t0) / 1000),
         "Fees " + usd(t.fees_usdt) + " · running total " + usd(y1, { sign: true })];
     return { trade: t, t0, t1, y0, y1, tone: open ? "accent" : t.status === "win" ? "pos" : "neg", tip };
   });
@@ -752,7 +741,7 @@ function alerts() {
   const items = [];
   const st = ui.data.status;
   if (noBotData()) items.push(["warn", "No bot data on this computer",
-    "Nothing at " + st.source.audit_path + ". The live trader runs on the Pi, so History, Bot and Exits stay empty here. Start the dashboard with scripts/cryptobot_gui_pi.sh: it mirrors the Pi's data dir (read-only) and opens this page on it."]);
+    "Nothing at " + st.source.audit_path + ". The live trader runs on the Pi, so History and Bot stay empty here. Start the dashboard with scripts/cryptobot_gui_pi.sh: it mirrors the Pi's data dir (read-only) and opens this page on it."]);
   if (st && st.stop_active) items.push(["neg", "Emergency stop is on", "The bot won't trade while " + st.stop_path + " exists. Delete it to resume."]);
   if (st && st.halt) items.push(["neg", "Live trading halted", st.halt + ". Review, then run bb bot-spot --mark-failed-route-reviewed."]);
   if (st && st.audit_error) items.push(["neg", "Audit log unreadable", st.audit_error]);
@@ -782,7 +771,7 @@ function renderHeader() {
 function render() {
   renderHeader();
   const view = document.getElementById("view");
-  const pages = { overview: overviewPage, history: historyPage, sessions: sessionsPage, wallet: walletPage, bot: botPage, exits: exitsPage, biz: bizPage };
+  const pages = { overview: overviewPage, history: historyPage, sessions: sessionsPage, wallet: walletPage, bot: botPage, biz: bizPage };
   ui.pendingRender = false;
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
@@ -840,7 +829,6 @@ function overviewPage() {
   const s = stats(trades);
   const state = botState();
   const openTrade = [...trades].reverse().find((t) => t.status === "open");
-  const openPlan = openTrade && ui.data.exits ? ui.data.exits.active.find((a) => a.asset === openTrade.destination_asset) : null;
   const lastCycle = status && status.cycles && status.cycles[0];
   const change = wallet && !wallet.error ? num(wallet.change_24h_usdt) : null;
   const total = wallet && !wallet.error ? num(wallet.total_usdt) : null;
@@ -853,9 +841,7 @@ function overviewPage() {
       s.decided.length ? el("span", null, el("b", null, pct(s.winRate, { sign: false, dp: 0 })), " win rate · " + s.wins.length + "W / " + s.losses.length + "L")
         : noBotData() ? "no bot data here" : "no closed trades yet", s.realized.length || s.open.length ? tone(s.net + s.unrealized) : null),
     kpi("Open position", openTrade ? openTrade.destination_asset : "None",
-      openTrade ? el("span", null, el("b", { class: tone(openTrade.pnl_usdt) }, usd(openTrade.pnl_usdt, { sign: true }) + " (" + pct(openTrade.pnl_pct) + ")"), " · held " + duration(openTrade.hold_seconds),
-        openPlan ? el("span", null, " · ", el("a", { href: "#exits", style: "color:var(--accent);text-decoration:none" },
-          num(openPlan.sell_line) !== null ? "sell line " + px(openPlan.sell_line) : "exit plan " + openPlan.spec)) : "")
+      openTrade ? el("span", null, el("b", { class: tone(openTrade.pnl_usdt) }, usd(openTrade.pnl_usdt, { sign: true }) + " (" + pct(openTrade.pnl_pct) + ")"), " · held " + duration(openTrade.hold_seconds))
         : noBotData() ? "no bot data here" : "The bot is in cash or between trades"),
     kpi("Bot", state.label, state.detail, state.tone || null));
 
@@ -1014,7 +1000,7 @@ function historyPage() {
     card("Trades", tradeTable(coinTrades(trades), { expandable: true }), { flush: true, hint: "each trade shown as its sale · click a row for the bot's reasoning" }),
     failedRoutesCard(history),
     el("details", { class: "footnote" }, el("summary", null, "How results are calculated"),
-      el("p", null, "Each route the bot submits opens a trade in the coin it bought. The trade closes when that coin is sold, by the bot or by its exit plan, and is listed as that sale (coin → what it was sold into), newest sale first; a coin still held shows as open. Cost is what the exchange filled the buy for; the result is what the coins fetched when sold (or are worth right now, if still held) minus that cost and the exchange fees of both orders. So spread and slippage are in the fill prices and the trade results add up to the whole run. Fees paid in BNB are valued at today's BNB price. The sale into USDT itself is not listed again: parking in stablecoins costs nothing and counts toward neither wins nor losses. Routes without fill data (or quoted in another coin than USDT) use the bot's quote at execution time instead, with fees inside the quote.")));
+      el("p", null, "Each route the bot submits opens a trade in the coin it bought. The trade closes when the bot sells that coin, and is listed as that sale (coin → what it was sold into), newest sale first; a coin still held shows as open. Cost is what the exchange filled the buy for; the result is what the coins fetched when sold (or are worth right now, if still held) minus that cost and the exchange fees of both orders. So spread and slippage are in the fill prices and the trade results add up to the whole run. Fees paid in BNB are valued at today's BNB price. The sale into USDT itself is not listed again: parking in stablecoins costs nothing and counts toward neither wins nor losses. Routes without fill data (or quoted in another coin than USDT) use the bot's quote at execution time instead, with fees inside the quote.")));
 }
 // Top sessions by realized P&L (the Sessions tab has the full ranking and configurations).
 function sessionCard() {
@@ -1038,7 +1024,7 @@ function tradeTable(trades, opts = {}) {
   for (const t of trades) {
     const key = tradeKey(t);
     if (opts.compact) {
-      rows.push(el("tr", null, el("td", null, tradeLabel(t)), el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
+      rows.push(el("tr", null, el("td", null, tradeLabel(t)), el("td", null, resultChip(t)),
         el("td", { class: "r" }, signed(t.pnl_usdt)), el("td", { class: "r muted", title: stamp(tradeTime(t)) }, ago(tradeTime(t)))));
       continue;
     }
@@ -1046,7 +1032,7 @@ function tradeTable(trades, opts = {}) {
     rows.push(el("tr", { class: opts.expandable ? "click" : null, onclick: opts.expandable ? () => { open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } : null },
       el("td", { class: "nw muted" }, t.closed_at ? stamp(t.closed_at) : t.status === "open" ? "open" : "—"),
       el("td", null, tradeLabel(t)),
-      el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
+      el("td", null, resultChip(t)),
       el("td", { class: "r" }, usd(t.cost_usdt)),
       el("td", { class: "r" }, signed(t.pnl_usdt)),
       el("td", { class: "r" }, el("span", { class: tone(t.pnl_pct) }, pct(t.pnl_pct))),
@@ -1058,7 +1044,7 @@ function tradeTable(trades, opts = {}) {
         el("div", { class: "feed-meta" },
           el("span", null, "Bought " + stamp(t.opened_at) + (t.source_asset && t.source_asset !== "USDT" ? " with " + t.source_asset : "")),
           el("span", { class: "sep" }, "·"),
-          el("span", null, "Sold " + (t.closed_at ? stamp(t.closed_at) + (t.closed_by_plan ? " by its exit plan" : "") : t.status === "open" ? "— still held" : "—")),
+          el("span", null, "Sold " + (t.closed_at ? stamp(t.closed_at) : t.status === "open" ? "— still held" : "—")),
           el("span", { class: "sep" }, "·"), el("span", null, "Exit value " + usd(t.exit_usdt)),
           t.valuation === "quotes" ? [el("span", { class: "sep" }, "·"), el("span", { class: "warn" }, "valued from the quote, no fill data")] : null,
           el("span", { class: "sep" }, "·"), el("span", null, t.legs + " order" + (t.legs === 1 ? "" : "s")),
@@ -1276,115 +1262,6 @@ function botPage() {
   return el("div", { class: "grid" }, head, kpis, el("div", { class: "grid split" }, cost, brainsCard(st)), feed);
 }
 
-// ---------- Exits (Phase 45 exit plans) ----------
-// A coin price with enough digits to tell the bid from a sell line a fraction of a percent away.
-function px(v) {
-  const n = num(v);
-  if (n === null) return "—";
-  const dp = n >= 1000 || n === 0 ? 2 : Math.min(10, Math.max(2, 5 - Math.floor(Math.log10(Math.abs(n)))));
-  return "$" + nf(2, dp).format(n);
-}
-function share(f) { return num(f) === 1 ? "all" : pct(num(f) * 100, { sign: false, dp: 0 }); }
-// Plain-language rules of a plan spec (the exit_plan menu: trail, atr, part, stretch, slow, fade, deadline).
-function planRules(spec) {
-  const rules = [];
-  for (const part of String(spec || "").split(",").map((p) => p.trim()).filter(Boolean)) {
-    const [key, value = ""] = part.split("=");
-    const [a, b] = value.split(":");
-    if (key === "trail") rules.push("Sell all " + value + "% below the highest price since entry");
-    else if (key === "atr") rules.push("Sell all " + a + "× the average " + b + " candle range below the highest price since entry");
-    else if (key === "part") rules.push("Sell " + share(b) + " once at +" + a + "%");
-    else if (key === "stretch") rules.push("Sell " + share(b) + " when the price spikes " + a + " standard deviations above its 20-minute average (only above entry plus fees)");
-    else if (key === "slow") rules.push("Sell " + share(a) + " when the " + b + "-minute climb slows 3 minutes in a row (only above entry)");
-    else if (key === "fade") rules.push("After +" + a + "%, sell all when no new high prints for " + b + " minutes");
-    else if (key === "deadline") rules.push("Sell all " + duration(num(a) * 60) + " after entry");
-    else if (key === "hold") rules.push("Hold: no rule");
-    else rules.push(part);
-  }
-  return rules;
-}
-function ladder(a) {
-  const marks = [["Sell line", a.sell_line, "neg"], ["Entry", a.entry_price, ""], ["Bid", a.last_bid, "accent"], ["Peak", a.peak, "pos"]]
-    .map(([label, v, t]) => [label, num(v), t]).filter(([, v]) => v !== null).sort((x, y) => x[1] - y[1]);
-  if (marks.length < 2) return null;
-  const lo = marks[0][1], hi = marks[marks.length - 1][1];
-  const span = hi - lo || Math.abs(hi) * 0.01 || 1;
-  return el("div", { class: "ladder" }, el("div", { class: "ladder-track" }),
-    marks.map(([label, v, t], i) => el("div", { class: "ladder-mark " + t + (i % 2 ? " up" : ""), style: "left:" + (2 + ((v - lo) / span) * 96) + "%", title: label + " " + px(v) }, el("span", null, label))));
-}
-function activePlanCard(a, live) {
-  return card(null, el("div", { class: "grid", style: "gap:10px" },
-    el("div", { class: "token-head" }, assetLabel(a.asset), chip(a.source === "bot" ? "Bot's plan" : "Default plan", a.source === "bot" ? "accent" : ""),
-      el("span", { class: "code muted" }, a.spec), el("span", { class: "val", title: stamp(a.last_at) }, "bid checked " + ago(a.last_at))),
-    el("ul", { class: "rules" }, planRules(a.spec).map((r) => el("li", null, r))),
-    ladder(a),
-    el("div", { class: "facts" },
-      fact("Entry", px(a.entry_price)),
-      fact("Last bid", el("span", null, px(a.last_bid), " ", signed(a.gain_pct, pct))),
-      fact("Peak", px(a.peak) + " (" + pct(a.peak_gain_pct) + ")"),
-      fact("Sell line", a.sell_line === null ? "none (no trailing rule)" : px(a.sell_line)),
-      fact("Room above the line", a.room_to_sell_line_pct === null ? "—" : pct(a.room_to_sell_line_pct)),
-      fact("Still held", share(a.remaining))),
-    a.fills.length ? el("div", { class: "grid", style: "gap:4px" }, a.fills.map((f) => el("div", { class: "small" },
-      chip(live ? "Sold" : "Would sell", "warn"), " " + share(f.fraction) + " at " + px(f.price) + " · " + f.reason + " · " + stamp(f.at)))) : null));
-}
-const EXIT_EVENTS = { started: ["Watching", "accent"], would_sell: ["Plan fired", "warn"], sold: ["Sold", "pos"], sell_failed: ["Sell failed, retrying", "neg"],
-  sell_abandoned: ["Sell abandoned", "neg"], closed: ["Position closed", ""], rejected: ["Plan rejected", "neg"], cleared: ["Cleared", ""], orphaned: ["Orphaned", ""] };
-function exitEventText(e) {
-  if (e.event === "would_sell") return share(e.fraction) + " at " + px(e.price) + " · " + (e.reason || "");
-  if (e.event === "sold") return share(e.share) + " of what was held · " + (e.reason || "");
-  if (e.event === "closed" && e.closed_by_plan) return "Sold by the plan (live) · net " + pct(e.exit_net_pct)
-    + (num(e.fill_vs_trigger_usdt) !== null ? " · fill vs trigger " + usd(e.fill_vs_trigger_usdt, { sign: true }) : "");
-  if (e.event === "closed") return "Bot alone " + pct(e.bot_alone_net_pct) + " · with plan " + pct(e.with_plan_net_pct) + " · plan vs bot " + usd(e.plan_vs_bot_usdt, { sign: true });
-  if (e.event === "started") return "entry " + px(e.entry_price) + (num(e.trail_pct) !== null ? " · trail " + fixed(e.trail_pct, 2) + "%" : "") + (num(e.peak) !== null ? " · peak " + px(e.peak) : "");
-  if (e.event === "sell_failed" || e.event === "sell_abandoned") return (e.error || "") + (e.attempts ? " (attempt " + e.attempts + ")" : "");
-  return e.error || "";
-}
-function exitsPage() {
-  const ex = ui.data.exits;
-  const head = pageHead("Exit plans", "How open positions get sold between the bot's cycles.", null);
-  if (!ex) return el("div", { class: "grid" }, head, ui.errors.exits ? card(null, errorBox(ui.errors.exits)) : loadingView());
-  const s = ex.settings || {};
-  const live = !!s.live;
-  const mode = !s.configured ? ["Unknown", null, "exit-plan settings aren't set on this computer"]
-    : s.error ? ["Misconfigured", "neg", s.error]
-    : live ? ["Live", "pos", "the trader sells when a plan fires"] : ["Paper", "warn", "plans are only recorded, nothing is sold"];
-  const trades = ui.data.history ? ui.data.history.trades : [];
-  const planSells = trades.filter((t) => t.closed_by_plan);
-  const planPnl = planSells.reduce((acc, t) => acc + (num(t.pnl_usdt) || 0), 0);
-  const watchSub = ex.state_present ? (ex.stale ? "watch state " + ago(ex.updated_at) + ", not updating" : "bids checked " + ago(ex.updated_at)) : "no watch state file yet";
-  const kpis = el("div", { class: "grid kpis" },
-    kpi("Mode", mode[0], mode[2], mode[1]),
-    kpi("Default plan", s.default_plan || "None", s.default_plan ? el("span", null, planRules(s.default_plan).length + " rules · positions opened since " + stamp(s.default_plan_from))
-      : s.configured ? "only plans the bot sets run" : "unknown here"),
-    kpi("Watching", String(ex.active.length) + (ex.active.length === 1 ? " position" : " positions"), watchSub, ex.stale && ex.state_present ? "warn" : null),
-    live ? kpi("Plan sells", String(planSells.length), planSells.length ? el("span", null, signed(planPnl), " on the trades they closed") : "no position sold by a plan yet", planSells.length ? tone(planPnl) : null)
-      : kpi("Paper trial", String(ex.closed_trials) + " closed", ex.closed_trials ? el("span", null, "plan vs bot ", signed(ex.plan_vs_bot_usdt)) : "no closed trial yet"));
-
-  const active = ex.active.length ? el("div", { class: "grid halves" }, ex.active.map((a) => activePlanCard(a, live)))
-    : card("Open positions", empty("Nothing to watch", noBotData() ? NO_DATA[1]
-      : "The bot holds no position with a plan. When it buys" + (s.default_plan ? ", the fixed plan " + s.default_plan : ", the plan the bot sets") + " shows up here within seconds."));
-
-  const waiting = ex.waiting.length ? card("Waiting for the watcher", table([["Coin"], ["Plan"], ["Entry", "r"], ["Set", "r"]], ex.waiting.map((w) => el("tr", null,
-    el("td", null, assetLabel(w.asset)), el("td", { class: "code" }, w.spec), el("td", { class: "r" }, px(w.entry_price)), el("td", { class: "r muted", title: stamp(w.set_at) }, ago(w.set_at))))),
-    { flush: true, hint: "The bot set these; the watcher hasn't picked them up" }) : null;
-
-  const sells = planSells.length ? card("Trades closed by a plan", tradeTable(coinTrades(planSells), { expandable: true }), { flush: true }) : null;
-
-  const events = card("Watch log", ex.events_error ? errorBox(ex.events_error) : ex.events.length ? el("div", { class: "feed" }, ex.events.map((e) => {
-    const [label, t] = EXIT_EVENTS[e.event] || [pretty(e.event), ""];
-    return el("div", { class: "feed-item" }, el("div", { class: "feed-meta" }, chip(label, t), e.asset ? el("b", null, e.asset) : null,
-      e.spec ? el("span", { class: "code" }, e.spec) : null, e.at ? el("span", { title: stamp(e.at) }, ago(e.at)) : null),
-      exitEventText(e) ? el("div", { class: "small" }, exitEventText(e)) : null);
-  })) : empty("No events yet", "Starts, plan triggers, sells and closes are logged here."), { flush: ex.events.length > 0, hint: "newest first" });
-
-  return el("div", { class: "grid" }, head,
-    [ex.state_error, ex.book_error].filter(Boolean).map((e) => card(null, errorBox(e))),
-    kpis, active, waiting, sells, events,
-    el("details", { class: "footnote" }, el("summary", null, "How exit plans work"),
-      el("p", null, "When a default plan is set, it is the only plan: every position runs it and the bot cannot change it. Without one, the bot can pick a sell plan for each position from a fixed menu (follow the peak by percent or by candle range, take part at a gain, stretch above the 20-minute band, slowdown, momentum fade, deadline). Between cycles the bot checks the bid every few seconds; when a rule fires it sells that share into USDT through the same checked order path as the bot's own trades. Exit plans only sell, never buy. The sell line is where the follow-the-peak rule sells; other rules fire on their own conditions.")));
-}
-
 // ---------- Sessions ----------
 function countList(items, fmt = (x) => x) {
   return items && items.length ? items.map((x) => fmt(x.name) + " ×" + x.count).join(", ") : "—";
@@ -1410,8 +1287,6 @@ function sessionDetail(s) {
     fact("Models (cycles)", countList(s.models)),
     fact("Thinking", countList(s.thinking)),
     fact("Market pick", countList(s.market_pick_modes)),
-    fact("Exit plans run", countList(s.exit_plans)),
-    fact("Closed by a plan", String(st.closed_by_plan) + " of " + st.closed),
     fact("Best / worst", pct(st.best_pct) + " / " + pct(st.worst_pct)),
     fact("Fees paid", usd(st.fees_usdt)),
     fact("Open P&L", st.open ? el("span", null, signed(st.open_pnl_usdt), " (" + st.open + " open)") : "—"),
@@ -1420,14 +1295,13 @@ function sessionDetail(s) {
     ? table([["Setting"], ["Value"]], flatConfig(s.run_config).map(([k, v]) => el("tr", null, el("td", { class: "code small" }, k), el("td", { class: "code small" }, v))))
     : el("div", { class: "small muted" }, "Full configuration not recorded: this session ran before the trader started writing its setup on every cycle (2026-10-17). The facts above come from the audit log.");
   const trades = s.trades.length
-    ? table([["Sold"], ["Trade"], ["Result"], ["P&L", "r"], ["Return", "r"], ["Held", "r"], ["Exit plan"]], coinTrades(s.trades).map((t) => el("tr", null,
+    ? table([["Sold"], ["Trade"], ["Result"], ["P&L", "r"], ["Return", "r"], ["Held", "r"]], coinTrades(s.trades).map((t) => el("tr", null,
       el("td", { class: "nw muted", title: "bought " + stamp(t.opened_at) }, t.closed_at ? stamp(t.closed_at) : t.status === "open" ? "open" : "—"),
       el("td", null, tradeLabel(t)),
-      el("td", null, resultChip(t), t.closed_by_plan ? [" ", chip("Plan exit", "warn")] : null),
+      el("td", null, resultChip(t)),
       el("td", { class: "r" }, signed(t.pnl_usdt)),
       el("td", { class: "r" }, el("span", { class: tone(t.pnl_pct) }, pct(t.pnl_pct))),
-      el("td", { class: "r muted" }, duration(t.hold_seconds) + (t.status === "open" ? "+" : "")),
-      el("td", { class: "code small muted" }, t.plan || "—"))))
+      el("td", { class: "r muted" }, duration(t.hold_seconds) + (t.status === "open" ? "+" : "")))))
     : el("div", { class: "small muted" }, "No trades in this session.");
   return el("div", { class: "grid", style: "gap:12px;padding:8px 0" }, facts,
     el("div", null, el("div", { class: "small muted", style: "margin-bottom:4px" }, "Configuration"), config),
@@ -1467,7 +1341,7 @@ function sessionsPage() {
     { flush: true, hint: "click a session for its configuration and trades" });
   return el("div", { class: "grid" }, head, data.error ? card(null, errorBox(data.error)) : null, kpis, ranking,
     el("details", { class: "footnote" }, el("summary", null, "What a session is"),
-      el("p", null, "A session is one setup of the bot: the same prompt version, the same conversation (omp session) and, from 2026-10-17 on, the same recorded configuration (model, fallbacks, cycle interval, exit plans, routing). A trade belongs to the session whose cycle bought it. Realized P&L counts closed trades after exchange fees; open trades are shown apart. The winner is the session with the highest realized P&L.")));
+      el("p", null, "A session is one setup of the bot: the same prompt version, the same conversation (omp session) and, from 2026-10-17 on, the same recorded configuration (model, fallbacks, cycle interval, routing). A trade belongs to the session whose cycle bought it. Realized P&L counts closed trades after exchange fees; open trades are shown apart. The winner is the session with the highest realized P&L.")));
 }
 
 // ---------- /biz/ ----------

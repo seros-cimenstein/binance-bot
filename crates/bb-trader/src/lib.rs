@@ -14,16 +14,13 @@
 //! - [`context`]: decision context, `context_hash`, `route_id`.
 //! - [`executor`]: live route execution. [`audit`]: rows, halt, review marker.
 //! - [`state`]: the persisted cycle counter and last cycle.
-//! - [`exit_plan`]: the Phase 45 sell-plan menu. [`exit_replay`]: its historical replay.
-//!   [`exit_book`]: plans set by `set_exit_plan`. [`exit_watch`]: the paper watcher.
-//!   [`exit_guard`]: live exit plans inside the trader daemon.
 //! - [`algo_backtest`]: offline backtest of the algorithm on cached 1m candles, tuned on
 //!   the older half and judged on the newer (research only, no network, no order path).
 //! - [`biz`]: the /biz/ feed from biz-app, recorded per cycle, information only (Phase 51).
 //! - [`decider`]: the operator's rule (no LLM); backtested as `biz_algo`.
 //! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
-//!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `algo-backtest`.
+//!   `algo-backtest`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
@@ -39,11 +36,6 @@ pub mod cycle;
 pub mod decider;
 pub mod error;
 pub mod executor;
-pub mod exit_book;
-pub mod exit_guard;
-pub mod exit_plan;
-pub mod exit_replay;
-pub mod exit_watch;
 pub mod market_mood;
 pub mod memory;
 pub mod scope;

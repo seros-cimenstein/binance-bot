@@ -10,8 +10,6 @@
 //! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
-//! - `GET /api/exits`: Phase 45 exit plans: settings, running plans with their sell lines,
-//!   plans waiting for the watcher and the newest watch-log events ([`exits`]).
 //! - `GET /api/sessions`: results per trading session (setup), ranked, with the winner and
 //!   each session's configuration ([`sessions`]).
 //! - `GET /api/market`: market mood, bearish to bullish, from the breadth of the most-traded
@@ -22,7 +20,6 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-pub mod exits;
 pub mod history;
 pub mod market;
 pub mod sessions;
@@ -39,7 +36,6 @@ use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use bb_binance::BinanceClient;
-use bb_trader::exit_book::ExitPaths;
 use bb_trader::audit::failed_route_halt;
 use bb_trader::config::{DEFAULT_AUDIT_PATH, DEFAULT_STOP_PATH};
 use bb_trader::memory::load_audit_rows;
@@ -64,8 +60,6 @@ const INDEX_HTML: &str = include_str!("index.html");
 pub struct BotSpotFiles {
     pub audit_path: PathBuf,
     pub stop_path: PathBuf,
-    /// Phase 45 exit-plan book, watch state and watch log.
-    pub exits: ExitPaths,
 }
 
 impl BotSpotFiles {
@@ -76,7 +70,6 @@ impl BotSpotFiles {
         Self {
             audit_path: path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
             stop_path: path("BOT_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
-            exits: ExitPaths::from_env(),
         }
     }
 }
@@ -198,7 +191,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(status))
         .route("/api/history", get(history_handler))
         .route("/api/wallet", get(wallet_handler))
-        .route("/api/exits", get(exits_handler))
         .route("/api/market", get(market_handler))
         .route("/api/sessions", get(sessions_handler))
         .layer(middleware::from_fn(localhost_only))
@@ -261,7 +253,7 @@ async fn sessions_handler(State(app): State<Arc<AppState>>) -> Response {
     blocking_json(move || {
         let audit = state.audit();
         let trades = build_trades(&audit.routes, |asset| wallet.mark(asset), bb_core::time::now());
-        sessions::sessions_view(&audit, &trades, &state.bot_spot.exits.log)
+        sessions::sessions_view(&audit, &trades)
     })
     .await
 }
@@ -274,20 +266,6 @@ async fn wallet_handler(State(app): State<Arc<AppState>>) -> Response {
 async fn market_handler(State(app): State<Arc<AppState>>) -> Response {
     let view = app.market().await;
     json_response(json!(*view))
-}
-
-async fn exits_handler(State(app): State<Arc<AppState>>) -> Response {
-    let paths = app.bot_spot.exits.clone();
-    blocking_json(move || {
-        let audit = app.audit();
-        exits::exits_view(
-            &paths,
-            |name| std::env::var(name).ok(),
-            &audit.plan_exits,
-            bb_core::time::now_ms(),
-        )
-    })
-    .await
 }
 
 async fn blocking_json(work: impl FnOnce() -> Value + Send + 'static) -> Response {
@@ -424,11 +402,6 @@ mod tests {
         BotSpotFiles {
             audit_path: dir.join("audit.jsonl"),
             stop_path: dir.join("bot-spot.stop"),
-            exits: ExitPaths {
-                plans: dir.join("exit-plans.json"),
-                state: dir.join("exit-watch-state.json"),
-                log: dir.join("exit-watch.jsonl"),
-            },
         }
     }
 

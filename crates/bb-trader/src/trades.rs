@@ -20,15 +20,14 @@
 //! A trade with no closing route is `open` (marked at the current price) while its asset is
 //! still in the wallet, else `unknown`. Trades into stablecoins are `cash`, held or not: their
 //! P&L counts toward net P&L but not toward wins and losses (with fills it is zero, since every
-//! fee belongs to the coin bought or sold). `closed_by_plan` marks a trade whose closing route
-//! was a Phase 45 exit-plan sell. Fees in BNB or another coin are valued at that coin's
-//! current wallet price (approximate; a coin not in the wallet leaves its fees out).
+//! fee belongs to the coin bought or sold). Old `exit-plan` sells (Phase 45, removed) close a
+//! trade like any other sell. Fees in BNB or another coin are valued at that coin's current
+//! wallet price (approximate; a coin not in the wallet leaves its fees out).
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cycle::EXIT_CYCLE_ID;
 use crate::memory::{row_asset, row_route_id, value_decimal};
 
 /// Assets treated as cash: a trade into one of them is parking, not a bet.
@@ -59,15 +58,13 @@ pub struct Fee {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouteRecord {
     pub timestamp: String,
-    /// The cycle that placed it (`exit-plan` for plan sells; empty in older rows).
+    /// The cycle that placed it (empty in older rows).
     pub cycle_id: String,
     pub route_id: String,
     pub source_asset: String,
     pub destination_asset: String,
     pub reason: String,
     pub legs: usize,
-    /// Sold by an exit plan between cycles (`cycle_id` [`EXIT_CYCLE_ID`]), not by the bot.
-    pub exit_plan: bool,
     pub valuation: Valuation,
     /// Source quantity given up and the USDT it fetched (fills: before fees).
     pub sold_qty: Option<Decimal>,
@@ -106,7 +103,6 @@ pub fn route_record(row: &Value) -> RouteRecord {
         route_id: row_route_id(row),
         reason: text(row, "/decision/reason"),
         legs,
-        exit_plan: row.get("cycle_id").and_then(Value::as_str) == Some(EXIT_CYCLE_ID),
         valuation: Valuation::Quotes,
         sold_qty: None,
         sold_usdt: None,
@@ -299,8 +295,6 @@ pub struct Trade {
     pub destination_asset: String,
     pub reason: String,
     pub legs: usize,
-    /// The closing route was an exit-plan sell.
-    pub closed_by_plan: bool,
     /// The opening route's amounts: the exchange's fills or the trader's quote.
     pub valuation: Valuation,
     pub status: TradeStatus,
@@ -398,7 +392,6 @@ pub fn build_trades(
                 destination_asset: route.destination_asset.clone(),
                 reason: route.reason.clone(),
                 legs: route.legs,
-                closed_by_plan: closing.is_some_and(|later| later.exit_plan),
                 valuation: route.valuation,
                 status,
                 cost_usdt: cost,
@@ -464,7 +457,6 @@ mod tests {
             destination_asset: to.into(),
             reason: String::new(),
             legs: 1,
-            exit_plan: false,
             valuation: Valuation::Quotes,
             sold_qty: Some(input),
             sold_usdt: Some(spent),
@@ -504,7 +496,7 @@ mod tests {
     #[test]
     fn filled_round_trip_uses_the_fills_not_the_planned_spend_and_subtracts_both_fees() {
         // The bot planned 10 USDT; the order filled 53.07 ENA for 9.934704 (reserve kept back).
-        // The exit plan sold all 53.07 for 9.950625. Each order paid 0.00001 BNB at 700.
+        // The sell got all 53.07 for 9.950625. Each order paid 0.00001 BNB at 700.
         let rows = [
             filled_row("2026-10-15T11:56:06Z", "USDT", "ENA", "53.07", "9.934704", 10.0, 0.00001),
             filled_row("2026-10-15T12:15:54Z", "ENA", "USDT", "53.07", "9.950625", 9.92, 0.00001),
@@ -591,19 +583,16 @@ mod tests {
     }
 
     #[test]
-    fn trade_closed_by_an_exit_plan_sell_is_marked_and_valued_like_any_close() {
+    fn an_old_phase_45_plan_sell_closes_its_trade_like_any_sell() {
         let mut sell = route("2026-10-13T02:00:00Z", "SOL", "USDT", dec!(120), dec!(119), dec!(1), dec!(119));
-        sell.exit_plan = true;
+        sell.cycle_id = "exit-plan".into();
         let routes = [
             route("2026-10-13T00:00:00Z", "USDT", "SOL", dec!(100), dec!(99), dec!(100), dec!(1)),
             sell,
         ];
         let trades = build_trades(&routes, |_| None, now());
-        assert!(trades[0].closed_by_plan);
         assert_eq!(trades[0].status, TradeStatus::Win);
         assert_eq!(trades[0].pnl_usdt, Some(dec!(20)));
-        // The sell itself opens a cash trade that nothing closed yet.
-        assert!(!trades[1].closed_by_plan);
     }
 
     #[test]

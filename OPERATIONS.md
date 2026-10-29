@@ -34,10 +34,9 @@ deployed is in `PROGRESS.md`.
 
 ## Safety Posture
 
-The only order path is Bot Spot's `execute_route`; with
-`BOT_SPOT_EXIT_PLANS_LIVE=true` its exit-plan sells go through the same hard
-safety. `bot-spot-exit-watch` (paper), `bot-spot-algo-paper` (plan-only) and
-the dashboard place no orders. The legacy `binance-bot.service` and the paper
+The only order path is Bot Spot's `execute_route`. `bot-spot-algo-paper`
+(plan-only) and the dashboard place no orders. The legacy
+`binance-bot.service` and the paper
 pool units are no longer shipped; on a host that still has them installed,
 keep them disabled. Verify the boundary on a systemd host:
 
@@ -81,7 +80,7 @@ docker compose --profile all up -d --remove-orphans
 
 Profiles: `live` and `all` (bot trader, dashboard, scheduler;
 `deploy/seref/binance-bot-compose.service` brings up `all` at boot), `gui`
-(dashboard only), `exit-paper` (paper exit-plan watcher), `algo-paper`
+(dashboard only), `algo-paper`
 (plan-only rule-based decider). The `scheduler` container runs the nightly
 Bot Spot data backup from `docker/crontab` (baked into the image, so a crontab
 change needs a rebuild).
@@ -122,7 +121,7 @@ Laptop on the Pi's live data: `scripts/cryptobot_gui_pi.sh --open` (the
 `cryptobot-gui` fish command). It rsyncs the Pi's `docker-data` into
 `~/.cache/binance-bot/pi-data` every 30 s (old omp logins, the old bot
 session and session files are not copied; nothing is written on the Pi), maps the
-trader's file paths and the exit-plan settings from the Pi's `.env.docker`,
+trader's file paths from the Pi's `.env.docker`,
 and runs the local release build against the mirror with the laptop's
 read-only keys for the wallet. Started without Pi data, the page says so
 instead of showing empty tabs. Overrides: `PI_HOST`, `PI_DATA_DIR`,
@@ -222,52 +221,6 @@ journalctl --user -u binance-bot-spot.service -f
 The service always passes `--submit-live`; whether it trades is decided by the
 live arming variables in `.env` and the stop file.
 
-### Exit plans (Phase 45)
-
-Phase 52 removes this; since the LLM trader is gone (2026-10-29) the prompt and tool parts below no longer run.
-
-The bot may give an open position a sell plan with the `set_exit_plan` tool
-(fixed menu: follow the peak by percent or ATR, take part, stretch, slowdown,
-momentum fade, deadline; setting again replaces it, `clear` removes a plan the
-bot set and never the default plan).
-Positions opened from `BOT_SPOT_DEFAULT_EXIT_PLAN_FROM` run
-`BOT_SPOT_DEFAULT_EXIT_PLAN` (`.env.docker`: `deadline=120`, sell all 2
-hours after entry; v7 used `stretch=2:1,atr=3:1h`)
-unless the bot sets its own plan; in the v7 runs it set deadline plans
-(`deadline=60..180`). This is the v7 system restored on 2026-10-17 (branch
-`old-gold-way`) after the fixed plan and the locked rules cut winners short.
-`stretch` fires only when its line is above break-even (entry plus the buy
-and sell fees at the trip's fee rate), so it cannot sell a fee-negative
-"win" (UNI 2026-10-16, ZEC 2026-10-17).
-
-- **Live** (`BOT_SPOT_EXIT_PLANS_LIVE=true`, deployed since 2026-10-15):
-  between cycles `bot-spot` checks each planned position's bid every
-  `BOT_SPOT_EXIT_POLL_SECONDS` (5) and sells it into USDT when its plan
-  fires, through the same hard safety as the bot's routes. Each sell is a
-  route row with `cycle_id` `exit-plan` in the audit;
-  the watch log records `would_sell`, `sold`, `sell_failed` and
-  `sell_abandoned`. The emergency stop file stops these sells too. To turn
-  live plans off, set `BOT_SPOT_EXIT_PLANS_LIVE=false` and recreate
-  `bot-spot`.
-- **Paper** (`BOT_SPOT_EXIT_PLANS_LIVE=false`): compose service
-  `bot-spot-exit-watch` (profile `exit-paper`) or
-  `binance-bot-spot-exit-watch.service` records would-be sells and places
-  no orders. It refuses to start while plans run live.
-- Files: `BOT_SPOT_EXIT_PLANS_PATH` (written by the trader's tool),
-  `BOT_SPOT_EXIT_WATCH_STATE_PATH` and `BOT_SPOT_EXIT_WATCH_LOG_PATH`
-  (written by whichever of the two runs). The cycle prompt shows each plan
-  and the 5 newest closed positions with the rule that sold, prices and the
-  net result after fees (watch state `recent_closed`); trade history marks
-  plan sells with the plan, rule, share and trigger price (`exit_plan`).
-- Results: `bb bot-spot-exit-watch --summary` compares, for each closed
-  position with a plan, "with the plan" and "The bot alone". A position a
-  live plan sell closed has no bot exit to compare with: it is listed as
-  `plan (live)` with its real result and left out of the plan-vs-bot total
-  (its watch-log row has `closed_by_plan`, `exit_net_pct` and
-  `fill_vs_trigger_usdt`; rows from before 2026-10-19 are matched against
-  the audit's `exit-plan` sells, so `--summary` also reads
-  `BOT_SPOT_AUDIT_PATH`). The dashboard's Exits tab shows the same split.
-
 ### /biz/ feed (Phase 51)
 
 biz-app (`~/projects/automation/imageboards/biz-app`, on the laptop) writes
@@ -315,9 +268,7 @@ is left out of that cycle.
 - **Going live** (after the practice run and the operator's go):
   `docker tag binance-bot:latest binance-bot:pre-algo-<date>`, set the
   operator's `BOT_SPOT_ALGO_WEIGHTS` in `~/binance-bot/.env.docker`, `docker
-  compose up -d bot-spot`, watch the first cycles. With
-  `BOT_SPOT_EXIT_PLANS_LIVE=true` the default exit plan still sells positions
-  between cycles; set it to `false` for the rule's own sells only. Back: retag
+  compose up -d bot-spot`, watch the first cycles. Back: retag
   the rollback image and recreate. `touch docker-data/bot-spot.stop` stops it.
 
 ### Failed-route halt
@@ -422,9 +373,9 @@ bias.
 ## Bot Spot Data Backups
 
 Bot Spot's record is files: the decisions
-audit (the only record of every trade), trader state, exit-plan book and
-watch files (the old journal, omp session directory and entry-timing cache are
-no longer archived; earlier archives keep them).
+audit (the only record of every trade) and the trader state (the old journal,
+omp session directory, entry-timing cache and exit-plan files are no longer
+archived; earlier archives keep them).
 `scripts/backup_bot_data.sh` archives them into
 `backups/bot-spot-data-<UTC>-<pid>.tar.gz`. It keeps 14
 (`BINANCE_BOT_BACKUP_RETENTION`) and resolves each path from the trader's

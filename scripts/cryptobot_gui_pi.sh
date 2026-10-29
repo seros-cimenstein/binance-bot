@@ -5,7 +5,7 @@
 # pulls the Pi's bot data dir into a local mirror with rsync (once, then every
 # MIRROR_SECONDS), points cryptobot-gui at the mirror and runs it in the foreground. Ctrl+C
 # stops both. Nothing is written on the Pi: the only remote commands are rsync reads and one
-# grep of the non-secret exit-plan settings in the Pi's env file. Old omp logins, the old bot
+# grep of the non-secret file paths in the Pi's env file. Old omp logins, the old bot
 # session and session files are not copied.
 #
 # Extra arguments go to cryptobot-gui, e.g. `scripts/cryptobot_gui_pi.sh --open`.
@@ -74,14 +74,11 @@ mirror
 declare -A paths=(
     [BOT_SPOT_AUDIT_PATH]=bot-spot-decisions.jsonl
     [BOT_SPOT_STOP_PATH]=bot-spot.stop
-    [BOT_SPOT_EXIT_PLANS_PATH]=bot-spot-exit-plans.json
-    [BOT_SPOT_EXIT_WATCH_STATE_PATH]=bot-spot-exit-watch-state.json
-    [BOT_SPOT_EXIT_WATCH_LOG_PATH]=bot-spot-exit-watch.jsonl
 )
 for name in "${!paths[@]}"; do
     export "$name=$MIRROR_DIR/${paths[$name]}"
 done
-settings_pattern='^BOT_SPOT_(EXIT_PLANS_LIVE|DEFAULT_EXIT_PLAN|DEFAULT_EXIT_PLAN_FROM|EXIT_POLL_SECONDS|AUDIT_PATH|STOP_PATH|EXIT_PLANS_PATH|EXIT_WATCH_STATE_PATH|EXIT_WATCH_LOG_PATH)='
+settings_pattern='^BOT_SPOT_(AUDIT_PATH|STOP_PATH)='
 if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "grep -E '$settings_pattern' $PI_ENV_FILE" 2>/dev/null)"; then
     while IFS='=' read -r name value; do
         [[ "$name" =~ ^BOT_SPOT_[A-Z_]+$ ]] || continue
@@ -96,7 +93,7 @@ if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "grep -E '$settings_pa
         export "$name=$value"
     done <<< "$remote_settings"
 else
-    echo "cryptobot-gui-pi: could not read the exit-plan settings from $PI_HOST:$PI_ENV_FILE; the Exits tab shows the mode as unknown" >&2
+    echo "cryptobot-gui-pi: could not read the file paths from $PI_HOST:$PI_ENV_FILE; using the trader defaults" >&2
 fi
 
 (

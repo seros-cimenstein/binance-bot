@@ -4,13 +4,10 @@
 //! (for cycles from 2026-10-17 on) the same recorded run configuration (`run_config` on the
 //! cycle summary rows). Each trade belongs to the session of the cycle that opened it; older
 //! rows without a cycle id go to the session of the first cycle summary written after them.
-//! The exit plans a session ran come from the watch log's `started` events, matched to the
-//! trade they followed.
 //!
 //! The winner is the session with the highest realized P&L (closed trades, after fees).
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
@@ -18,9 +15,6 @@ use serde_json::{Value, json};
 
 use crate::history::{CycleRecord, ParsedAudit};
 use bb_trader::trades::{Trade, TradeStatus};
-
-/// A watch-log plan whose position was opened within this long of a trade belongs to it.
-const PLAN_MATCH_MS: i64 = 10 * 60_000;
 
 fn millis(text: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(text)
@@ -60,8 +54,7 @@ struct Session<'a> {
     thinking: BTreeMap<String, usize>,
     pick_modes: BTreeMap<String, usize>,
     llm_cost_usd: Decimal,
-    trades: Vec<(&'a Trade, Option<String>)>,
-    plans: BTreeMap<String, usize>,
+    trades: Vec<&'a Trade>,
 }
 
 impl<'a> Session<'a> {
@@ -78,7 +71,6 @@ impl<'a> Session<'a> {
             pick_modes: BTreeMap::new(),
             llm_cost_usd: Decimal::ZERO,
             trades: Vec::new(),
-            plans: BTreeMap::new(),
         }
     }
 
@@ -104,7 +96,7 @@ impl<'a> Session<'a> {
         let mut pnl = Decimal::ZERO;
         let mut cost = Decimal::ZERO;
         let mut closed = 0;
-        for (trade, _) in &self.trades {
+        for trade in &self.trades {
             if matches!(trade.status, TradeStatus::Win | TradeStatus::Loss) {
                 pnl += trade.pnl_usdt.unwrap_or_default();
                 cost += trade.cost_usdt.unwrap_or_default();
@@ -116,19 +108,19 @@ impl<'a> Session<'a> {
 
     fn stats(&self) -> Value {
         let (pnl, cost, closed) = self.realized();
-        let count = |status: TradeStatus| self.trades.iter().filter(|(t, _)| t.status == status).count();
+        let count = |status: TradeStatus| self.trades.iter().filter(|t| t.status == status).count();
         let wins = count(TradeStatus::Win);
         let closed_pcts: Vec<f64> = self
             .trades
             .iter()
-            .filter(|(t, _)| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
-            .filter_map(|(t, _)| t.pnl_pct)
+            .filter(|t| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
+            .filter_map(|t| t.pnl_pct)
             .collect();
         let holds: Vec<i64> = self
             .trades
             .iter()
-            .filter(|(t, _)| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
-            .filter_map(|(t, _)| t.hold_seconds)
+            .filter(|t| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
+            .filter_map(|t| t.hold_seconds)
             .collect();
         #[allow(clippy::cast_precision_loss)]
         let mean = |values: &[i64]| {
@@ -137,14 +129,14 @@ impl<'a> Session<'a> {
         let fees: Decimal = self
             .trades
             .iter()
-            .filter(|(t, _)| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
-            .filter_map(|(t, _)| t.fees_usdt)
+            .filter(|t| matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
+            .filter_map(|t| t.fees_usdt)
             .sum();
         let open_pnl: Decimal = self
             .trades
             .iter()
-            .filter(|(t, _)| t.status == TradeStatus::Open)
-            .filter_map(|(t, _)| t.pnl_usdt)
+            .filter(|t| t.status == TradeStatus::Open)
+            .filter_map(|t| t.pnl_usdt)
             .sum();
         #[allow(clippy::cast_precision_loss)]
         let win_rate = (closed > 0).then(|| wins as f64 * 100.0 / closed as f64);
@@ -165,34 +157,12 @@ impl<'a> Session<'a> {
             "best_pct": closed_pcts.iter().copied().reduce(f64::max),
             "worst_pct": closed_pcts.iter().copied().reduce(f64::min),
             "avg_hold_minutes": mean(&holds).map(|s| s / 60.0),
-            "closed_by_plan": self
-                .trades
-                .iter()
-                .filter(|(t, _)| t.closed_by_plan && matches!(t.status, TradeStatus::Win | TradeStatus::Loss))
-                .count(),
         })
     }
 }
 
-/// `started` events of the exit-plan watch log: (asset, position entry ms, plan spec).
-fn started_plans(watch_log: &Path) -> Vec<(String, i64, String)> {
-    let Ok(text) = std::fs::read_to_string(watch_log) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|row| row.get("event").and_then(Value::as_str) == Some("started"))
-        .filter_map(|row| {
-            let asset = row.get("asset")?.as_str()?.to_owned();
-            let entry_ms = row.get("key")?.as_str()?.split('@').nth(1)?.parse().ok()?;
-            let spec = row.get("spec")?.as_str()?.to_owned();
-            Some((asset, entry_ms, spec))
-        })
-        .collect()
-}
-
 /// Sessions ranked by realized P&L, each with its stats, trades and configuration.
-pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade], watch_log: &Path) -> Value {
+pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade]) -> Value {
     let mut sessions: Vec<Session<'_>> = Vec::new();
     let mut by_key: HashMap<String, usize> = HashMap::new();
     let mut cycle_session: HashMap<&str, usize> = HashMap::new();
@@ -218,7 +188,6 @@ pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade], watch_log: &Path) ->
         }
     }
 
-    let plans = started_plans(watch_log);
     let mut unattributed = 0;
     for trade in trades {
         if bb_trader::trades::CASH_ASSETS.contains(&trade.destination_asset.as_str()) {
@@ -233,18 +202,7 @@ pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade], watch_log: &Path) ->
             unattributed += 1;
             continue;
         };
-        let plan = opened.and_then(|opened| {
-            plans
-                .iter()
-                .find(|(asset, entry, _)| {
-                    *asset == trade.destination_asset && (entry - opened).abs() <= PLAN_MATCH_MS
-                })
-                .map(|(_, _, spec)| spec.clone())
-        });
-        if let Some(spec) = &plan {
-            *sessions[index].plans.entry(spec.clone()).or_default() += 1;
-        }
-        sessions[index].trades.push((trade, plan));
+        sessions[index].trades.push(trade);
     }
 
     // Labels: prompt and session, numbered when one pair ran several setups.
@@ -302,10 +260,9 @@ pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade], watch_log: &Path) ->
                 "models": counts(&s.models),
                 "thinking": counts(&s.thinking),
                 "market_pick_modes": counts(&s.pick_modes),
-                "exit_plans": counts(&s.plans),
                 "run_config": s.run_config,
                 "stats": s.stats(),
-                "trades": s.trades.iter().rev().map(|(t, plan)| json!({
+                "trades": s.trades.iter().rev().map(|t| json!({
                     "opened_at": t.opened_at,
                     "closed_at": t.closed_at,
                     "closed_into": t.closed_into,
@@ -315,8 +272,6 @@ pub fn sessions_view(audit: &ParsedAudit, trades: &[Trade], watch_log: &Path) ->
                     "pnl_usdt": t.pnl_usdt,
                     "pnl_pct": t.pnl_pct,
                     "hold_seconds": t.hold_seconds,
-                    "closed_by_plan": t.closed_by_plan,
-                    "plan": plan,
                 })).collect::<Vec<_>>(),
             })
         })
@@ -361,7 +316,6 @@ mod tests {
             destination_asset: asset.into(),
             reason: String::new(),
             legs: 1,
-            closed_by_plan: false,
             valuation: Valuation::Fills,
             status,
             cost_usdt: Some(dec!(10)),
@@ -376,7 +330,7 @@ mod tests {
     #[test]
     fn trades_join_the_session_that_bought_them_and_the_best_realized_pnl_wins() {
         let deadline = |tag: &str| {
-            json!({"model": "sol", "prompt_version": tag, "exit_plans": {"default_plan": "deadline=120"}})
+            json!({"model": "sol", "prompt_version": tag, "cycle_interval_seconds": 1200})
         };
         let audit = ParsedAudit {
             cycles: vec![
@@ -400,16 +354,7 @@ mod tests {
             // Selling into USDT is parking, not a session's bet.
             trade("2026-10-17T13:10:00+00:00", "c1", "USDT", TradeStatus::Cash, dec!(0)),
         ];
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("watch.jsonl");
-        let uni_entry = millis("2026-10-15T10:05:02+00:00").unwrap();
-        std::fs::write(
-            &log,
-            format!("{}\n", json!({"event": "started", "asset": "UNI", "key": format!("UNI@{uni_entry}@{uni_entry}"), "spec": "deadline=180"})),
-        )
-        .unwrap();
-
-        let view = sessions_view(&audit, &trades, &log);
+        let view = sessions_view(&audit, &trades);
         let sessions = view["sessions"].as_array().unwrap();
         assert_eq!(sessions.len(), 4);
         let first = &sessions[0];
@@ -417,7 +362,6 @@ mod tests {
         assert_eq!((first["rank"].as_u64(), first["winner"].as_bool()), (Some(1), Some(true)));
         assert_eq!(first["stats"]["closed"], 2);
         assert_eq!(first["stats"]["realized_pnl_usdt"], json!("0.58"));
-        assert_eq!(first["exit_plans"], json!([{"name": "deadline=180", "count": 1}]));
         assert_eq!(view["winner"], "v7 · S1");
         // The loser is ranked after it; sessions without closed trades come last.
         assert_eq!(sessions[1]["label"], "v8 · S2");

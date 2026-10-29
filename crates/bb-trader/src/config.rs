@@ -77,6 +77,14 @@ pub const REMOVED_VARS: &[&str] = &[
     // Phase 52 (operator, A5): no Markov value model.
     "BOT_SPOT_MDP_ENABLED",
     "BOT_SPOT_MDP_MODEL_PATH",
+    // Phase 52: no exit plans (live or paper) between cycles.
+    "BOT_SPOT_EXIT_PLANS_PATH",
+    "BOT_SPOT_EXIT_WATCH_STATE_PATH",
+    "BOT_SPOT_EXIT_WATCH_LOG_PATH",
+    "BOT_SPOT_EXIT_PLANS_LIVE",
+    "BOT_SPOT_DEFAULT_EXIT_PLAN",
+    "BOT_SPOT_DEFAULT_EXIT_PLAN_FROM",
+    "BOT_SPOT_EXIT_POLL_SECONDS",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -131,10 +139,6 @@ pub struct TraderConfig {
     pub audit_path: PathBuf,
     pub lock_path: PathBuf,
     pub stop_path: PathBuf,
-    /// Phase 45 exit plans: plan book (written by `set_exit_plan`), watch state and log.
-    pub exit_paths: crate::exit_book::ExitPaths,
-    /// Phase 45 exit plans: live or paper, default plan, poll interval.
-    pub exit: crate::exit_book::ExitSettings,
     // universe / routing
     pub max_route_legs: usize,
     pub max_route_expansions: usize,
@@ -203,8 +207,6 @@ impl TraderConfig {
             &env.csv("BOT_SPOT_BLOCKED_QUOTES", "IDR"),
             env.boolean("BOT_SPOT_BLOCK_FIAT_ASSETS", true)?,
         )?;
-        let exit = crate::exit_book::ExitSettings::from_lookup(|name| env.raw(name))
-            .map_err(TraderError::config)?;
         let spec = env.raw("BOT_SPOT_ALGO_WEIGHTS").ok_or_else(|| {
             TraderError::config(
                 "BOT_SPOT_ALGO_WEIGHTS is required (talk,stance,momentum,buy_above,sell_below): the operator's rule",
@@ -237,8 +239,6 @@ impl TraderConfig {
             audit_path: env.path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
             lock_path: env.path("BOT_SPOT_LOCK_PATH", "data/bot-spot.lock"),
             stop_path: env.path("BOT_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
-            exit_paths: crate::exit_book::ExitPaths::from_lookup(|name| env.raw(name)),
-            exit,
             max_route_legs: env.integer("BOT_SPOT_MAX_ROUTE_LEGS", 3)?,
             max_route_expansions: env.integer("BOT_SPOT_MAX_ROUTE_EXPANSIONS", 10_000)?,
             max_candidate_routes: env.integer("BOT_SPOT_MAX_CANDIDATE_ROUTES", 1)?,
@@ -358,12 +358,6 @@ impl TraderConfig {
             "mode": self.mode(),
             "rules_version": self.rules_version,
             "cycle_interval_seconds": cycle_interval_seconds,
-            "exit_plans": {
-                "live": self.exit.live,
-                "default_plan": self.exit.default_plan.map(|d| d.plan.to_string()),
-                "default_plan_from_ms": self.exit.default_plan.map(|d| d.from_ms),
-                "poll_seconds": self.exit.poll_seconds,
-            },
             "routing": {
                 "market_pick_mode": self.market_pick_mode.as_str(),
                 "max_route_legs": self.max_route_legs,
@@ -585,8 +579,6 @@ pub(crate) mod tests {
             ("BINANCE_API_SECRET", "SECRET-must-not-leak"),
             ("CONFIRM_LIVE_TRADING", "yes"),
             ("BOT_SPOT_RULES_VERSION", "rules-2026-10-30"),
-            ("BOT_SPOT_DEFAULT_EXIT_PLAN", "deadline=120"),
-            ("BOT_SPOT_DEFAULT_EXIT_PLAN_FROM", "2026-10-15T09:17:34Z"),
         ]))
         .unwrap();
         let snapshot = config.run_config(Some(1200));
@@ -594,7 +586,6 @@ pub(crate) mod tests {
         assert!(!text.contains("must-not-leak"), "{text}");
         assert_eq!(snapshot["rules_version"], "rules-2026-10-30");
         assert_eq!(snapshot["cycle_interval_seconds"], 1200);
-        assert_eq!(snapshot["exit_plans"]["default_plan"], "deadline=120");
     }
 
     #[test]

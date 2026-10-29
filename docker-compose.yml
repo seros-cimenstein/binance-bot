@@ -15,7 +15,6 @@
 #   live       -> Bot Spot trader + dashboard + scheduler
 #   all        -> same as live (deploy/seref/binance-bot-compose.service runs --profile all)
 #   gui        -> cryptobot-gui read-only dashboard only
-#   exit-paper -> bot-spot-exit-watch: the Phase 45 exit-plan paper watcher (no orders)
 #   algo-paper -> bot-spot-algo-paper: the Phase 51 rule-based decider, plan-only (no orders)
 #
 
@@ -58,16 +57,6 @@ services:
     container_name: bot-spot
     profiles: ["live", "all"]
     command: ["bb", "bot-spot", "--submit-live", "--daemon", "--interval-seconds", "1200"]
-
-  # Phase 45 exit-plan PAPER trial: follows the bid of every position with a plan every 5 s
-  # and records would-be sells (no orders). Not used while BOT_SPOT_EXIT_PLANS_LIVE=true:
-  # then bot-spot runs the plans live itself and this service refuses to start.
-  bot-spot-exit-watch:
-    <<: *base
-    container_name: bot-spot-exit-watch
-    profiles: ["exit-paper"]
-    restart: "no"
-    command: ["bb", "bot-spot-exit-watch", "--daemon", "--poll-seconds", "5"]
 
   # Practice run of the algorithm (no LLM): plan-only,
   # so it records `planned` routes and places no order, next to the live trader. Its own audit,

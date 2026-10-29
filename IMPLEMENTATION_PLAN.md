@@ -38,11 +38,11 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
 
 ### Remove the old trader
 
-- [ ] LLM path: omp session, host tools, prompts, journal, model failover,
+- [x] LLM path: omp session, host tools, prompts, journal, model failover,
   LLM cost control, `BOT_SPOT_DECIDER`, crate `bb-omp`, `omp` and Bun in the
-  Docker image.
-- [ ] Alerts and social input: Telegram alerts and their cooldown file, crate
-  `bb-social` (Telegram and X evidence).
+  Docker image (`LOOP_ALGO.md` C3-C7).
+- [x] Alerts and social input: Telegram alerts and their cooldown file, crate
+  `bb-social` (Telegram and X evidence) (`LOOP_ALGO.md` C1-C2).
 - [ ] LLM-era features: GCP2 schizo state, Markov value voice
   (`bot-spot-mdp-fit`), personas and the persona backtest, exit plans
   (`set_exit_plan`, exit watch and replay, the `bot-spot-exit-watch`

@@ -1,11 +1,9 @@
 //! Dashboard view of the audit log: submitted routes (valued by [`bb_trader::trades`]),
 //! failed routes and cycle summaries.
-use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use bb_trader::exit_replay::plan_exit_key;
 use bb_trader::memory::{row_asset, row_attempted_submission, row_status, value_decimal};
 use bb_trader::trades::{RouteRecord, route_record};
 use rust_decimal::Decimal;
@@ -42,8 +40,6 @@ pub struct ParsedAudit {
     pub routes: Vec<RouteRecord>,
     pub failed: Vec<FailedRoute>,
     pub cycles: Vec<CycleRecord>,
-    /// `(asset, order ms)` of each live exit-plan sell (see [`plan_exit_key`]).
-    pub plan_exits: BTreeSet<(String, i64)>,
     pub error: Option<String>,
 }
 
@@ -71,9 +67,6 @@ pub fn parse_audit(path: &Path) -> ParsedAudit {
         let Ok(row) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(key) = plan_exit_key(&row) {
-            parsed.plan_exits.insert(key);
-        }
         if text(&row, "/row_type") == "cycle_summary" {
             parsed.cycles.push(CycleRecord {
                 timestamp: text(&row, "/timestamp"),
@@ -129,6 +122,7 @@ mod tests {
                    "selected_route": {"source_value_usdt": 10, "estimated_output_usdt": "9.9",
                                       "input_amount": 10, "output_amount": 0.05},
                    "submitted_legs": [{}]}),
+            // An old exit-plan sell (Phase 45, removed) is an ordinary submitted route.
             json!({"timestamp": "t1b", "status": "submitted", "submission_attempted": true, "cycle_id": "exit-plan",
                    "decision": {"source_asset": "SOL", "destination_asset": "USDT", "reason": "exit plan fired"}}),
             json!({"timestamp": "t2", "status": "submitted", "row_type": "cycle_summary"}),
@@ -151,8 +145,7 @@ mod tests {
         assert_eq!(first.valuation, Valuation::Quotes);
         assert_eq!(first.quoted_cost_usdt, Some(dec!(0.1)));
         assert_eq!(first.legs, 1);
-        assert!(!first.exit_plan);
-        assert!(parsed.routes[1].exit_plan);
+        assert_eq!(parsed.routes[1].cycle_id, "exit-plan");
         assert_eq!(parsed.failed.len(), 1);
         assert_eq!(parsed.failed[0].error, "boom");
         assert_eq!(parse_audit(&dir.path().join("missing")), ParsedAudit::default());

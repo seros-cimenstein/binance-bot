@@ -16,7 +16,7 @@ Polymarket, airdrop, funding arb, trend filter, mean reversion) were moved to
 |---|---|
 | `bb-core` | env config, `Decimal` money helpers, fsync'd JSONL audit, run locks, stop files |
 | `bb-binance` | native Binance Spot REST client: HMAC/Ed25519 signing, time sync, rate-limit tracking, exchange rules, spot market data and orders, wallet balance totals, klines history |
-| `bb-trader` | `bot-spot`: the algorithm trader (the operator's rule), its offline backtest `algo-backtest`, and exit plans (until Phase 52 removes them) |
+| `bb-trader` | `bot-spot`: the algorithm trader (the operator's rule) and its offline backtest `algo-backtest` |
 | `bb-pool` | library for the trader: market catalog, commission/fee service, multi-leg route engine, models (no commands, no order path) |
 | `bb-strategies` | bot research: `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
 | `bb-cli` | the `bb` binary |
@@ -45,7 +45,7 @@ Run `bb --help` or `bb <command> --help`.
 
 | Area | Commands |
 |---|---|
-| Bot trader | `bot-spot`, `bot-spot-exit-watch`, `bot-spot-exit-replay` |
+| Bot trader | `bot-spot` |
 | Bot research | `algo-backtest`, `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
 
 ## Algorithm Spot trader (`bb bot-spot`)
@@ -72,8 +72,7 @@ required):
   weights on the older half of the window and judges them on the newer
   (OPERATIONS.md, "Algorithm backtest"). The compose profile
   `algo-paper` runs the trader plan-only.
-- **Still in the code until Phase 52 removes it:** exit plans and the
-  20-minute cycle.
+- **Still in the code until Phase 52 removes it:** the 20-minute cycle.
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
   - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked at cycle start, before every route, before every leg and before every order;
@@ -96,39 +95,8 @@ bb bot-spot --evidence-only                 # decision context, no orders
 bb bot-spot --plan-only                     # the algorithm decides; execute_route only records plans
 bb bot-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
 bb bot-spot --mark-failed-route-reviewed    # clear the failed-route halt after review
-bb bot-spot-exit-replay --table             # replay the Phase 45 sell-plan menu on real round trips
-bb bot-spot-exit-watch --daemon             # paper exit-plan watcher (no orders)
-bb bot-spot-exit-watch --summary            # closed plan trials vs the bot's own exits (live plan-sold positions apart)
 bb algo-backtest --end 2026-10-18T10:43:00Z   # the algorithm, offline backtest (no orders)
 ```
-
-`bb bot-spot-exit-replay` (Phase 45, research only, public klines, no
-orders) pairs each real round trip in the audit log (current and older row
-schema, every market; `--quote USDT` keeps one quote), replays sell plans on
-the entry market's klines from entry to `--horizon-minutes` (1440) later and
-compares them with the bot's actual exit and with the best price seen. P&L is
-the net return times the USDT value the route spent. Plans come from a fixed
-menu, repeatable as `--plan`: `trail=<pct>` or `atr=<multiple>:<1m|5m|15m|1h>`
-(follow the peak by a percent or by average true ranges, Chandelier exit),
-`part=<gain_pct>:<fraction>` (take part), `stretch=<z>:<fraction>` (sell at
-the upper Bollinger band of the last 20 minutes, only above entry plus the
-buy and sell fees),
-`slow=<fraction>:<minutes>` (still rising but slowing 3 minutes in a row),
-`fade=<min_gain_pct>:<minutes>` (momentum fade), `deadline=<minutes>` and
-`hold`. `docs/exit-plan-candidates.md` lists the researched functions not in
-the menu yet. Simulated sells pay the entry leg's fee rate plus
-`--slippage-bps` (5); `--interval 1s` gives a finer replay. A round trip whose
-klines are unavailable is listed under `skipped`.
-
-Exit plans (until Phase 52 removes them): positions opened from
-`BOT_SPOT_DEFAULT_EXIT_PLAN_FROM` run `BOT_SPOT_DEFAULT_EXIT_PLAN`; plans the
-LLM set earlier stay in the plan book. With `BOT_SPOT_EXIT_PLANS_LIVE=true` the
-`bot-spot --submit-live --daemon` process follows those positions' bids
-every `BOT_SPOT_EXIT_POLL_SECONDS` (5) between cycles and sells a position
-into USDT when its plan fires, with the same hard safety as the bot's routes
-(audit rows with `cycle_id` `exit-plan`). Otherwise `bb bot-spot-exit-watch`
-runs the plans on paper and only records would-be sells. Files: `BOT_SPOT_EXIT_PLANS_PATH`,
-`BOT_SPOT_EXIT_WATCH_STATE_PATH`, `BOT_SPOT_EXIT_WATCH_LOG_PATH`.
 
 `bb algo-backtest` is research only and runs offline: it reads only the
 cached 1m candles in `--cache-dir` (default `data/entry-study-cache`), makes
@@ -140,7 +108,7 @@ tunes the algorithm (`biz_algo`) on the older half of `--days` (60) before
 
 ## Dashboard (`cryptobot-gui`)
 
-A read-only web page for the trader, in seven tabs that refresh every 30 s:
+A read-only web page for the trader, in six tabs that refresh every 30 s:
 
 - **Overview:** portfolio value and 24h change, the bot's P&L and win rate, the
   open position, the bot's status (running / idle / stopped by the stop file /
@@ -152,14 +120,12 @@ A read-only web page for the trader, in seven tabs that refresh every 30 s:
   table (click a row for the bot's reasoning); 24h / 7d / 30d / all ranges.
 - **Sessions:** results per trading session (one setup of the trader: prompt
   version, omp session, run configuration), ranked by realized P&L, with each
-  session's configuration and the exit plans it ran.
+  session's configuration.
 - **Wallet:** spot balances (free and in orders) with price, 24h change, value
   and share, Simple Earn positions, Binance wallet totals, account fees and an
   API-key safety check (withdrawals, IP restriction, extra permissions).
 - **The bot:** cycles with the rule's verdicts (older LLM cycles keep their
   tool calls and cost).
-- **Exits:** the Phase 45 exit plans: run settings, the plan book, running
-  plans with their sell lines, and the newest watch-log events.
 - **/biz/:** the /biz/ feed the trader read in its newest cycle (mentions,
   posters and stance per coin, coins without a Binance market); only the
   rule-based decider trades on it.
@@ -180,8 +146,8 @@ ssh -L 8787:localhost:8787 <bot-host>          # view a remote box from your lap
 ```
 
 - **Read-only.** GET routes only. It reads the Bot Spot files
-  (`BOT_SPOT_AUDIT_PATH`, `BOT_SPOT_STOP_PATH`, the
-  exit-plan files, relative to the working directory like the trader) and
+  (`BOT_SPOT_AUDIT_PATH`, `BOT_SPOT_STOP_PATH`, relative to the working
+  directory like the trader) and
   Binance through signed GETs (account, 24h tickers, wallet totals, API-key
   restrictions; one read is reused for 20 s).
   It never writes a file or calls an order endpoint. Stopping the trader is
@@ -219,7 +185,6 @@ touch docker-data/bot-spot.stop                      # emergency stop for the bo
 Profiles:
 - `live` / `all`: the bot trader, the dashboard and the scheduler.
 - `gui`: the `cryptobot-gui` dashboard alone (the data volume is mounted read-only).
-- `exit-paper`: the paper exit-plan watcher `bot-spot-exit-watch`.
 - `algo-paper`: the plan-only rule-based decider `bot-spot-algo-paper`.
 
 Periodic jobs (the nightly Bot Spot data backup) live in `docker/crontab`.

@@ -18,10 +18,6 @@ use crate::error::{Result, TraderError};
 pub enum Command {
     /// Run the algorithm Spot trader (one cycle, or a daemon with --daemon).
     BotSpot(BotSpotArgs),
-    /// Replay the exit-plan menu on Bot Spot's real round trips (public klines, no orders).
-    BotSpotExitReplay(crate::exit_replay::ExitReplayArgs),
-    /// Paper exit-plan watcher: follows bids between cycles, records would-be sells (no orders).
-    BotSpotExitWatch(crate::exit_watch::ExitWatchArgs),
     /// Backtest the algorithm offline on cached 1m candles (no network, no orders).
     AlgoBacktest(crate::algo_backtest::report::AlgoBacktestArgs),
 }
@@ -56,20 +52,6 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("Bot Spot failed: {error}");
-                ExitCode::FAILURE
-            }
-        }),
-        Command::BotSpotExitReplay(args) => Ok(match crate::exit_replay::run_cli(args).await {
-            Ok(code) => code,
-            Err(error) => {
-                eprintln!("Exit-plan replay failed: {error}");
-                ExitCode::FAILURE
-            }
-        }),
-        Command::BotSpotExitWatch(args) => Ok(match crate::exit_watch::run_cli(args).await {
-            Ok(code) => code,
-            Err(error) => {
-                eprintln!("Exit-plan watcher failed: {error}");
                 ExitCode::FAILURE
             }
         }),
@@ -159,17 +141,9 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
     spawn_signal_listener(shutdown.clone(), Arc::clone(&runtime));
     let mut trader = Trader::new(Arc::clone(&runtime));
     let mut exit = ExitCode::SUCCESS;
-    let mut exit_guard = (args.daemon && mode == CycleMode::Live && config.exit.live).then(|| {
-        tracing::info!(
-            default_plan = ?config.exit.default_plan.map(|d| d.plan.to_string()),
-            poll_seconds = config.exit.poll_seconds,
-            "live exit plans enabled"
-        );
-        crate::exit_guard::ExitGuard::new(Arc::clone(&runtime))
-    });
     let interval = Duration::from_secs(args.interval_seconds);
     // A restart keeps the cadence: the first cycle waits until one interval after the last
-    // one (exit plans keep running meanwhile), so restarts do not add cycles.
+    // one, so restarts do not add cycles.
     if args.daemon
         && let Some(wait) = cadence_wait(
             &crate::state::TraderState::load(&config.state_path),
@@ -181,7 +155,7 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
             wait_seconds = wait.as_secs(),
             "keeping the cycle cadence: first cycle one interval after the last one"
         );
-        pause(tokio::time::Instant::now() + wait, exit_guard.as_mut(), &shutdown).await;
+        pause(tokio::time::Instant::now() + wait, &shutdown).await;
     }
     let mut idling = false;
     while !shutdown.is_cancelled() {
@@ -192,7 +166,7 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
                 &config.stop_path,
             )
         {
-            pause(tokio::time::Instant::now() + interval, exit_guard.as_mut(), &shutdown).await;
+            pause(tokio::time::Instant::now() + interval, &shutdown).await;
             continue;
         }
         match trader.run_cycle(&shutdown).await {
@@ -212,26 +186,17 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
         if !args.daemon || shutdown.is_cancelled() {
             break;
         }
-        let next_cycle = tokio::time::Instant::now() + interval;
-        pause(next_cycle, exit_guard.as_mut(), &shutdown).await;
+        pause(tokio::time::Instant::now() + interval, &shutdown).await;
     }
     runtime.begin_shutdown();
     Ok(exit)
 }
 
-/// Until `until` or shutdown: follow exit plans when they run live, else sleep.
-async fn pause(
-    until: tokio::time::Instant,
-    guard: Option<&mut crate::exit_guard::ExitGuard>,
-    shutdown: &CancellationToken,
-) {
-    match guard {
-        // Live exit plans: follow bids and sell when a plan fires until the next cycle.
-        Some(guard) => guard.run_until(until, shutdown).await,
-        None => tokio::select! {
-            () = tokio::time::sleep_until(until) => {}
-            () = shutdown.cancelled() => {}
-        },
+/// Sleep until `until` or shutdown.
+async fn pause(until: tokio::time::Instant, shutdown: &CancellationToken) {
+    tokio::select! {
+        () = tokio::time::sleep_until(until) => {}
+        () = shutdown.cancelled() => {}
     }
 }
 

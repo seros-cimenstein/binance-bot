@@ -139,10 +139,6 @@ pub struct TradeOutcome {
     /// `closed`, `open`, `cash` (a sale into cash or fiat: parking, no P&L) or `unknown`.
     pub status: &'static str,
     pub route_friction_bps: Option<f64>,
-    /// Set on sells an exit plan made between cycles: the spec, the rule that fired,
-    /// the share and the trigger price.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_plan: Option<String>,
 }
 
 /// The asset bought by the last submitted route.
@@ -278,14 +274,6 @@ fn outcomes(submitted: &[&Value], trades: &[Trade]) -> Vec<TradeOutcome> {
                 pnl_bps: None,
                 status: "unknown",
                 route_friction_bps: selected_decimal(row, "immediate_friction_bps").map(to_f64),
-                exit_plan: (row.get("cycle_id").and_then(Value::as_str)
-                    == Some(crate::cycle::EXIT_CYCLE_ID))
-                .then(|| {
-                    row.pointer("/decision/reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("exit plan")
-                        .to_owned()
-                }),
             };
             if crate::assets::is_low_upside(&destination) {
                 // Into cash or fiat: parking, not a bet.
@@ -511,12 +499,7 @@ pub(crate) mod tests {
         assert_eq!(outcomes[1].status, "cash");
         assert_eq!(outcomes[1].pnl_bps, None);
         assert_eq!(outcomes[2].status, "unknown");
-        // The plan's sell says which rule sold; the bot's own routes carry nothing.
-        assert_eq!(
-            outcomes[1].exit_plan.as_deref(),
-            Some("exit plan atr=3:1h,stretch=2:1 fired (stretch, live)")
-        );
-        assert_eq!(outcomes[0].exit_plan, None);
+        // An old exit-plan sell (Phase 45, removed) counts as an ordinary sell.
         assert_eq!(memory.recent_loss_streak, 0);
         assert_eq!(
             memory.current_holding.unwrap().status,
