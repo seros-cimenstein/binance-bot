@@ -1608,34 +1608,20 @@ mod tests {
             .await;
         let dir = tempfile::tempdir().unwrap();
         let runtime = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
-        let tools = TraderTools::new(Arc::clone(&runtime));
         let route_id = first_route(&runtime, "SOL").await;
 
-        let plan = tools
-            .dispatch(
-                "execute_route",
-                json!({"route_id": route_id, "reason": "SOL relative strength breakout"}),
-            )
+        let plan = runtime
+            .execute_route(&route_id, "SOL relative strength breakout", None)
             .await
             .unwrap();
         assert_eq!(plan["status"], "planned");
         assert_eq!(plan["route"]["legs"].as_array().unwrap().len(), 2);
         // Scaled plan: re-quoted for the spend amount (reads balances, still no order endpoint).
-        let scaled = tools
-            .dispatch(
-                "execute_route",
-                json!({"route_id": route_id, "reason": "half size", "spend_amount": 50}),
-            )
+        let scaled = runtime
+            .execute_route(&route_id, "half size", Some(dec!(50)))
             .await
             .unwrap();
         assert_eq!(scaled["route"]["input_amount"], json!(50));
-        tools
-            .dispatch(
-                "end_cycle",
-                json!({"action": "traded", "summary": "planned SOL entry"}),
-            )
-            .await
-            .unwrap();
         assert_eq!(
             order_calls(&server).await,
             0,
@@ -1666,7 +1652,6 @@ mod tests {
         assert_eq!(rows[1]["decision"]["spend_mode"], "amount");
         assert_eq!(rows[1]["decision"]["spend_amount"], json!(50));
         assert_eq!(rows[2]["row_type"], "cycle_summary");
-        assert_eq!(rows[2]["agent"]["end_cycle"]["action"], "traded");
         assert_eq!(
             rows[2]["candidate_route_count"],
             rows[2]["candidate_routes"].as_array().unwrap().len()
@@ -1753,20 +1738,8 @@ mod tests {
         let runtime = runtime(&server, config, CycleMode::Live).await;
         std::fs::write(dir.path().join("stop"), "").unwrap();
         let route_id = first_route(&runtime, "SOL").await;
-        let outcome = TraderTools::new(Arc::clone(&runtime))
-            .call(
-                "execute_route",
-                json!({"route_id": route_id, "reason": "x"}),
-                CancellationToken::new(),
-            )
-            .await;
-        assert!(outcome.is_error);
-        assert!(
-            outcome.content[0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("emergency stop")
-        );
+        let error = runtime.execute_route(&route_id, "x", None).await.unwrap_err();
+        assert!(error.contains("emergency stop"), "{error}");
         assert!(
             server
                 .received_requests()
@@ -1777,6 +1750,21 @@ mod tests {
         let rows = audit_rows(dir.path());
         assert_eq!(rows[0]["status"], "failed");
         assert_eq!(rows[0]["submission_attempted"], false);
+    }
+
+    #[tokio::test]
+    async fn execute_route_refuses_unquoted_routes_and_routes_outside_a_cycle() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
+        let error = runtime.execute_route("A->B:1", "x", None).await.unwrap_err();
+        assert!(error.contains("was not quoted this cycle"), "{error}");
+        let route_id = first_route(&runtime, "SOL").await;
+        runtime.finish_cycle(&TurnReport::default()).await.unwrap();
+        let error = runtime.execute_route(&route_id, "x", None).await.unwrap_err();
+        assert!(error.contains("no active cycle"), "{error}");
+        assert!(server.received_requests().await.unwrap_or_default().is_empty());
+        assert_eq!(audit_rows(dir.path()).len(), 1, "only the cycle summary");
     }
 
     #[tokio::test]
@@ -1815,11 +1803,6 @@ mod tests {
                 "execute_route",
                 json!({"route_id": "A->B:1", "reason": "x", "spend_amount": "lots"}),
                 "positive number",
-            ),
-            (
-                "execute_route",
-                json!({"route_id": "A->B:1", "reason": "x"}),
-                "was not quoted this cycle",
             ),
             ("list_routes", json!({"limit": 0}), "at least 1"),
             ("list_routes", json!({"limit": 51}), "at most 50"),
