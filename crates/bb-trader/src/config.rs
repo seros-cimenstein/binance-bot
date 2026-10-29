@@ -71,6 +71,9 @@ pub const REMOVED_VARS: &[&str] = &[
     "BOT_SPOT_MARKET_EVIDENCE_MAX_SYMBOLS",
     "BOT_SPOT_MARKET_EVIDENCE_TIMEFRAME",
     "BOT_SPOT_JOURNAL_PATH",
+    // Phase 52: no GCP2 or schizo state.
+    "BOT_SPOT_GCP2_ENABLED",
+    "BOT_SPOT_GCP2_BASE_URL",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -147,9 +150,6 @@ pub struct TraderConfig {
     pub fee_cache_seconds: f64,
     // memory (information only)
     pub trade_memory_limit: usize,
-    /// Phase 49: read GCP2 live once per cycle and run the schizo state and voice (v15).
-    pub gcp2_enabled: bool,
-    pub gcp2_base_url: String,
     /// Phase 50: show the long-term value voice (`crate::mdp`) every cycle (v17).
     pub mdp_enabled: bool,
     /// `bb bot-spot-mdp-fit` model file the voice reads every cycle.
@@ -266,8 +266,6 @@ impl TraderConfig {
             ticker_stale_seconds: env.float("BOT_SPOT_TICKER_STALE_SECONDS", 300.0)?,
             fee_cache_seconds: env.float("BOT_SPOT_FEE_CACHE_SECONDS", 60.0)?,
             trade_memory_limit: env.integer("BOT_SPOT_TRADE_MEMORY_LIMIT", 8)?,
-            gcp2_enabled: env.boolean("BOT_SPOT_GCP2_ENABLED", true)?,
-            gcp2_base_url: env.string("BOT_SPOT_GCP2_BASE_URL", crate::gcp2::DEFAULT_BASE_URL),
             mdp_enabled: env.boolean("BOT_SPOT_MDP_ENABLED", true)?,
             mdp_model_path: env.path("BOT_SPOT_MDP_MODEL_PATH", crate::mdp::DEFAULT_MODEL_PATH),
             biz_feed_path: env.path("BOT_SPOT_BIZ_FEED_PATH", crate::biz::DEFAULT_FEED_PATH),
@@ -383,10 +381,6 @@ impl TraderConfig {
                 "leg_rounding_reserve_bps": decimal(self.leg_rounding_reserve_bps),
             },
             "trade_memory_limit": self.trade_memory_limit,
-            "gcp2": {
-                "enabled": self.gcp2_enabled,
-                "base_url": self.gcp2_base_url,
-            },
             "mdp": {
                 "enabled": self.mdp_enabled,
                 "model_path": self.mdp_model_path,

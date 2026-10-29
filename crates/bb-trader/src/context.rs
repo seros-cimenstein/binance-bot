@@ -165,11 +165,6 @@ pub struct DecisionContext {
     pub trade_memory: TradeMemory,
     /// 20-coin liquid USDT crypto market breadth (`None` when disabled or unavailable).
     pub market_mood: Option<crate::market_mood::MarketView>,
-    /// Phase 49 live GCP2 reading (`None` when the reader is off; failures are
-    /// `Gcp2Now::Unavailable`).
-    pub gcp2: Option<crate::gcp2::Gcp2Now>,
-    /// Phase 49 schizo state (`None` unless the GCP2 reader is on).
-    pub schizo: Option<crate::schizo::SchizoState>,
     /// Phase 50 long-term value voice (`None` unless `BOT_SPOT_MDP_ENABLED`).
     pub mdp: Option<crate::mdp::MdpNow>,
     /// The /biz/ feed (`None` in tests; the cycle always reads it); the rule scores on it.
@@ -190,8 +185,6 @@ impl DecisionContext {
             "route_scope": self.route_scope,
             "trade_memory": self.trade_memory,
             "market_mood": self.market_mood,
-            "gcp2": self.gcp2.as_ref().map(crate::gcp2::Gcp2Now::payload),
-            "schizo": self.schizo,
             "mdp": self.mdp,
             "biz": self.biz,
         })

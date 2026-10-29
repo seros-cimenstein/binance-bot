@@ -15,11 +15,10 @@ use super::data::{BizHistory, MINUTE_MS, Market};
 use super::engine::{Config, LIQUID, Persona, RunResult, run};
 use super::personas::{
     BizAlgo, CONTRARIAN_EXIT_PLAN, Contrarian, Detached, Ensemble, HIGH_VARIANCE_EXIT_PLAN,
-    HighVariance, Rotation, Schizo, SchizoMdp, V13, V13_EXIT_PLAN,
+    HighVariance, Rotation, V13, V13_EXIT_PLAN,
 };
 use crate::decider::{Rule, Weights};
 use crate::error::{Result, TraderError};
-use crate::gcp2::Gcp2Feed;
 use crate::mdp::Model;
 
 /// The Phase 48 variants `all` expands to, in report order.
@@ -31,17 +30,14 @@ pub const ALL_PERSONAS: [&str; 6] = [
     "rotation",
     "ensemble",
 ];
-/// Every persona `--persona` accepts by name (`schizo`, Phase 49, `schizo_mdp`, Phase 50, and
-/// `biz_algo`, Phase 51, are not part of `all`).
-pub const KNOWN_PERSONAS: [&str; 9] = [
+/// Every persona `--persona` accepts by name (`biz_algo` is not part of `all`).
+pub const KNOWN_PERSONAS: [&str; 7] = [
     "v13",
     "contrarian",
     "detached",
     "high_variance",
     "rotation",
     "ensemble",
-    "schizo",
-    "schizo_mdp",
     "biz_algo",
 ];
 /// `biz_algo` grid rows listed in the report.
@@ -70,7 +66,7 @@ pub struct PersonaBacktestArgs {
     #[arg(long, default_value_t = 60)]
     pub days: i64,
     /// Persona to run, repeatable: v13, contrarian, detached, high_variance, rotation,
-    /// ensemble, schizo, schizo_mdp, biz_algo, or `all`. With `biz_algo` the window is split
+    /// ensemble, biz_algo, or `all`. With `biz_algo` the window is split
     /// in an older (tuning) and a newer (judging) half and every persona runs on both.
     #[arg(long = "persona", default_value = "all")]
     pub personas: Vec<String>,
@@ -89,11 +85,7 @@ pub struct PersonaBacktestArgs {
     /// Where the three report files go.
     #[arg(long, default_value = "reports")]
     pub output_dir: PathBuf,
-    /// `bb gcp2-history` cache (monthly CSVs and `colorzones.json`); a missing directory
-    /// runs without GCP2.
-    #[arg(long, default_value = "data/gcp2-cache")]
-    pub gcp2_cache_dir: PathBuf,
-    /// `bb bot-spot-mdp-fit` model for `schizo_mdp`; it must be fitted on data that ends
+    /// `bb bot-spot-mdp-fit` model for `biz_algo`'s value term; it must be fitted on data that ends
     /// before the window starts.
     #[arg(long)]
     pub mdp_model: Option<PathBuf>,
@@ -140,8 +132,8 @@ pub fn resolve_personas(names: &[String]) -> Result<Vec<&'static str>> {
     Ok(out)
 }
 
-/// What some personas need beyond the market: the long-term value model (`schizo_mdp`,
-/// `biz_algo`), the /biz/ feed history and the decider rule (`biz_algo`).
+/// What `biz_algo` needs beyond the market: the long-term value model, the /biz/ feed
+/// history and the decider rule.
 #[derive(Debug, Clone, Default)]
 pub struct PersonaInputs {
     pub mdp: Option<Arc<Model>>,
@@ -157,10 +149,6 @@ fn build_persona(name: &str, cfg: Config, inputs: &PersonaInputs) -> Result<Box<
         "high_variance" => Box::new(HighVariance::new()?),
         "rotation" => Box::new(Rotation::new(cfg)?),
         "ensemble" => Box::new(Ensemble::new()?),
-        "schizo" => Box::new(Schizo::new()?),
-        "schizo_mdp" => Box::new(SchizoMdp::new(Arc::clone(inputs.mdp.as_ref().ok_or_else(
-            || TraderError::config("schizo_mdp needs --mdp-model"),
-        )?))?),
         "biz_algo" => Box::new(BizAlgo::new(
             inputs
                 .rule
@@ -245,13 +233,8 @@ pub struct ReportContext {
     pub slippage_bps: f64,
     pub cache_dir: String,
     pub coins: usize,
-    /// One line describing the GCP2 history the run used (or that it had none).
-    pub gcp2: String,
     /// The report's file stem, for naming the per-variant trace files.
     pub stem: String,
-    /// Minutes of the window per GCP2 zone (in zone order) and minutes without a reading;
-    /// `None` without GCP2 history.
-    pub gcp2_zone_minutes: Option<(Vec<(String, usize)>, usize)>,
     /// The older/newer split and the `biz_algo` rule; `None` unless `biz_algo` ran.
     pub split: Option<SplitReport>,
 }
@@ -276,32 +259,6 @@ pub struct SplitReport {
     pub grid: Option<Vec<GridRow>>,
     /// One line describing the /biz/ feed history.
     pub biz: String,
-}
-
-/// Minutes of `[start_ms, end_ms)` per GCP2 zone (zone order) and without a reading.
-pub fn gcp2_zone_minutes(
-    feed: &Gcp2Feed,
-    start_ms: i64,
-    end_ms: i64,
-) -> (Vec<(String, usize)>, usize) {
-    let mut counts = vec![0_usize; feed.zones().zones.len()];
-    let mut unavailable = 0;
-    let mut m = start_ms;
-    while m < end_ms {
-        match feed.view_at(m) {
-            Some(view) => counts[view.zone] += 1,
-            None => unavailable += 1,
-        }
-        m += MINUTE_MS;
-    }
-    let zones = feed
-        .zones()
-        .zones
-        .iter()
-        .zip(counts)
-        .map(|(z, n)| (z.label.clone(), n))
-        .collect();
-    (zones, unavailable)
 }
 
 /// Run the selected personas; one result per persona, in the order given.
@@ -481,8 +438,6 @@ fn rules(name: &str) -> String {
         "ensemble" => format!(
             "the four base personas vote on its own book; buys the coin with ≥ 2 buy votes (most votes, then 24h volume), all cash; sells on ≥ 2 sell votes or when `{V13_EXIT_PLAN}` fires"
         ),
-        "schizo" => "Phase 49, ruled by GCP2: the mood (one of the four base personas) is picked by the GCP2 dice and switches only when the GCP2 zone changes between steps (the mood follows GCP2: an unchanged zone keeps it); the four base personas vote with the mood's vote counting twice (buy or sell at ≥ 2), one coin with all cash; a position keeps the exit plan of the mood that bought it; no stop-loss".to_string(),
-        "schizo_mdp" => format!("Phase 50: `schizo` with the long-term value voice (`bb bot-spot-mdp-fit`, a Markov model of 20-minute steps, fitted before the window) as the strongest voice: a vote sell goes through only when the model values selling above holding, the model sells on its own when it does, and a buy goes through only when its long-term value after the entry cost is above 0 (cash); a buy whose mood has no exit plan (`detached`) runs the live default plan `{V13_EXIT_PLAN}`"),
         "biz_algo" => "Phase 51, no LLM: the rule-based decider scores each liquid-top coin as w_talk·talk + w_stance·stance + w_momentum·momentum + w_value·value (talk = the /biz/ 6h mention rate over its 24h rate − 1; stance = (bullish − bearish) / tagged of the 6h AI tags with enough posters; momentum = 1h return / 5%, capped; value = the long-term value model's verdict); a held coin scoring below the sell level is sold, and with nothing held the best coin is bought with all cash at or above the buy level; no exit plan".to_string(),
         other => other.to_string(),
     }
@@ -546,7 +501,7 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "# Schizoid persona backtest ({} → {})\n",
+        "# Persona backtest ({} → {})\n",
         iso(cfg.start_ms),
         iso(cfg.end_ms)
     );
@@ -587,7 +542,7 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         );
         let _ = writeln!(out, "- /biz/ feeds: {}.", split.biz);
     }
-    let _ = writeln!(out, "- GCP2: {}.\n", ctx.gcp2);
+    let _ = writeln!(out);
     let _ = writeln!(out, "## Results\n");
     let _ = writeln!(
         out,
@@ -708,29 +663,6 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         }
         let _ = writeln!(out);
     }
-    if let Some((zones, unavailable)) = &ctx.gcp2_zone_minutes {
-        let total = zones.iter().map(|(_, n)| n).sum::<usize>() + unavailable;
-        let pct = |n: usize| {
-            if total == 0 {
-                0.0
-            } else {
-                n as f64 / total as f64 * 100.0
-            }
-        };
-        let _ = writeln!(out, "## GCP2\n");
-        let _ = writeln!(
-            out,
-            "- Zone minutes over the window (each minute's reading is the hour ending at the second before it): {}; unavailable {} ({:.1}%).",
-            zones
-                .iter()
-                .map(|(label, n)| format!("{label} {n} ({:.1}%)", pct(*n)))
-                .collect::<Vec<_>>()
-                .join(", "),
-            unavailable,
-            pct(*unavailable)
-        );
-        let _ = writeln!(out);
-    }
     let _ = writeln!(out, "## Assumptions\n");
     for line in [
         "Decisions see only bars closed by the step time; intents fill at the open of the 1m bar that opens at the step, sells before buys.".to_string(),
@@ -743,12 +675,6 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         "`rotation` scores its shadows at the first scheduled step of each new UTC day (00:03 in the default window, keeping the step cadence). A switch step only sells the old book; the new persona trades from the next step on a flat book.".to_string(),
     ] {
         let _ = writeln!(out, "- {line}");
-    }
-    if ctx.gcp2_zone_minutes.is_some() {
-        let _ = writeln!(
-            out,
-            "- GCP2 at a step is `|Σ network_coherence|` over the hour ending at the last second before the step's minute (the live `getNetVarAggregate24H` value); an hour with under 90% of its seconds is unavailable, and zones are GCP2's own published bounds."
-        );
     }
     let _ = writeln!(out, "\n## Caveats\n");
     let window_note = if cfg.end_ms <= PHASE_47_DEPLOY_MS {
@@ -766,25 +692,19 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         if ctx.split.is_some() {
             "Out of sample: `biz_algo`'s weights were picked on the older half only, so its `@newer` row is the honest result; the other personas' rules were fixed before any run. Each half is about half the window: few trades, a small sample.".to_string()
         } else {
-            "No out-of-sample split: the rules were fixed in `docs/archive/loops/LOOP_SCHIZOID.md` before any real-cache run and not tuned on it, but they are tested on this one period only.".to_string()
+            "No out-of-sample split: the personas' rules were fixed before any real-cache run and not tuned on it, but they are tested on this one period only.".to_string()
         },
     ] {
         let _ = writeln!(out, "- {line}");
     }
-    if ctx.gcp2_zone_minutes.is_some() {
-        let _ = writeln!(
-            out,
-            "- GCP2 (gcp2.net, a network of random-number generators) has no shown link to crypto prices; `schizo` reads it only because the operator chose it (`docs/decisions.md`)."
-        );
-    }
     out
 }
 
-/// File stem for a window ending at `end_ms`: `schizoid_backtest_<YYYY-MM-DD>`.
+/// File stem for a window ending at `end_ms`: `algo_backtest_<YYYY-MM-DD>`.
 pub fn file_stem(end_ms: i64) -> String {
     let date = DateTime::<Utc>::from_timestamp_millis(end_ms)
         .map_or_else(|| end_ms.to_string(), |d| d.format("%Y-%m-%d").to_string());
-    format!("schizoid_backtest_{date}")
+    format!("algo_backtest_{date}")
 }
 
 /// File name of a variant's per-step trace: `<stem>_<variant>_trace.csv`.
@@ -849,9 +769,7 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
         biz,
         rule: None,
     };
-    let gcp2 = load_gcp2(&args.gcp2_cache_dir)?;
-    let gcp2_line = gcp2_summary(gcp2.as_ref(), &args.gcp2_cache_dir);
-    let market = Market::load_dir(&args.cache_dir)?.with_gcp2(gcp2);
+    let market = Market::load_dir(&args.cache_dir)?;
     check_coverage(&market, start_ms, end_ms)?;
     let (results, split) = if names.contains(&"biz_algo") {
         let (results, split) = run_split(&market, &cfg, &names, &mut inputs, args)?;
@@ -859,9 +777,6 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
     } else {
         (run_personas(&market, &cfg, &names, &inputs)?, None)
     };
-    let zone_minutes = market
-        .gcp2()
-        .map(|feed| gcp2_zone_minutes(feed, start_ms, end_ms));
     let stem = file_stem(end_ms);
     let ctx = ReportContext {
         cfg,
@@ -869,9 +784,7 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
         slippage_bps: args.slippage_bps,
         cache_dir: args.cache_dir.display().to_string(),
         coins: market.len(),
-        gcp2: gcp2_line,
         stem: stem.clone(),
-        gcp2_zone_minutes: zone_minutes,
         split,
     };
     std::fs::create_dir_all(&args.output_dir)?;
@@ -891,37 +804,6 @@ pub fn run_backtest(args: &PersonaBacktestArgs) -> Result<(Vec<RunResult>, Vec<P
         }
     }
     Ok((results, paths))
-}
-
-/// GCP2 history from `dir`; `None` when the directory does not exist (a present but broken
-/// cache is an error).
-pub fn load_gcp2(dir: &Path) -> Result<Option<Gcp2Feed>> {
-    if !dir.is_dir() {
-        return Ok(None);
-    }
-    Gcp2Feed::load_dir(dir).map(Some)
-}
-
-fn gcp2_summary(feed: Option<&Gcp2Feed>, dir: &Path) -> String {
-    let Some(feed) = feed else {
-        return format!("not loaded (`{}` does not exist)", dir.display());
-    };
-    let last = feed
-        .series()
-        .last_second()
-        .map_or_else(|| "none".to_string(), |s| iso(s * 1000));
-    let zones = feed
-        .zones()
-        .zones
-        .iter()
-        .map(|z| format!("{} from {}", z.label, z.start))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "`{}`, per-second network coherence up to {last}; colour zones as published by GCP2 at {} ({zones})",
-        dir.display(),
-        feed.zones().fetched_at
-    )
 }
 
 fn write(path: &Path, body: &str) -> Result<()> {
@@ -1014,7 +896,6 @@ mod tests {
             slippage_bps: 5.0,
             step_minutes: 20,
             output_dir: out.to_path_buf(),
-            gcp2_cache_dir: cache.join("no-gcp2"),
             mdp_model: None,
             biz_feeds: None,
             biz_max_age_minutes: 90,
@@ -1064,7 +945,7 @@ mod tests {
             let cols: Vec<&str> = row.split(',').collect();
             assert!(!cols[1].is_empty() && cols[1] <= cols[0], "{row}");
         }
-        assert!(paths.contains(&out.path().join("schizoid_backtest_2026-07-23_biz_algo@newer_trace.csv")));
+        assert!(paths.contains(&out.path().join("algo_backtest_2026-07-23_biz_algo@newer_trace.csv")));
 
         // Fixed weights skip the tuning.
         a.biz_weights = Some("1,1,1,0,0.5,0".into());
@@ -1084,7 +965,7 @@ mod tests {
             results.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
             ALL_PERSONAS.to_vec()
         );
-        assert!(paths[0].ends_with("schizoid_backtest_2026-07-23.md"));
+        assert!(paths[0].ends_with("algo_backtest_2026-07-23.md"));
         let csv = std::fs::read_to_string(&paths[1]).unwrap();
         let rows: Vec<&str> = csv.lines().skip(1).collect();
         assert_eq!(rows.len(), 6);
@@ -1148,185 +1029,5 @@ mod tests {
         let err = run_backtest(&late).unwrap_err().to_string();
         assert!(err.contains("end before the window end"), "{err}");
         assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn the_gcp2_cache_is_optional_but_must_be_valid_when_present() {
-        let cache = cache_dir();
-        let out = tempfile::tempdir().unwrap();
-        // A missing directory runs without GCP2 and says so.
-        run_backtest(&args(cache.path(), out.path())).unwrap();
-        let md =
-            std::fs::read_to_string(out.path().join("schizoid_backtest_2026-07-23.md")).unwrap();
-        assert!(md.contains("- GCP2: not loaded"), "{md}");
-        assert!(
-            !md.contains("## GCP2") && !md.contains("random-number generators"),
-            "{md}"
-        );
-        // An existing but empty directory is an error, not a silent skip.
-        let gcp2 = tempfile::tempdir().unwrap();
-        let mut with = args(cache.path(), out.path());
-        with.gcp2_cache_dir = gcp2.path().to_path_buf();
-        let err = run_backtest(&with).unwrap_err().to_string();
-        assert!(err.contains("missing GCP2 cache"), "{err}");
-        // A valid cache is attached and described.
-        let zones = crate::persona_backtest::engine::tests::gcp2_zones();
-        std::fs::write(
-            gcp2.path().join("colorzones.json"),
-            serde_json::to_string(&zones).unwrap(),
-        )
-        .unwrap();
-        let start_s = (T_END - 4 * DAY_MS) / 1000;
-        let rows: String = (0..4 * 86_400)
-            .map(|i| {
-                format!(
-                    "{},{:.4},400\n",
-                    start_s + i,
-                    ((i as f64) / 5000.0).sin() * 0.11
-                )
-            })
-            .collect();
-        std::fs::write(
-            gcp2.path()
-                .join("GCP2_Network_Coherence_Global_Network_2026_07.csv"),
-            format!("epoch_time_utc,network_coherence,active_devices\n{rows}"),
-        )
-        .unwrap();
-        let (results, _) = run_backtest(&with).unwrap();
-        assert_eq!(results.len(), 6);
-        let md =
-            std::fs::read_to_string(out.path().join("schizoid_backtest_2026-07-23.md")).unwrap();
-        assert!(
-            md.contains("per-second network coherence up to 2026-07-23T07:59:59Z"),
-            "{md}"
-        );
-        assert!(md.contains("Normal from 0, Elevated from 140"), "{md}");
-    }
-
-    #[test]
-    fn the_schizo_trace_records_every_simulated_step() {
-        use crate::persona_backtest::engine::tests::{gcp2_wave, gcp2_zones};
-        let cache = cache_dir();
-        let out = tempfile::tempdir().unwrap();
-        let gcp2 = tempfile::tempdir().unwrap();
-        std::fs::write(
-            gcp2.path().join("colorzones.json"),
-            serde_json::to_string(&gcp2_zones()).unwrap(),
-        )
-        .unwrap();
-        // GCP2 starts at the window start (so the first steps have no full hour) and has a
-        // 90-minute gap mid-window (so some later steps have no reading either).
-        let window_start_s = (T_END - DAY_MS) / 1000;
-        let gap = (window_start_s + 5 * 3_600)..(window_start_s + 5 * 3_600 + 5_400);
-        let rows: String = (window_start_s..T_END / 1000)
-            .filter(|s| !gap.contains(s))
-            .map(|s| {
-                let units = gcp2_wave(s - window_start_s);
-                format!("{s},{:.4},400\n", units as f64 / 10_000.0)
-            })
-            .collect();
-        std::fs::write(
-            gcp2.path()
-                .join("GCP2_Network_Coherence_Global_Network_2026_07.csv"),
-            format!("epoch_time_utc,network_coherence,active_devices\n{rows}"),
-        )
-        .unwrap();
-        let mut a = args(cache.path(), out.path());
-        a.gcp2_cache_dir = gcp2.path().to_path_buf();
-        a.personas = names(&["schizo"]);
-        let (results, paths) = run_backtest(&a).unwrap();
-        let schizo = &results[0];
-        assert_eq!(schizo.name, "schizo");
-        let trace_path = out
-            .path()
-            .join("schizoid_backtest_2026-07-23_schizo_trace.csv");
-        assert_eq!(paths.last(), Some(&trace_path));
-        let text = std::fs::read_to_string(&trace_path).unwrap();
-        let mut lines = text.lines();
-        assert_eq!(
-            lines.next(),
-            Some(crate::persona_backtest::personas::MOOD_TRACE_HEADER)
-        );
-        let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
-        assert_eq!(rows.len(), schizo.steps);
-
-        let feed = load_gcp2(gcp2.path()).unwrap().unwrap();
-        let (mut prev_to, mut prev_mood, mut seen_reading) = ("", "", false);
-        for (k, row) in rows.iter().enumerate() {
-            let t = T_END - DAY_MS + k as i64 * 20 * MINUTE_MS;
-            assert_eq!(row[0], iso(t), "row {k}");
-            let view = feed.view_at(t);
-            assert_eq!(
-                row[3],
-                view.as_ref().map_or("", |v| v.zone_label.as_str()),
-                "row {k}"
-            );
-            let value = view
-                .as_ref()
-                .map(|v| format!("{:.4}", v.value()))
-                .unwrap_or_default();
-            assert_eq!(row[1], value, "row {k}");
-            let dice = view
-                .as_ref()
-                .map(|v| v.dice.to_string())
-                .unwrap_or_default();
-            assert_eq!(row[4], dice, "row {k}");
-            assert_eq!(
-                row[2], prev_to,
-                "row {k}: from zone is the previous step's zone"
-            );
-            let expected = if view.is_none() {
-                "no reading"
-            } else if !seen_reading {
-                "initial"
-            } else if prev_to.is_empty() {
-                "no reading"
-            } else if row[2] != row[3] {
-                "switched"
-            } else {
-                "held"
-            };
-            assert_eq!(row[5], expected, "row {k}");
-            assert_eq!(
-                row[6], prev_mood,
-                "row {k}: mood before is the last mood after"
-            );
-            let changed = row[6] != row[7];
-            assert_eq!(
-                changed,
-                expected == "initial" || expected == "switched",
-                "row {k}"
-            );
-            seen_reading |= view.is_some();
-            prev_to = row[3];
-            prev_mood = row[7];
-        }
-        let count = |r: &str| rows.iter().filter(|row| row[5] == r).count();
-        assert_eq!(count("initial"), 1);
-        assert!(
-            rows[0][5] == "no reading" && count("no reading") >= 6,
-            "{text}"
-        );
-        assert!(count("switched") > 0 && count("held") > 0, "{text}");
-        let md = std::fs::read_to_string(&paths[0]).unwrap();
-        assert!(
-            md.contains(&format!(
-                "Per-step trace: `schizoid_backtest_2026-07-23_schizo_trace.csv` ({} rows",
-                rows.len()
-            )),
-            "{md}"
-        );
-        // The GCP2 section: zone minutes cover the window.
-        let (zones, unavailable) = gcp2_zone_minutes(&feed, T_END - DAY_MS, T_END);
-        assert_eq!(
-            zones.iter().map(|(_, n)| n).sum::<usize>() + unavailable,
-            1440
-        );
-        assert!(unavailable >= 59 + 90, "{unavailable}");
-        assert!(md.contains("## GCP2"), "{md}");
-        assert!(md.contains(&format!("unavailable {unavailable} (")), "{md}");
-        assert!(
-            md.contains("GCP2 (gcp2.net, a network of random-number generators) has no shown link")
-        );
     }
 }

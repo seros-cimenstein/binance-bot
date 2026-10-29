@@ -19,9 +19,6 @@
 //!   [`exit_guard`]: live exit plans inside the trader daemon.
 //! - [`persona_backtest`]: Phase 48 offline backtest of deterministic rule personas
 //!   (research only, no network, no order path).
-//! - [`gcp2`]: GCP2 (gcp2.net) public network coherence, read-only (Phase 49).
-//! - [`schizo`]: the live trader's per-cycle schizo state (GCP2 mood ring, dice, the
-//!   personas' votes), persisted next to the agent state (Phase 49).
 //! - [`mdp`]: the long-term value voice, a Markov decision process fitted on cached
 //!   candles (Phase 50).
 //! - [`biz`]: the /biz/ feed from biz-app, recorded per cycle, information only (Phase 51).
@@ -29,7 +26,7 @@
 //! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
 //! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
 //!   `bot-spot-exit-replay`, `bot-spot-exit-watch`, `bot-spot-mdp-fit`,
-//!   `bot-spot-persona-backtest`, `gcp2-history`.
+//!   `bot-spot-persona-backtest`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
@@ -49,12 +46,10 @@ pub mod exit_guard;
 pub mod exit_plan;
 pub mod exit_replay;
 pub mod exit_watch;
-pub mod gcp2;
 pub mod market_mood;
 pub mod mdp;
 pub mod memory;
 pub mod persona_backtest;
-pub mod schizo;
 pub mod scope;
 pub mod state;
 pub mod trades;

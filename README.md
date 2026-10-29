@@ -46,7 +46,7 @@ Run `bb --help` or `bb <command> --help`.
 | Area | Commands |
 |---|---|
 | Bot trader | `bot-spot`, `bot-spot-exit-watch`, `bot-spot-exit-replay` |
-| Bot research | `bot-spot-persona-backtest`, `bot-spot-mdp-fit`, `gcp2-history`, `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
+| Bot research | `bot-spot-persona-backtest`, `bot-spot-mdp-fit`, `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
 
 ## Algorithm Spot trader (`bb bot-spot`)
 
@@ -71,9 +71,8 @@ required):
   <history dir>` tunes the weights on the older half of the window and judges
   them on the newer (OPERATIONS.md, "Persona backtest"). The compose profile
   `algo-paper` runs the trader plan-only.
-- **Still in the code until Phase 52 removes it:** the GCP2 schizo state
-  (recorded per cycle as `schizo` when `BOT_SPOT_GCP2_ENABLED`), the Markov
-  long-term value model (`bb bot-spot-mdp-fit`, `BOT_SPOT_MDP_*`), exit plans
+- **Still in the code until Phase 52 removes it:** the Markov long-term value
+  model (`bb bot-spot-mdp-fit`, `BOT_SPOT_MDP_*`), exit plans
   and the 20-minute cycle.
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
@@ -93,7 +92,7 @@ required):
   the dashboard and the audit log.
 
 ```bash
-bb bot-spot --evidence-only                 # decision context, no LLM call, no orders
+bb bot-spot --evidence-only                 # decision context, no orders
 bb bot-spot --plan-only                     # the algorithm decides; execute_route only records plans
 bb bot-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
 bb bot-spot --mark-failed-route-reviewed    # clear the failed-route halt after review
@@ -101,7 +100,6 @@ bb bot-spot-exit-replay --table             # replay the Phase 45 sell-plan menu
 bb bot-spot-exit-watch --daemon             # paper exit-plan watcher (no orders)
 bb bot-spot-exit-watch --summary            # closed plan trials vs the bot's own exits (live plan-sold positions apart)
 bb bot-spot-persona-backtest --end 2026-10-18T10:43:00Z   # Phase 48 rule personas, offline backtest (no orders)
-bb gcp2-history --year 2026 --month 8 --month 9 --month 10 --cache-dir data/gcp2-cache   # GCP2 history for the schizo backtest
 ```
 
 `bb bot-spot-exit-replay` (Phase 45, research only, public klines, no
@@ -137,11 +135,10 @@ reads only the cached 1m candles in `--cache-dir` (default
 `data/entry-study-cache`), makes no network call, has no order path and never
 touches the live trader. It runs deterministic rule personas over `--days`
 (60) before `--end`: the `v13` rule proxy, `contrarian`, `detached`,
-`high_variance`, `rotation` and `ensemble` (`--persona all`), plus the Phase 49
-`schizo` persona by name, which also reads the GCP2 history that
-`bb gcp2-history` caches in `--gcp2-cache-dir` (default `data/gcp2-cache`). It
-writes `reports/schizoid_backtest_<end-date>.md`, `.csv`, `_trades.csv` and,
-for `schizo`, `_schizo_trace.csv`. See OPERATIONS.md, "Persona backtest".
+`high_variance`, `rotation` and `ensemble` (`--persona all`), plus `biz_algo`
+by name. It writes `reports/algo_backtest_<end-date>.md`, `.csv`,
+`_trades.csv` and, for `biz_algo`, `_biz_algo@<half>_trace.csv`. See
+OPERATIONS.md, "Persona backtest".
 
 ## Dashboard (`cryptobot-gui`)
 

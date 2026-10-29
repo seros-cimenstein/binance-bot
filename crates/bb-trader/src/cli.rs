@@ -26,8 +26,6 @@ pub enum Command {
     BotSpotMdpFit(crate::mdp::MdpFitArgs),
     /// Backtest the Phase 48 rule personas offline on cached 1m candles (no network, no orders).
     BotSpotPersonaBacktest(crate::persona_backtest::report::PersonaBacktestArgs),
-    /// Download GCP2 network coherence history and colour zones (public data, read-only).
-    Gcp2History(crate::gcp2::Gcp2HistoryArgs),
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -35,7 +33,7 @@ pub struct BotSpotArgs {
     /// Place real Spot orders when every live arming flag is set.
     #[arg(long)]
     pub submit_live: bool,
-    /// Ask the bot; execute_route only records plans (overrides --submit-live).
+    /// The algorithm decides; execute_route only records plans (overrides --submit-live).
     #[arg(long)]
     pub plan_only: bool,
     /// Print the decision context without asking the bot or submitting orders.
@@ -93,13 +91,6 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
                 }
             })
         }
-        Command::Gcp2History(args) => Ok(match crate::gcp2::run_history_cli(args).await {
-            Ok(code) => code,
-            Err(error) => {
-                eprintln!("GCP2 history download failed: {error}");
-                ExitCode::FAILURE
-            }
-        }),
     }
 }
 

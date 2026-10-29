@@ -7,7 +7,7 @@
 //! AI's bullish and bearish tags weighted by post score; `as_of` is the newest moment whose
 //! posts it includes. A missing or unreadable file, another schema, or an `as_of` older than
 //! `BOT_SPOT_BIZ_MAX_AGE_MINUTES` makes the cycle record "/biz/ unavailable" with the
-//! reason, the way a failed GCP2 read is handled. Coins without an eligible Binance market
+//! reason. Coins without an eligible Binance market
 //! (stocks, gold, unlisted tokens) are listed under `dropped`.
 
 use std::collections::BTreeMap;

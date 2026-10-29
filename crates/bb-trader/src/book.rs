@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::gcp2::Gcp2View;
 use crate::market_mood::HorizonBreadth;
 use crate::universe::Balances;
 
@@ -31,9 +30,6 @@ pub struct Snapshot {
     pub coins: BTreeMap<String, CoinView>,
     /// The [`LIQUID`] coins present at `T`, top [`CANDIDATE_LIMIT`] by 24h quote volume.
     pub liquid_top: Vec<String>,
-    /// GCP2 at `T` (the hour ending at the last second before `T`'s minute); `None` without
-    /// GCP2 history or a reading.
-    pub gcp2: Option<Gcp2View>,
 }
 
 impl Snapshot {
@@ -46,7 +42,6 @@ impl Snapshot {
             horizons: Vec::new(),
             coins,
             liquid_top: candidates,
-            gcp2: None,
         }
     }
 
@@ -197,7 +192,6 @@ pub mod tests {
                 })
                 .collect(),
             liquid_top: rows.iter().map(|r| r.0.to_string()).collect(),
-            gcp2: None,
         }
     }
 

@@ -777,38 +777,6 @@ pub fn run_fit_cli(args: &MdpFitArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// A model with the given coarse or full states (all with 5,000 samples) for tests.
-#[cfg(test)]
-pub(crate) fn test_model(states: &[(State, f64)]) -> Model {
-    Model {
-        version: MODEL_VERSION.into(),
-        fitted_at: "test".into(),
-        data_from: "a".into(),
-        data_to: "b".into(),
-        coins: Vec::new(),
-        gamma: DEFAULT_GAMMA,
-        step_minutes: STEP_MINUTES,
-        entry_cost_pct: 0.125,
-        exit_cost_pct: 0.125,
-        transitions: 1,
-        states: states
-            .iter()
-            .map(|(state, q)| StateRow {
-                state: *state,
-                value: StateValue {
-                    samples: 5_000,
-                    mean_reward_pct: 0.0,
-                    q_hold_pct: *q,
-                    q_sell_pct: -0.125,
-                },
-            })
-            .collect(),
-        evaluation: None,
-        index: BTreeMap::new(),
-    }
-    .index()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1004,7 +972,6 @@ mod tests {
             horizons: Vec::new(),
             coins: [("BTC".to_string(), coin(0.2)), ("SOL".to_string(), coin(2.0))].into(),
             liquid_top: vec!["BTC".into(), "ENA".into(), "SOL".into()],
-            gcp2: None,
         };
         let holding = CurrentHolding {
             status: "open",

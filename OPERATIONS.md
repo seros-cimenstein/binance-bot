@@ -268,104 +268,6 @@ and sell fees at the trip's fee rate), so it cannot sell a fee-negative
   the audit's `exit-plan` sells, so `--summary` also reads
   `BOT_SPOT_AUDIT_PATH`). The dashboard's Exits tab shows the same split.
 
-### Schizo trader (Phase 49)
-
-Phase 52 removes this; since the LLM trader is gone (2026-10-29) the prompt and tool parts below no longer run.
-
-Prompt `bot-spot-v17-schizo` (deployed 2026-10-21; v15 and v16 ran on
-2026-10-20; operator decisions in
-`docs/decisions.md`). The LLM stays the trader and acts only
-through the host tools; the hard safety above and the default exit plan
-`atr=3.5:1h,deadline=360` are unchanged, and there is no panic sell. It runs
-on the full wallet with no size cap. Switch: `BOT_SPOT_GCP2_ENABLED` (default
-true); `BOT_SPOT_GCP2_BASE_URL` (default `https://gcp2.net`).
-
-- **Live GCP2 reader.** Once per cycle the trader GETs the bearer token GCP2
-  publishes in `/js/data/api_token.js` (cached, fetched again once on HTTP
-  401/403), then `/api/getNetVarAggregate24H` (the last 24 h of per-minute
-  values) and `/api/getcolorzones` (GCP2's own zone bounds, never constants in
-  code), each with a 10 s timeout. Read-only: no login, no posts. The
-  `--evidence-only` payload shows it as `gcp2`.
-- **GCP2 unavailable.** Any failed read (timeout, HTTP error, bad data, or
-  HTTP 429 `Too Many Requests`, seen live at 2026-10-20 12:03 UTC) logs one
-  `WARN GCP2 unavailable this cycle` and the cycle runs without GCP2: the
-  mood holds (`mood_step` `no reading`), there is no dice roll,
-  and the next cycle with a reading also holds because it has nothing to
-  compare with. The bot still trades on its own judgement. Whether 429s
-  recur is not known yet; watch for repeated warnings.
-- **Schizo state.** Each cycle it applies the backtest `schizo` rules
-  (`persona_backtest::personas`) to live inputs:
-  - the mood (one of `v13`, `contrarian`, `detached`, `high_variance`)
-    follows GCP2: it switches to the personality picked by the GCP2 dice when
-    the zone changed (up or down) since the previous cycle, and holds while
-    the zone stays the same or a reading is missing; the first reading picks
-    it (v15 ran this inverted: switch on the same zone, hold on a change);
-  - the dice are the SplitMix64 finalizer of the latest minute's 4-decimal
-    value (no seed);
-  - the four personalities vote on the live wallet (the breadth candles and
-    24h tickers the cycle already reads; holdings worth less than their USDT
-    market's minimum order count as flat), the mood in charge counting double.
-  - YOLO (all-in on the hottest liquid coin in GCP2's two highest zones) was
-    removed on 2026-10-21 by operator decision.
-
-  The cycle message opens with `## Your schizo state` (mood and why, GCP2
-  value, zone, last cycle's zone and 24h range, dice, each voice and the vote
-  verdict). The system prompt describes
-  the four personalities and their exit plans; `detached` keeps the default
-  plan and sells by hand.
-- **State file.** `bot-spot-schizo-state.json` in the directory of
-  `BOT_SPOT_STATE_PATH` (`docker-data/` on the Pi): mood and the cycle's zone
-  (older files with `yolo` fields still load). It is saved after the cycle's audit row and read at the
-  next cycle, so the mood survives restarts. A missing file starts fresh; an
-  unreadable one logs an ERROR and that cycle runs without a schizo state
-  (back it up and fix or delete it). `--evidence-only` never writes it.
-- **Audit field.** Each cycle summary carries `schizo`: `mood`,
-  `previous_mood`, `mood_step` (`initial`, `switched`, `held`, `no reading`),
-  `mood_reason`, `gcp2` (`value`, `zone`, `previous_zone`, `end_s`; `null`
-  when unavailable), `dice`, `votes` (`by_persona` with `weight`, `buy`,
-  `sell`, plus weighted `buy`/`sell` tallies), `vote_buy`, `vote_sell`.
-  Recent moods and the long-term value verdict:
-
-```bash
-tail -n 50 docker-data/bot-spot-decisions.jsonl | python3 -c 'import json,sys; [print(r["timestamp"][:19], r["prompt_version"], (r.get("schizo") or {}).get("mood"), (r.get("schizo") or {}).get("mood_step"), ((r.get("schizo") or {}).get("gcp2") or {}).get("zone"), ((r.get("mdp") or {}).get("held") or {}).get("verdict"), r["decision"]["action"]) for r in map(json.loads, sys.stdin) if r["row_type"] == "cycle_summary"]'
-```
-
-- **Turn off the schizo voice, same image.** Set `BOT_SPOT_GCP2_ENABLED=false`
-  and `BOT_SPOT_PROMPT_VERSION=bot-spot-v14-agentic` in `.env.docker` (back
-  it up first) and recreate `bot-spot`: no GCP2 reads, no schizo state or
-  audit field, and the v14 system and cycle prompt text. The code stays the
-  v17 build.
-- **Roll back (image and env).** The v16 image (with YOLO, no long-term value
-  voice) is tagged `binance-bot:pre-v17-20261021`; the v15 image (inverted mood) is tagged
-  `binance-bot:pre-v16-20261020`; the v14 image is tagged
-  `binance-bot:pre-c4-20261020` and the env before the first schizo deploy is
-  `.env.docker.bak-20261020T100630Z-c4`; the first v15 image (before the
-  `detached` wording fix) is `binance-bot:pre-c4b-20261020`. Follow the
-  Bot Spot recreate rules: recreate only right after a `cycle_summary` row
-  lands in `docker-data/bot-spot-decisions.jsonl` and at least 4 minutes
-  before the next cycle, never while a `route` row is waiting for its
-  `cycle_summary`, preferably with no open position, never with the stop file
-  while a position is open, and never by rebooting the Pi. Then:
-
-```bash
-cd ~/binance-bot
-cp -p .env.docker .env.docker.bak-$(date -u +%Y%m%dT%H%M%SZ)-pre-rollback
-docker tag binance-bot:pre-c4-20261020 binance-bot:latest
-cp -p .env.docker.bak-20261020T100630Z-c4 .env.docker
-docker compose up -d --force-recreate bot-spot
-docker logs bot-spot 2>&1 | grep -E 'keeping the cycle cadence|live exit plans enabled'
-```
-
-  The next cycle rows then carry `bot-spot-v14-agentic` and no `schizo`.
-  `bot-spot-schizo-state.json` stays on disk unused.
-
-  Back to v15 only (the inverted mood): the same recreate rules, then
-  `docker tag binance-bot:pre-v16-20261020 binance-bot:latest`, restore
-  `.env.docker.bak-20261020T142041Z-v16` (it has
-  `BOT_SPOT_PROMPT_VERSION=bot-spot-v15-schizo`) and
-  `docker compose up -d --force-recreate bot-spot`. The schizo state file is
-  shared by both rules and needs no change.
-
 ### Long-term value voice (Phase 50)
 
 Phase 52 removes this; since the LLM trader is gone (2026-10-29) the prompt and tool parts below no longer run.
@@ -506,34 +408,21 @@ bb entry-study --audit docker-data/bot-spot-decisions.jsonl \
 
 `bb bot-spot-persona-backtest` (Phase 48) backtests deterministic rule
 personas on the same 1m cache. It is offline and research only: it reads only
-`--cache-dir` and `--gcp2-cache-dir`, never fetches or calls Binance, has no
+`--cache-dir` (and `--biz-feeds`), never fetches or calls Binance, has no
 order path, and leaves the live `bot-spot` untouched. If the cache is missing
 a liquid coin, ends before `--end`, or lacks 48h of history before the window
 start, it exits 1 with `missing cache`.
 
 ```bash
 cargo run --release -p bb-cli --bin bb -- bot-spot-persona-backtest \
-  --cache-dir data/entry-study-cache --gcp2-cache-dir data/gcp2-cache \
-  --end 2026-10-18T10:43:00Z --days 60 --persona all --persona schizo
+  --cache-dir data/entry-study-cache \
+  --end 2026-10-18T10:43:00Z --days 60 --persona all
 ```
 
 The other flags are `--starting-balance` (1000), `--fee-bps` (7.5),
 `--slippage-bps` (5), `--step-minutes` (20) and `--output-dir` (`reports`).
 `--persona` repeats and defaults to `all` (the six Phase 48 variants;
-`schizo` is named on its own).
-
-GCP2 history for `schizo` comes from `bb gcp2-history` (public download form,
-no login; it also saves GCP2's colour zones as `colorzones.json` with their
-fetch time):
-
-```bash
-bb gcp2-history --year 2026 --month 8 --month 9 --month 10 --cache-dir data/gcp2-cache
-```
-
-It writes `GCP2_Network_Coherence_Global_Network_<YYYY>_<MM>.csv` (one row per
-second) per month. `--gcp2-cache-dir` pointing at a missing directory gives
-every persona no GCP2 view (`schizo` then never rolls); a directory without
-its CSVs or `colorzones.json` is an error.
+`biz_algo` is named on its own).
 
 Personas:
 
@@ -555,31 +444,6 @@ Personas:
   less than 72h of history). A switch step only sells.
 - `ensemble` buys the coin with at least 2 of 4 base-persona buy votes. It
   sells on 2 sell votes or the `v13` exit plan.
-- `schizo` (Phase 49, the live schizo rules) runs the four base personas in
-  one head ruled by GCP2: the mood switches by the GCP2 dice when the GCP2
-  zone changes between steps and holds while it stays the same; the personas
-  vote (the mood counts twice, buy or sell at 2), one coin with all cash, and
-  a position keeps the exit plan of the mood that bought it. On the 60 days
-  to 2026-10-18 it lost 93.53% (`reports/schizoid_backtest_2026-10-18.md`;
-  with YOLO, removed 2026-10-21, it lost 94.03%; the inverted v15 rule 96.71%).
-- `schizo_mdp` (Phase 50, not part of `all`, needs `--mdp-model`) is `schizo`
-  with the long-term value model as the strongest voice: a vote sell goes
-  through only when the model values selling above holding, the model sells
-  on its own when it does, a buy needs a long-term value above 0 after its
-  entry cost, and a `detached` buy runs the live default plan. The model must
-  be fitted on data that ends before the window (the command refuses
-  otherwise). Out of sample, fit to 2026-09-18 and tested on the 30 days to
-  2026-10-18 (`reports/mdp/`, model `reports/mdp/mdp_model_to_2026-09-18.json`):
-
-  | Variant | Net % | Max DD % | Trips | Win % | Fees USDT |
-  |---|---:|---:|---:|---:|---:|
-  | v13 | −32.23 | 37.80 | 44 | 38.6 | 57.89 |
-  | high_variance | −26.82 | 40.11 | 76 | 43.4 | 43.50 |
-  | schizo | −82.41 | 83.01 | 614 | 37.3 | 405.51 |
-  | schizo_mdp | −31.61 | 43.56 | 75 | 58.7 | 106.40 |
-
-  The model vetoed 1,515 vote sells and 12 buys and sold twice itself; most
-  exits were the exit plans' deadlines. Every variant lost in that window.
 - `biz_algo` (Phase 51, not part of `all`, research only) is the rule-based
   decider `crate::decider`, no LLM: each liquid-top coin scores
   `w_talk·talk + w_stance·stance + w_momentum·momentum + w_value·value`
@@ -607,12 +471,10 @@ charged on each side (25 bps per round trip by default, against the measured
 live 14.8 bps). Buys under 5 USDT are skipped. Equity is marked at the last
 close with no exit costs.
 
-Output: `reports/schizoid_backtest_<end-date>.md` (settings, results,
-per-variant exit and skip reasons, the GCP2 section for `schizo`,
-assumptions, caveats), `.csv` (one row per variant), `_trades.csv` (one row
-per trade) and `_<variant>_trace.csv` for `schizo` and `schizo_mdp` (one row
-per step: time, GCP2 value, from and to zone, dice,
-switched/held/initial/no reading, mood before and after). The files are byte-identical
+Output: `reports/algo_backtest_<end-date>.md` (settings, results,
+per-variant exit and skip reasons, assumptions, caveats), `.csv` (one row per
+variant), `_trades.csv` (one row per trade) and `_biz_algo@<half>_trace.csv`
+(one row per step). The files are byte-identical
 across reruns. The cache comes from `bb entry-study` (`data/` is gitignored).
 The liquid universe is the 2026-10-18 top 20, so results carry survivorship
 bias.
@@ -630,7 +492,4 @@ no longer archived; earlier archives keep them).
 runs it at 23:45 UTC into `docker-backups/`. The archive's paths start with
 `data/`, which is `docker-data/` on the Docker host. To restore, stop
 `bot-spot`, extract into a temporary directory, copy its `data/` contents over
-`docker-data/`, then start `bot-spot`. The Phase 49
-`bot-spot-schizo-state.json` is not in the archive (its mood is also in every
-cycle row's `schizo`); without it the next cycle's GCP2 reading picks a fresh
-mood.
+`docker-data/`, then start `bot-spot`.
