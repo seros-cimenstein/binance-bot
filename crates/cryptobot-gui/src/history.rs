@@ -1,12 +1,11 @@
-//! Dashboard view of the audit log: submitted routes (valued by [`bb_trader::trades`]),
-//! failed routes and cycle summaries.
+//! Dashboard view of the audit log: submitted routes (valued by [`bb_trader::trades`]) and
+//! failed routes.
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use bb_trader::memory::{row_asset, row_attempted_submission, row_status, value_decimal};
+use bb_trader::memory::{row_asset, row_attempted_submission, row_status};
 use bb_trader::trades::{RouteRecord, route_record};
-use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -19,27 +18,11 @@ pub struct FailedRoute {
     pub error: String,
 }
 
-/// One cycle summary: who ran it and under which setup.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CycleRecord {
-    pub timestamp: String,
-    pub cycle_id: String,
-    pub prompt_version: String,
-    pub session_id: String,
-    pub model: String,
-    pub thinking: String,
-    pub market_pick_mode: String,
-    pub cost_usd: Option<Decimal>,
-    /// The trader's run configuration (cycles from 2026-10-17 on).
-    pub run_config: Option<Value>,
-}
-
 /// The audit log reduced to what the history needs.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParsedAudit {
     pub routes: Vec<RouteRecord>,
     pub failed: Vec<FailedRoute>,
-    pub cycles: Vec<CycleRecord>,
     pub error: Option<String>,
 }
 
@@ -68,17 +51,6 @@ pub fn parse_audit(path: &Path) -> ParsedAudit {
             continue;
         };
         if text(&row, "/row_type") == "cycle_summary" {
-            parsed.cycles.push(CycleRecord {
-                timestamp: text(&row, "/timestamp"),
-                cycle_id: text(&row, "/cycle_id"),
-                prompt_version: text(&row, "/prompt_version"),
-                session_id: text(&row, "/session_id"),
-                model: text(&row, "/agent/model"),
-                thinking: text(&row, "/agent/thinking"),
-                market_pick_mode: text(&row, "/market_pick_mode"),
-                cost_usd: value_decimal(row.pointer("/agent/usage/cost_usd")),
-                run_config: row.get("run_config").filter(|v| v.is_object()).cloned(),
-            });
             continue;
         }
         if !row_attempted_submission(&row) {

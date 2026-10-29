@@ -32,9 +32,10 @@ biz-app, no LLM, no chat, no timer, no Telegram (`docs/decisions.md`,
 - Pruned to the trader on 2026-10-29 (`docs/decisions.md`); the moved modules
   are in `../redundancy/binance-bot-modules/`.
 - Phase 52 removal is under way (`LOOP_ALGO.md`): the LLM path, Telegram,
-  bb-social, GCP2/schizo, MDP, personas and exit plans are gone from the code;
-  `bb algo-backtest` replaces the persona backtest. Breadth, the Sessions tab
-  and the 20-minute cycle are still in. The Pi's `.env.docker` still sets the
+  bb-social, GCP2/schizo, MDP, personas, exit plans, the dashboard's Sessions
+  tab and its LLM views are gone from the code; `bb algo-backtest` replaces
+  the persona backtest. Breadth and the 20-minute cycle are still in. The
+  Pi's `.env.docker` still sets the
   `BOT_SPOT_EXIT_*` and `BOT_SPOT_DEFAULT_EXIT_PLAN*` variables; the new image
   ignores them with one warning, so remove them at the Pi rollout.
 

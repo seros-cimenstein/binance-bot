@@ -10,8 +10,6 @@
 //! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
-//! - `GET /api/sessions`: results per trading session (setup), ranked, with the winner and
-//!   each session's configuration ([`sessions`]).
 //! - `GET /api/market`: market mood, bearish to bullish, from the breadth of the most-traded
 //!   USDT coins, with its last 24 hours ([`market`]; public market data).
 //!
@@ -22,7 +20,6 @@
 
 pub mod history;
 pub mod market;
-pub mod sessions;
 pub mod wallet;
 
 use std::path::PathBuf;
@@ -192,7 +189,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/history", get(history_handler))
         .route("/api/wallet", get(wallet_handler))
         .route("/api/market", get(market_handler))
-        .route("/api/sessions", get(sessions_handler))
         .layer(middleware::from_fn(localhost_only))
         .with_state(Arc::new(state))
 }
@@ -245,17 +241,6 @@ async fn history_handler(State(app): State<Arc<AppState>>) -> Response {
         Err(error) => return internal_error("history", &error),
     };
     json_response(history_view(&audit, &wallet))
-}
-
-async fn sessions_handler(State(app): State<Arc<AppState>>) -> Response {
-    let wallet = app.wallet().await;
-    let state = app.clone();
-    blocking_json(move || {
-        let audit = state.audit();
-        let trades = build_trades(&audit.routes, |asset| wallet.mark(asset), bb_core::time::now());
-        sessions::sessions_view(&audit, &trades)
-    })
-    .await
 }
 
 async fn wallet_handler(State(app): State<Arc<AppState>>) -> Response {
@@ -311,13 +296,11 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
                 "cycle_id": row.get("cycle_id"),
                 "status": row.get("status"),
                 "mode": row.get("mode"),
-                "prompt_version": row.get("prompt_version"),
                 "rules_version": row.get("rules_version"),
                 "candidate_route_count": row.get("candidate_route_count"),
                 "error": row.get("error"),
                 "decision": row.get("decision"),
-                "agent": row.get("agent"),
-                // The rule's verdict (absent on LLM-era rows).
+                // The rule's verdict (absent on rows from before Phase 52).
                 "algo": row.get("algo"),
             })
         })

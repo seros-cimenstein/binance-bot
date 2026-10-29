@@ -1,6 +1,6 @@
 [package]
 name = "cryptobot-gui"
-description = "Read-only, localhost-only web dashboard for Bot Spot: wallet, trade history, sessions, status, exit plans, /biz/ feed."
+description = "Read-only, localhost-only web dashboard for Bot Spot: status, trade history, wallet, the algorithm's cycles, /biz/ feed."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

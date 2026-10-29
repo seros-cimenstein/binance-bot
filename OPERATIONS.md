@@ -105,10 +105,8 @@ Docker: `docker compose ps` and `docker compose logs -f <service>`.
 
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
 profiles `gui`/`live`/`all`) serves the Bot Spot trades, cycles (the rule's
-verdicts; older LLM cycles keep brain, tools and cost), exit plans (Exits tab), results per session
-(Sessions tab: each setup ranked by realized P&L, the winner, and the
-session's configuration from the `run_config` the trader writes on every
-cycle summary), the /biz/ feed the trader read (/biz/ tab), a market mood
+verdicts; cycles from before Phase 52 show their decision only), the /biz/
+feed the trader read (/biz/ tab), a market mood
 gauge on the Overview (bearish to bullish breadth of the 20 most-traded USDT
 crypto markets over 15m/1h/4h/24h, from public Binance data), stop-file and
 failed-route-halt state at `http://localhost:8787` on the Docker host. It is

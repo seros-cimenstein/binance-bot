@@ -108,7 +108,7 @@ tunes the algorithm (`biz_algo`) on the older half of `--days` (60) before
 
 ## Dashboard (`cryptobot-gui`)
 
-A read-only web page for the trader, in six tabs that refresh every 30 s:
+A read-only web page for the trader, in five tabs that refresh every 30 s:
 
 - **Overview:** portfolio value and 24h change, the bot's P&L and win rate, the
   open position, the bot's status (running / idle / stopped by the stop file /
@@ -118,17 +118,14 @@ A read-only web page for the trader, in six tabs that refresh every 30 s:
   win rate, average win/loss, profit factor, fees and hold time; cumulative
   P&L, per-trade and daily P&L charts, outcome mix, P&L by coin and a trade
   table (click a row for the bot's reasoning); 24h / 7d / 30d / all ranges.
-- **Sessions:** results per trading session (one setup of the trader: prompt
-  version, omp session, run configuration), ranked by realized P&L, with each
-  session's configuration.
 - **Wallet:** spot balances (free and in orders) with price, 24h change, value
   and share, Simple Earn positions, Binance wallet totals, account fees and an
   API-key safety check (withdrawals, IP restriction, extra permissions).
-- **The bot:** cycles with the rule's verdicts (older LLM cycles keep their
-  tool calls and cost).
+- **The bot:** cycles with the rule's verdicts (rule, best candidate, held
+  coins and their scores); cycles from before Phase 52 show their decision only.
 - **/biz/:** the /biz/ feed the trader read in its newest cycle (mentions,
-  posters and stance per coin, coins without a Binance market); only the
-  rule-based decider trades on it.
+  posters and stance per coin, coins without a Binance market); the algorithm
+  scores its coins.
 
 Trade results come from the route quotes the trader logs: each submitted route
 opens a trade in the coin it bought, which closes when the bot later sells that
