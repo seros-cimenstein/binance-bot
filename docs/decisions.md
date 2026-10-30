@@ -148,3 +148,28 @@ USDT), BTC -0.40% meanwhile.
 Answer through the ask tool on 2026-10-30: "(a) Keep practising".
 `bot-spot-paper` keeps running plan-only on the Pi and `bot-spot` stays
 stopped: kept plan-only, no go for live trading (E6 done without going live).
+
+## 2026-10-30 dynamic tags and two horizons (Phase 53)
+
+Shown to the operator: the research on news-reading AI traders and
+geopolitical risk (FinMem, FINSABER, Alpha Arena, Lopez-Lira & Tang, Baur &
+Smales, the Geopolitical Risk Index), the count of Gold (1,021) and Silver
+(1,124) tags the feed drops today, and Binance's markets: Spot has only gold
+tokens (PAXG, XAUT); silver, oil, metals and stocks trade only as USDⓈ-M
+"TradFi" perpetual futures (XAGUSDT, CLUSDT, NVDAUSDT, ...).
+
+Operator: "first we plan ... dynamic tag to algorithm set up well, then
+afterwards we will tune the algorithm". Answers through the ask tool:
+
+- Themes: "Open + auto-merge": the AI names themes freely, a registry merges
+  synonyms and a theme goes live after enough distinct posters in 7d.
+- Theme to asset: "From the posts": the AI tags per post which assets a
+  theme moves and which way; the algorithm uses those links.
+- Non-crypto assets: "Spot proxies now, futures later": every asset is
+  scored; trading only through Spot stand-ins the operator approves (gold:
+  PAXG/XAUT); futures (silver, oil, stocks) are a later safety phase.
+- Horizons: "Add 7d + 30d" (forum 1h/6h/24h/7d/30d; prices 1h/24h/7d).
+- Portfolio: "Two sleeves": a slow core and a fast tactical sleeve, the
+  split chosen at tuning; until then fast 100% = `algo-2026-10-29`.
+- History: "Re-tag all" posts since 2026-10-01 with the new prompt.
+- Geopolitical Risk Index as an outside slow feed: "Later phase".

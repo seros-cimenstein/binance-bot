@@ -61,8 +61,10 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
 
 ## Next steps
 
-1. Review the practice run again (`bot-spot-paper` audit, dashboard
-   Algorithm tab).
+1. Phase 53, dynamic tags and two horizons (`IMPLEMENTATION_PLAN.md`;
+   operator decisions 2026-10-30): feed first, then trader, backtest,
+   dashboard, plan-only rollout. Then a tuning phase where the operator
+   picks the new terms and the sleeve split.
 2. Live only on the operator's go (`CODEX.md`, rollout rule): back up
    `.env.docker`, `docker compose up -d bot-spot`, watch the first decisions
    and orders; back: retag `binance-bot:pre-algo-20261030` and recreate.

@@ -102,3 +102,95 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
   `docker-data/biz-feed.json` directly; the laptop copier is removed.
 - [ ] Live: operator go, rollback tag `binance-bot:pre-algo-<date>`, entry in
   `PROGRESS.md`, watch the first orders.
+
+## 53. Dynamic Tags and Two Horizons (operator decisions 2026-10-30)
+
+Why: the feed keeps only Binance coins over 24 hours and the rule sees one
+fixed formula, so a story like "war is coming, hold silver" never reaches
+the algorithm (`docs/decisions.md`, "2026-10-30 dynamic tags"). Target:
+
+- biz-app tags assets, themes and theme-to-asset links per post; new tags
+  register themselves, merge with synonyms and go live once enough distinct
+  posters use them. No code change for a new tag.
+- The trader scores every candidate on terms over 1h to 30d, from a rule
+  file the operator writes, in two sleeves (slow core, fast tactical).
+- Until the operator tunes it, the rule file reproduces `algo-2026-10-29`
+  (fast 100%, every new term at weight 0): same scores, same actions.
+- AI still only reads posts and writes numbers; the rule stays the
+  operator's; every order keeps every hard-safety item. Spot only.
+
+Feed contract `biz-feed-v2` (one JSON file, replaces v1; the trader is the
+reader):
+
+- `schema`, `as_of`, `model`, `prompt_version` (`stance-2`), `posts`,
+  `untagged_posts`, `windows` (`1h`, `6h`, `24h`, `7d`, `30d`).
+- `assets.<NAME>.<window>`: `mentions`, `posters`, `bullish`, `bearish`
+  (score-weighted), `posts` (24h and shorter only). Names are registry ids:
+  coins by ticker, others by name (`GOLD`, `SILVER`, `NVDA`).
+- `themes.<id>.<window>`: `mentions`, `posters`, `up`, `down`
+  (score-weighted: the poster sees the theme growing or easing).
+- `links.<theme>.<NAME>.<window>`: `posters`, `bullish`, `bearish`: posts
+  that tie the theme to the asset.
+- Only live tags appear. The registry `biz-tags.json` (next to the feed)
+  lists every tag: `id`, `kind` (asset or theme), `aliases`, `first_seen`,
+  `live_since`.
+
+Not in this phase: tuning the new terms and the sleeve split (next phase,
+the operator picks); the Geopolitical Risk Index feed (later); futures for
+silver, oil and stocks (a separate safety phase, `CODEX.md` forbids futures
+today).
+
+### Feed (biz-app, outside this repo; back up first, then copy to the Pi's `~/biz-app`)
+
+- [ ] Prompt `stance-2`: per post the score, assets with stance, themes with
+  direction (up, down, neutral) and the assets each theme moves with stance;
+  tag cache keyed on `stance-2`.
+- [ ] Tag registry `biz-tags.json`: canonical ids and aliases; new names
+  merged by one cached AI call per round (like the project merge); a tag
+  goes live at 5 or more distinct posters in 7d (setting, default 5).
+- [ ] `biz-feed-v2` writer: assets, themes and links over 1h/6h/24h/7d/30d,
+  live tags only, replaced by rename; `--watch` and `--history` write v2.
+- [ ] Re-tag the archive since 2026-10-01 with `stance-2` (calls and time
+  logged) and write the hourly v2 history; 30d windows are full from
+  2026-10-31 on.
+
+### Trader
+
+- [ ] `crate::biz` reads `biz-feed-v2` only (assets, themes, links); test
+  fixture from a real v2 file.
+- [ ] Proxies: operator file `BOT_SPOT_PROXIES` (e.g. `GOLD` -> `PAXG`,
+  `XAUT`); a proxy candidate scores on its own tags plus the proxied
+  asset's; assets without a Spot market or proxy are scored, never bought.
+- [ ] Price horizons: 1h from the trader's polls, 24h from the all-symbol
+  24h ticker (one request), 7d from cached 1h klines per candidate; the
+  backtest derives the same from cached 1m candles.
+- [ ] Term catalog, each −1..1: talk, stance and theme pressure (live
+  themes through their links) per forum window; momentum per price horizon.
+  An unknown term in the rule refuses to start.
+- [ ] Rule file `BOT_SPOT_ALGO_RULE` replaces `BOT_SPOT_ALGO_WEIGHTS` and
+  `BOT_SPOT_ALGO_MIN_POSTERS`: per sleeve its share, terms with weights,
+  buy and sell levels, poster minimum. `algo-2026-10-29` as a rule file;
+  a test shows it gives the old formula's scores and actions.
+- [ ] Two sleeves: each holds at most one asset, buys with its share of
+  the portfolio value and sells only its own quantity; sleeve holdings in
+  the state file, checked against balances every tick (a mismatch halts,
+  fail closed); orders only through `execute_route` with every hard-safety
+  item.
+- [ ] Audit: a decision row when a sleeve's action changes plus hourly, with
+  every candidate's terms and the live tags.
+
+### Backtest and dashboard
+
+- [ ] `bb algo-backtest`: v2 history, rule file, sleeves, a report per
+  sleeve.
+- [ ] Dashboard: /biz/ tab with assets (tradable, proxy, scored only),
+  themes, links and the registry (new tags, live since); Algorithm tab per
+  sleeve with the rule's terms as columns.
+- [ ] Docs (`README.md`, `OPERATIONS.md`, `.env.example`) and `CODEX.md`
+  "rules in force" describe the rule file and the sleeves.
+
+### Roll out
+
+- [ ] Deploy feed v2 and the trader together; `bot-spot-paper` plan-only on
+  the `algo-2026-10-29` rule file; its decisions match the old rule; the
+  operator reviews.
