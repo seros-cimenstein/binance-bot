@@ -53,5 +53,10 @@ biz-app, no LLM, no chat, no timer, no Telegram (`docs/decisions.md`,
 
 ## Next steps
 
-1. Plan-only practice run on the Pi (`bot-spot-paper`), operator review,
-   live only on the operator's go (`LOOP_ALGO.md` E4-E6).
+1. The plan-only practice run `bot-spot-paper` runs on the Pi since
+   2026-10-30 08:59 UTC (audit `docker-data/bot-spot-paper-decisions.jsonl`).
+   Operator review 2026-10-30: "(a) Keep practising", so it stays plan-only
+   and `bot-spot` stays stopped (`docs/decisions.md`). Review it again; live
+   only on the operator's go: `.env.docker` backup, `docker compose up -d
+   bot-spot` (it runs `--submit-live --nonstop`), rollback tag
+   `binance-bot:pre-algo-20261030`.

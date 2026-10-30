@@ -121,3 +121,16 @@ Answers the operator gave through the ask tool on 2026-10-30:
 - After the loop: "Keep them running": the scraper, `biz-insights feed
   --watch` and `scripts/biz_feed_to_pi.sh` keep running detached on the
   laptop after the loop ends.
+
+## 2026-10-30 practice run review (`LOOP_ALGO.md` E5, E6)
+
+Shown to the operator at 09:41 UTC: the Pi's plan-only practice run
+(`bot-spot-paper`, rule `algo-2026-10-29`) had run 42 minutes with one
+decision, a planned ETH buy at 08:59:28 UTC (score +0.929: stance +1.00, talk
+-0.40, momentum -0.07), unchanged since and no order sent; at current prices
++0.06% gross, -0.19% after a 25 bps round trip (about -0.03 USDT on 15.05
+USDT), BTC -0.40% meanwhile.
+
+Answer through the ask tool on 2026-10-30: "(a) Keep practising".
+`bot-spot-paper` keeps running plan-only on the Pi and `bot-spot` stays
+stopped: kept plan-only, no go for live trading (E6 done without going live).
