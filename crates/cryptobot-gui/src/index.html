@@ -231,7 +231,7 @@
       <a href="#overview" data-tab="overview">Overview</a>
       <a href="#history" data-tab="history">History</a>
       <a href="#wallet" data-tab="wallet">Wallet</a>
-      <a href="#bot" data-tab="bot">Bot</a>
+      <a href="#algorithm" data-tab="algorithm">Algorithm</a>
       <a href="#biz" data-tab="biz">/biz/</a>
     </nav>
     <div class="top-right">
@@ -251,7 +251,7 @@
 // textContent / createTextNode; nothing is parsed as HTML.
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
-const TABS = ["overview", "history", "wallet", "bot", "biz"];
+const TABS = ["overview", "history", "wallet", "algorithm", "biz"];
 const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
@@ -567,15 +567,9 @@ function drawCharts() {
 }
 
 // ---------- derived data ----------
-// The cycle cadence comes from the data: the upper quartile of the gaps between the newest
-// cycles (restarts and brain retries make some gaps short; the configured cadence is the long ones).
-function cycleInterval(cycles) {
-  const ts = cycles.slice(0, 13).map((c) => ms(c.timestamp)).filter((t) => t !== null);
-  const gaps = [];
-  for (let i = 1; i < ts.length; i++) gaps.push(ts[i - 1] - ts[i]);
-  gaps.sort((a, b) => a - b);
-  return gaps.length >= 3 ? gaps[Math.floor(0.75 * (gaps.length - 1))] / 1000 : null;
-}
+// The nonstop trader writes a decision row when its decision changes and at least once an
+// hour (operator decision 2026-10-29), so a newer row than that means it is running.
+const HEARTBEAT_S = 3600;
 function noBotData() { const st = ui.data.status; return !!(st && st.source && !st.source.audit_present); }
 const NO_DATA = ["No bot data on this computer", "See the note at the top of the page."];
 function botEmpty(title, text) { return noBotData() ? empty(...NO_DATA) : empty(title, text); }
@@ -585,14 +579,13 @@ function botState() {
   if (noBotData()) return { label: "No data", tone: "warn", detail: "No bot audit log at " + st.source.audit_path };
   if (st.stop_active) return { label: "Stopped", tone: "neg", detail: "Emergency stop file present: " + st.stop_path };
   if (st.halt) return { label: "Halted", tone: "neg", detail: st.halt };
-  // Liveness: the newest cycle summary in the audit log.
+  // Liveness: the newest decision row, written at least hourly while the trader runs.
   const last = st.cycles && st.cycles[0] ? st.cycles[0].timestamp : null;
-  if (!last) return { label: "Waiting", tone: "", detail: "No bot cycle recorded yet" };
+  if (!last) return { label: "Waiting", tone: "", detail: "No decision recorded yet" };
   const age = (Date.now() - ms(last)) / 1000;
-  const every = cycleInterval(st.cycles || []);
-  const detail = "Last cycle " + ago(last) + (every === null ? "" : " · every ~" + duration(every));
-  if (every !== null && age <= every * 1.5 + 120) return { label: "Running", tone: "pos", detail };
-  return { label: "Idle", tone: "warn", detail };
+  const detail = "Last decision " + ago(last) + " · a row at least hourly";
+  if (age <= HEARTBEAT_S + 300) return { label: "Running", tone: "pos", detail };
+  return { label: "Idle", tone: "warn", detail: "No decision for " + duration(age) + " (a running trader writes one at least hourly)" };
 }
 const RANGES = [["24h", "24h", 864e5], ["7d", "7d", 6048e5], ["30d", "30d", 2592e6], ["all", "All", Infinity]];
 function tradesInRange(trades) {
@@ -675,7 +668,7 @@ function alerts() {
   const items = [];
   const st = ui.data.status;
   if (noBotData()) items.push(["warn", "No bot data on this computer",
-    "Nothing at " + st.source.audit_path + ". The live trader runs on the Pi, so History and Bot stay empty here. Start the dashboard with scripts/cryptobot_gui_pi.sh: it mirrors the Pi's data dir (read-only) and opens this page on it."]);
+    "Nothing at " + st.source.audit_path + ". The live trader runs on the Pi, so History and Algorithm stay empty here. Start the dashboard with scripts/cryptobot_gui_pi.sh: it mirrors the Pi's data dir (read-only) and opens this page on it."]);
   if (st && st.stop_active) items.push(["neg", "Emergency stop is on", "The bot won't trade while " + st.stop_path + " exists. Delete it to resume."]);
   if (st && st.halt) items.push(["neg", "Live trading halted", st.halt + ". Review, then run bb bot-spot --mark-failed-route-reviewed."]);
   if (st && st.audit_error) items.push(["neg", "Audit log unreadable", st.audit_error]);
@@ -705,7 +698,7 @@ function renderHeader() {
 function render() {
   renderHeader();
   const view = document.getElementById("view");
-  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, bot: botPage, biz: bizPage };
+  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, algorithm: algorithmPage, biz: bizPage };
   ui.pendingRender = false;
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
@@ -787,11 +780,11 @@ function overviewPage() {
   const allocation = card("Allocation", wallet && wallet.error ? errorBox(wallet.error)
     : holdings.length ? allocationDonut(wallet) : empty("Nothing to show", "No balances worth $1 or more."));
 
-  const thinking = card("Bot's latest call", lastCycle ? el("div", { class: "grid", style: "gap:10px" },
+  const thinking = card("Latest decision", lastCycle ? el("div", { class: "grid", style: "gap:10px" },
       el("div", { class: "feed-meta" }, actionChip(lastCycle), el("span", null, ago(lastCycle.timestamp)), el("span", { class: "sep" }, "·"), el("span", null, stamp(lastCycle.timestamp))),
-      el("div", { class: "quote" }, cycleSummary(lastCycle) || "No summary for this cycle."),
+      el("div", { class: "quote" }, cycleSummary(lastCycle) || "No summary for this decision."),
       lastCycle.error ? el("div", { class: "neg small" }, lastCycle.error) : null)
-    : botEmpty("No cycles yet", "The bot's reasoning shows up here after its first cycle."), { action: el("a", { href: "#bot", class: "small", style: "color:var(--accent);text-decoration:none" }, "All cycles →") });
+    : botEmpty("No decisions yet", "The rule's newest decision shows up here."), { action: el("a", { href: "#algorithm", class: "small", style: "color:var(--accent);text-decoration:none" }, "All decisions →") });
 
   const recent = coinTrades(trades).slice(0, 5);
   const recentCard = card("Recent trades", recent.length ? tradeTable(recent, { compact: true })
@@ -1004,46 +997,68 @@ function accountCard(wallet) {
 }
 function fact(k, v) { return el("div", { class: "fact" }, el("div", { class: "k" }, k), el("div", { class: "v" }, v)); }
 
-// ---------- Bot ----------
+// ---------- Algorithm ----------
 function cycleAction(c) { return ((c.decision && c.decision.action) || "").toLowerCase(); }
 function cycleFailed(c) { return !!c.error; }
 function cycleKey(c) { return "cycle:" + (c.cycle_id || c.timestamp); }
+function signedNum(v, dp = 2) { const n = num(v); return n === null ? "—" : (n > 0 ? "+" : n < 0 ? "−" : "") + nf(dp, dp).format(Math.abs(n)); }
+// The rule's inputs for every coin it scored: /biz/ talk and stance, own 1h momentum, score.
+function coinsTable(algo) {
+  const coins = (algo && algo.coins) || [];
+  if (!coins.length) return el("div", { class: "small muted" }, algo ? "No coin scored: no fresh feed coin and nothing held." : "Recorded before Phase 52: no scores.");
+  const buy = num(algo.buy_above), sell = num(algo.sell_below);
+  const verdict = (c) => c.held
+    ? (sell !== null && num(c.score) < sell ? chip("Sell", "neg") : chip("Keep", "accent"))
+    : (!c.priced ? chip("No price", "") : buy !== null && num(c.score) >= buy ? chip("Buy level", "pos") : null);
+  return table([["Coin"], ["Talk", "r"], ["Stance", "r"], ["1h move", "r"], ["Momentum", "r"], ["Score", "r"], [""]],
+    coins.map((c) => el("tr", null,
+      el("td", null, assetLabel(c.asset, c.held ? chip("Held", "accent") : null)),
+      el("td", { class: "r num" }, signedNum(c.talk)),
+      el("td", { class: "r num" }, signedNum(c.stance)),
+      el("td", { class: "r" }, el("span", { class: tone(c.ret_1h_pct) + " num" }, pct(c.ret_1h_pct))),
+      el("td", { class: "r num" }, signedNum(c.momentum)),
+      el("td", { class: "r" }, el("b", { class: "num" }, signedNum(c.score, 3))),
+      el("td", { class: "r" }, verdict(c)))));
+}
 function cycleDetail(c) {
   const algo = c.algo;
-  const scored = (p) => p.asset + " " + (num(p.score) === null ? "—" : fixed(num(p.score), 3));
   return el("div", { class: "cycle-detail", onclick: (e) => e.stopPropagation() },
     el("div", { class: "facts" },
       fact("Decided by", algo ? "Algorithm" : "Old trader (before Phase 52)"),
       fact("Rules", c.rules_version || "—"),
-      fact("Routes quoted", c.candidate_route_count === null || c.candidate_route_count === undefined ? "—" : String(c.candidate_route_count))),
-    algo ? el("div", { class: "facts" },
-      fact("Rule", algo.rule || "—"),
-      fact("Best candidate", algo.best ? scored(algo.best) : "—"),
-      fact("Held", (algo.held || []).length ? algo.held.map(scored).join(", ") : "nothing"),
-      algo.error ? fact("Could not decide", algo.error) : null) : null,
+      algo ? fact("Rule", algo.rule || "—") : null,
+      algo && algo.error ? fact("Could not decide", algo.error) : null),
+    algo ? el("div", { style: "margin:0 -12px" }, coinsTable(algo)) : null,
     c.cycle_id ? el("div", { class: "small faint code" }, c.cycle_id) : null);
 }
-function botPage() {
+function algorithmPage() {
   const st = ui.data.status;
-  const head = pageHead("Bot", "What the trader is doing and why. Click a cycle for the rule's verdict.", null);
+  const head = pageHead("Algorithm", "The operator's rule: every coin's /biz/ talk and stance and its own 1h move, scored. A row is written when the decision changes, and at least once an hour.", null);
   if (!st) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
   if (noBotData()) return el("div", { class: "grid" }, head, card(null, empty(...NO_DATA)));
   const state = botState();
   const latest = st.cycles[0];
-  const traded = st.cycles.filter((c) => ["traded", "rebalance"].includes(cycleAction(c))).length;
-  const failed = st.cycles.filter(cycleFailed).length;
-
+  const algo = latest && latest.algo;
+  const feed = st.biz && st.biz.feed;
+  const traded = latest && cycleAction(latest) === "traded";
   const kpis = el("div", { class: "grid kpis" },
     kpi("Status", state.label, state.detail, state.tone || null),
-    kpi("Cycles", String(st.cycles.length), latest ? "newest " + st.cycles.length + " · last " + ago(latest.timestamp) : "none yet"),
-    kpi("Trade decisions", st.cycles.length ? pct((traded / st.cycles.length) * 100, { sign: false, dp: 0 }) : "—",
-      el("span", null, traded + " of the last " + st.cycles.length + " cycles traded", failed ? el("span", null, " · ", el("b", { class: "neg" }, failed + " failed")) : "")),
-    kpi("Rules", (latest && latest.rules_version) || "—", ""));
-
+    kpi("Decision", latest ? (traded ? "Traded" : "Hold") : "—",
+      latest ? el("span", null, ago(latest.timestamp), latest.error ? el("b", { class: "neg" }, " · " + latest.error) : "") : "none yet",
+      traded ? "accent" : null),
+    kpi("Rule", (latest && latest.rules_version) || "—", algo ? algo.rule : ""),
+    kpi("/biz/ feed", !feed ? "—" : feed.status === "fresh" ? "Fresh" : "Unavailable",
+      !feed ? "no feed recorded" : feed.status === "fresh" ? "as of " + stamp(feed.as_of) : feed.reason || "",
+      !feed ? null : feed.status === "fresh" ? "pos" : "neg"));
+  const now = card("Coins at the newest decision", latest && algo ? el("div", { class: "grid", style: "gap:8px" },
+      el("div", { class: "quote" }, cycleSummary(latest) || "No summary."),
+      el("div", { style: "margin:0 -16px" }, coinsTable(algo)))
+    : botEmpty("No algorithm decision yet", "The trader's first decision shows up within a minute of starting."),
+    { hint: latest ? "recorded " + ago(latest.timestamp) : "" });
   const sep = () => el("span", { class: "sep" }, "·");
-  const feed = card("Cycles", st.cycles.length ? el("div", { class: "feed" }, st.cycles.slice(0, shownCount("cycles", 30)).map((c) => {
+  const decisions = card("Decisions", st.cycles.length ? el("div", { class: "feed" }, st.cycles.slice(0, shownCount("cycles", 30)).map((c) => {
     const key = cycleKey(c), open = ui.expanded.has(key);
-    return el("div", { class: "feed-item click", title: open ? "" : "click for details",
+    return el("div", { class: "feed-item click", title: open ? "" : "click for the scores",
       onclick: () => { if (String(getSelection())) return; open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } },
       el("div", { class: "feed-meta" }, actionChip(c), cycleFailed(c) ? chip("Error", "neg") : null,
         el("span", { title: stamp(c.timestamp) }, ago(c.timestamp)), sep(), el("span", null, c.algo ? "algorithm" : "before Phase 52"),
@@ -1051,9 +1066,8 @@ function botPage() {
       el("div", { class: "feed-text" + (open ? "" : " clamp") }, cycleSummary(c) || "No summary."),
       c.error ? el("div", { class: "small neg" + (open ? "" : " clamp") }, c.error) : null,
       open ? cycleDetail(c) : null);
-  }), olderButton("cycles", 30, st.cycles.length)) : empty("No cycles yet", "The bot's first cycle shows up within a few minutes of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
-
-  return el("div", { class: "grid" }, head, kpis, feed);
+  }), olderButton("cycles", 30, st.cycles.length)) : empty("No decisions yet", "The trader's first decision shows up within a minute of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
+  return el("div", { class: "grid" }, head, kpis, now, decisions);
 }
 
 // ---------- /biz/ ----------
@@ -1064,14 +1078,14 @@ function stanceCell(w) {
 }
 function bizPage() {
   const status = ui.data.status;
-  const head = pageHead("/biz/ feed", "What the trader read from /biz/ (biz-app) in its newest cycle. The algorithm scores coins on it.", null);
+  const head = pageHead("/biz/ feed", "What the trader read from /biz/ (biz-app) at its newest decision. The algorithm scores coins on it.", null);
   if (!status) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
   const b = status.biz;
-  if (!b) return el("div", { class: "grid" }, head, card(null, empty("No /biz/ reading yet", "No cycle summary has a biz field; the trader records the feed from Phase 51 on.")));
+  if (!b) return el("div", { class: "grid" }, head, card(null, empty("No /biz/ reading yet", "No decision row has a biz field yet; the trader records the feed with every decision.")));
   const f = b.feed || {};
   if (f.status !== "fresh") {
     return el("div", { class: "grid" }, head,
-      el("div", { class: "grid kpis" }, kpi("Feed", "Unavailable", "cycle " + ago(b.cycle_at), "neg")),
+      el("div", { class: "grid kpis" }, kpi("Feed", "Unavailable", "decision " + ago(b.cycle_at), "neg")),
       card("Why", el("div", { class: "small" }, f.reason || "unknown")));
   }
   const win = (w, k) => (w && w[k]) || {};
@@ -1079,10 +1093,10 @@ function bizPage() {
     .sort((a, z) => (num(win(z.w, "24h").mentions) || 0) - (num(win(a.w, "24h").mentions) || 0) || a.name.localeCompare(z.name));
   const dropped = f.dropped || [];
   const kpis = el("div", { class: "grid kpis" },
-    kpi("Feed", "Fresh", "as of " + stamp(f.as_of) + " · " + f.age_minutes + " min old at the cycle", "pos"),
+    kpi("Feed", "Fresh", "as of " + stamp(f.as_of) + " · " + f.age_minutes + " min old at the decision", "pos"),
     kpi("Coins", String(coins.length), dropped.length + " named without a Binance market"),
     kpi("Reader", f.model || "—", f.prompt_version ? "instructions " + f.prompt_version : ""),
-    kpi("Cycle", ago(b.cycle_at), stamp(b.cycle_at)));
+    kpi("Decision", ago(b.cycle_at), stamp(b.cycle_at)));
   const rows = coins.map((c) => el("tr", null,
     el("td", null, assetLabel(c.name)),
     ["1h", "6h", "24h"].map((k) => el("td", { class: "r num" }, String(win(c.w, k).mentions || 0))),
@@ -1095,7 +1109,7 @@ function bizPage() {
   return el("div", { class: "grid" }, head, kpis, coinsCard,
     dropped.length ? card("Named without a Binance market", el("div", { class: "small muted" }, dropped.join(", "))) : null,
     el("details", { class: "footnote" }, el("summary", null, "What this shows"),
-      el("p", null, "biz-app counts every /biz/ post that names a coin (mentions, distinct posters), and its AI tags long posts bullish or bearish, weighted by post quality (1-3). scripts/biz_feed_to_pi.sh copies the feed to the Pi, and the trader records it in each cycle summary (audit field biz). A missing, foreign or stale feed is recorded as unavailable with the reason; then the algorithm buys nothing. The algorithm scores the feed's coins on their talk and stance.")));
+      el("p", null, "biz-app counts every /biz/ post that names a coin (mentions, distinct posters), and its AI tags every post's stance (bullish or bearish) on the coins it names, weighted by post quality (1-3). scripts/biz_feed_to_pi.sh copies the feed to the Pi, and the trader records it on each decision row (audit field biz). A missing, foreign or stale feed is recorded as unavailable with the reason; then the algorithm buys nothing. The algorithm scores the feed's coins on their talk and stance.")));
 }
 
 // ---------- data loading ----------

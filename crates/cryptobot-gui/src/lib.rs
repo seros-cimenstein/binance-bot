@@ -5,8 +5,8 @@
 //! withdrawal endpoint.
 //!
 //! - `GET /`: the dashboard page.
-//! - `GET /api/status`: Bot Spot stop file, failed-route halt, recent cycles and the /biz/
-//!   feed the newest cycle read.
+//! - `GET /api/status`: Bot Spot stop file, failed-route halt, the newest decision rows (with
+//!   the rule's per-coin scores in `algo`) and the /biz/ feed the newest decision read.
 //! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).

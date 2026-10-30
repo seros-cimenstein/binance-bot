@@ -123,9 +123,12 @@ A read-only web page for the trader, in five tabs that refresh every 30 s:
 - **Wallet:** spot balances (free and in orders) with price, 24h change, value
   and share, Simple Earn positions, Binance wallet totals, account fees and an
   API-key safety check (withdrawals, IP restriction, extra permissions).
-- **The bot:** cycles with the rule's verdicts (rule, best candidate, held
-  coins and their scores); cycles from before Phase 52 show their decision only.
-- **/biz/:** the /biz/ feed the trader read in its newest cycle (mentions,
+- **Algorithm:** the trader's status (running while it writes a decision row at
+  least hourly, stopped by the stop file, halted), the newest decision with
+  every scored coin's /biz/ talk and stance, own 1h move, momentum and score,
+  and the decision rows newest first (click one for its scores); rows from
+  before Phase 52 show their decision only.
+- **/biz/:** the /biz/ feed the trader read at its newest decision (mentions,
   posters and stance per coin, coins without a Binance market); the algorithm
   scores its coins.
 

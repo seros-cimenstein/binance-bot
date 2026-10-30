@@ -199,12 +199,14 @@ impl Runtime {
     }
 
     /// Run the verdict's orders through `execute_route` (the only order path, every hard
-    /// safety check included), stopping at the first failure, and close the cycle's
-    /// statement. Returns the turn report the cycle summary is written from.
+    /// safety check included), stopping at the first failure, and close the decision's
+    /// statement. `coins` (every scored coin with its terms) is recorded with the verdict.
+    /// Returns the turn report the decision row is written from.
     pub(crate) async fn run_algo_turn(
         &self,
-        verdict: std::result::Result<crate::decider::Verdict, String>,
+        verdict: crate::decider::Verdict,
         rule: &crate::decider::Rule,
+        coins: Vec<Value>,
         shutdown: &CancellationToken,
     ) -> TurnReport {
         use crate::decider::Action;
@@ -214,75 +216,72 @@ impl Runtime {
         };
         let mut traded = 0usize;
         let mut failure = None;
-        let (summary, record) = match &verdict {
-            Err(reason) => (format!("rule-based decider could not decide: {reason}; hold"), json!({"rule": rule.weights.to_string(), "error": reason})),
-            Ok(verdict) => {
-                for action in &verdict.actions {
-                    if shutdown.is_cancelled() || self.shutting_down() {
-                        failure = Some("shutdown: the remaining orders were not sent".to_owned());
-                        break;
-                    }
-                    let (source, destination, reason) = match action {
-                        Action::Sell { asset, reason } => (asset.as_str(), QUOTE_ASSET, reason.as_str()),
-                        Action::Buy { asset, reason } => (QUOTE_ASSET, asset.as_str(), reason.as_str()),
-                    };
-                    let result = match self.quote_for_cycle(source, destination).await {
-                        Ok(route_id) => self.execute_route(&route_id, reason, None).await,
-                        Err(message) => Err(message),
-                    };
-                    match result {
-                        Ok(_) => traded += 1,
-                        Err(message) => {
-                            // A failed sell leaves the coin held: never buy a second one.
-                            failure = Some(format!("{source}->{destination}: {message}"));
-                            break;
-                        }
-                    }
-                }
-                let pair = |p: &(String, f64)| json!({"asset": p.0, "score": p.1});
-                let orders: Vec<Value> = verdict
-                    .actions
-                    .iter()
-                    .map(|a| match a {
-                        Action::Sell { asset, reason } => json!({"side": "sell", "asset": asset, "reason": reason}),
-                        Action::Buy { asset, reason } => json!({"side": "buy", "asset": asset, "reason": reason}),
-                    })
-                    .collect();
-                let said: Vec<&str> = verdict
-                    .actions
-                    .iter()
-                    .map(|a| match a {
-                        Action::Sell { reason, .. } | Action::Buy { reason, .. } => reason.as_str(),
-                    })
-                    .collect();
-                let summary = if said.is_empty() {
-                    let best = verdict.best.as_ref().map_or_else(
-                        || "nothing scored".to_owned(),
-                        |(asset, score)| format!("best {asset} score {score:+.3} < buy level {:+}", rule.weights.buy_above),
-                    );
-                    let held = verdict
-                        .held
-                        .iter()
-                        .map(|(asset, score)| format!("{asset} score {score:+.3} ≥ sell level {:+}", rule.weights.sell_below))
-                        .collect::<Vec<_>>();
-                    if held.is_empty() {
-                        format!("rule-based decider: hold in cash ({best})")
-                    } else {
-                        format!("rule-based decider: keep {}", held.join(", "))
-                    }
-                } else {
-                    format!("rule-based decider: {}", said.join("; "))
-                };
-                let record = json!({
-                    "rule": rule.weights.to_string(),
-                    "min_posters": rule.min_posters,
-                    "best": verdict.best.as_ref().map(pair),
-                    "held": verdict.held.iter().map(pair).collect::<Vec<_>>(),
-                    "orders": orders,
-                });
-                (summary, record)
+        for action in &verdict.actions {
+            if shutdown.is_cancelled() || self.shutting_down() {
+                failure = Some("shutdown: the remaining orders were not sent".to_owned());
+                break;
             }
+            let (source, destination, reason) = match action {
+                Action::Sell { asset, reason } => (asset.as_str(), QUOTE_ASSET, reason.as_str()),
+                Action::Buy { asset, reason } => (QUOTE_ASSET, asset.as_str(), reason.as_str()),
+            };
+            let result = match self.quote_for_cycle(source, destination).await {
+                Ok(route_id) => self.execute_route(&route_id, reason, None).await,
+                Err(message) => Err(message),
+            };
+            match result {
+                Ok(_) => traded += 1,
+                Err(message) => {
+                    // A failed sell leaves the coin held: never buy a second one.
+                    failure = Some(format!("{source}->{destination}: {message}"));
+                    break;
+                }
+            }
+        }
+        let pair = |p: &(String, f64)| json!({"asset": p.0, "score": p.1});
+        let orders: Vec<Value> = verdict
+            .actions
+            .iter()
+            .map(|a| match a {
+                Action::Sell { asset, reason } => json!({"side": "sell", "asset": asset, "reason": reason}),
+                Action::Buy { asset, reason } => json!({"side": "buy", "asset": asset, "reason": reason}),
+            })
+            .collect();
+        let said: Vec<&str> = verdict
+            .actions
+            .iter()
+            .map(|a| match a {
+                Action::Sell { reason, .. } | Action::Buy { reason, .. } => reason.as_str(),
+            })
+            .collect();
+        let summary = if said.is_empty() {
+            let best = verdict.best.as_ref().map_or_else(
+                || "nothing scored".to_owned(),
+                |(asset, score)| format!("best {asset} score {score:+.3} < buy level {:+}", rule.weights.buy_above),
+            );
+            let held = verdict
+                .held
+                .iter()
+                .map(|(asset, score)| format!("{asset} score {score:+.3} ≥ sell level {:+}", rule.weights.sell_below))
+                .collect::<Vec<_>>();
+            if held.is_empty() {
+                format!("rule-based decider: hold in cash ({best})")
+            } else {
+                format!("rule-based decider: keep {}", held.join(", "))
+            }
+        } else {
+            format!("rule-based decider: {}", said.join("; "))
         };
+        let record = json!({
+            "rule": rule.weights.to_string(),
+            "buy_above": rule.weights.buy_above,
+            "sell_below": rule.weights.sell_below,
+            "min_posters": rule.min_posters,
+            "best": verdict.best.as_ref().map(pair),
+            "held": verdict.held.iter().map(pair).collect::<Vec<_>>(),
+            "orders": orders,
+            "coins": coins,
+        });
         report.error = failure;
         let mut guard = self.cycle.lock().await;
         if let Some(state) = guard.as_mut() {
@@ -902,7 +901,7 @@ mod tests {
             held: Vec::new(),
         };
         let report = first
-            .run_algo_turn(Ok(buy), &rule, &CancellationToken::new())
+            .run_algo_turn(buy, &rule, Vec::new(), &CancellationToken::new())
             .await;
         assert_eq!(report.error.as_deref(), None);
         let (summary, _) = first.finish_cycle(&report).await.unwrap();
@@ -933,7 +932,7 @@ mod tests {
             held: vec![("BTC".into(), -0.5)],
         };
         let report = second
-            .run_algo_turn(Ok(rotate), &rule, &CancellationToken::new())
+            .run_algo_turn(rotate, &rule, Vec::new(), &CancellationToken::new())
             .await;
         assert!(report.error.as_deref().unwrap().contains("no free BTC balance"), "{report:?}");
         assert_eq!(order_calls(&server).await, 0);

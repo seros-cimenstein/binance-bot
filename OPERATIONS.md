@@ -104,9 +104,10 @@ journalctl --user -u binance-bot-spot.service -f
 Docker: `docker compose ps` and `docker compose logs -f <service>`.
 
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
-profiles `gui`/`live`/`all`) serves the Bot Spot trades, cycles (the rule's
-verdicts; cycles from before Phase 52 show their decision only), the /biz/
-feed the trader read (/biz/ tab), stop-file and
+profiles `gui`/`live`/`all`) serves the Bot Spot trades, the Algorithm tab
+(each decision row with every scored coin's /biz/ talk and stance, own 1h move
+and score; "Running" while a row is at most an hour old, the heartbeat), the
+/biz/ feed the trader read (/biz/ tab), stop-file and
 failed-route-halt state at `http://localhost:8787` on the Docker host. It is
 published on `127.0.0.1` only and mounts the data dir read-only. From another
 machine: `ssh -L 8787:localhost:8787 <host>`. On a systemd host,

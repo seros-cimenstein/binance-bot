@@ -126,6 +126,9 @@ struct Decision {
     key: String,
     biz: BizNow,
     equity: Decimal,
+    /// Every held coin and buy candidate with its score terms, highest score first
+    /// (recorded on the decision row as `algo.coins`).
+    coins: Vec<serde_json::Value>,
 }
 
 /// The nonstop trader: the runtime plus the state kept between ticks.
@@ -273,7 +276,7 @@ impl Nonstop {
             .await;
         let report = self
             .runtime
-            .run_algo_turn(Ok(decision.verdict), &rule, shutdown)
+            .run_algo_turn(decision.verdict, &rule, decision.coins, shutdown)
             .await;
         if shutdown.is_cancelled() {
             self.runtime.begin_shutdown();
@@ -496,19 +499,41 @@ impl Nonstop {
             BizNow::Fresh(feed) => Some(&feed.coins),
             BizNow::Unavailable { .. } => None,
         };
-        let verdict = decide(
-            &Inputs {
-                snap: &step,
-                book: &book,
-                biz: feed,
-            },
-            &self.runtime.config.algo_rule,
-        );
+        let rule = self.runtime.config.algo_rule;
+        let inputs = Inputs {
+            snap: &step,
+            book: &book,
+            biz: feed,
+        };
+        let verdict = decide(&inputs, &rule);
+        let mut scored: Vec<(f64, serde_json::Value)> = step
+            .liquid_top
+            .iter()
+            .filter(|asset| !held.contains(*asset))
+            .chain(held)
+            .map(|asset| {
+                let terms = crate::decider::terms(&inputs, asset, rule.min_posters);
+                let score = terms.score(&rule.weights);
+                let coin = serde_json::json!({
+                    "asset": asset,
+                    "held": held.contains(asset),
+                    "priced": step.coin(asset).is_some(),
+                    "talk": terms.talk,
+                    "stance": terms.stance,
+                    "momentum": terms.momentum,
+                    "ret_1h_pct": step.coin(asset).and_then(|c| c.ret_1h),
+                    "score": score,
+                });
+                (score, coin)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
         Ok(Decision {
             key: decision_key(&verdict),
             verdict,
             biz,
             equity: slow.balances.free_value_usdt(&slow.view),
+            coins: scored.into_iter().map(|(_, coin)| coin).collect(),
         })
     }
 
@@ -791,6 +816,11 @@ mod tests {
             (Some("route"), Some("planned"))
         );
         assert_eq!(first[0]["decision"]["destination_asset"], "ETH");
+        // The decision row carries every scored coin's inputs (the dashboard's Algorithm tab).
+        let eth = &first[1]["algo"]["coins"][0];
+        assert_eq!((eth["asset"].as_str(), eth["held"].as_bool()), (Some("ETH"), Some(false)));
+        assert_eq!((eth["momentum"].as_f64(), eth["stance"].as_f64(), eth["score"].as_f64()), (Some(1.0), Some(0.0), Some(1.0)));
+        assert!((eth["ret_1h_pct"].as_f64().unwrap() - (3000.0 / 2800.0 - 1.0) * 100.0).abs() < 1e-9);
         let accounts = requests(&server, "/api/v3/account").await;
 
         // The next tick reloads the balances (the catalog reload fails here and is kept) and

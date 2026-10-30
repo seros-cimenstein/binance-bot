@@ -78,13 +78,15 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
   of the 90 half-period bucket rows lose on average; the two that gain (24h
   talk rank 11+, older, +24h: +0.13%; 6h stance untagged, newer, +24h, n=48:
   +0.17%) lose in the other half (-1.48%, -2.02%). Thin evidence either way.
-- [ ] Nonstop trader: reacts to new prices and new feeds, runs the chosen
+- [x] Nonstop trader: reacts to new prices and new feeds, runs the chosen
   rules, orders only through the route path with every hard-safety item,
-  writes an audit row per decision and per route.
-- [ ] Backtest of the chosen rules on the feed history and Binance candles,
-  report in `reports/`.
-- [ ] Dashboard: show the algorithm's signals and decisions; drop the LLM
-  bot, journal and exit-plan views.
+  writes an audit row per decision and per route (`bb bot-spot --nonstop`,
+  `LOOP_ALGO.md` D7: 15 s ticks, a decision row on change plus hourly).
+- [x] Backtest of the chosen rules on the feed history and Binance candles,
+  report in `reports/` (`reports/algo_backtest_2026-10-25.md`, D6).
+- [x] Dashboard: show the algorithm's signals and decisions; drop the LLM
+  bot, journal and exit-plan views (Algorithm tab, `LOOP_ALGO.md` C11-C12,
+  D8).
 - [ ] Docs and config describe only the algorithm trader: `README.md`,
   `OPERATIONS.md`, `.env.example`, `docker-compose.yml` (no
   `bot-spot-exit-watch`, `bot-spot-algo-paper` or omp login), `Dockerfile`,
