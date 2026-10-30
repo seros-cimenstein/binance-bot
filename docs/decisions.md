@@ -110,3 +110,14 @@ Answers the operator gave through the ask tool on 2026-10-29:
 - Without a fresh feed: "No buys; score the held coin": no buys; the held
   coin is still scored (talk and stance count 0, momentum only) and sold when
   it falls below the sell level.
+
+## 2026-10-30 feed pipeline on the laptop (`LOOP_ALGO.md` E3)
+
+Answers the operator gave through the ask tool on 2026-10-30:
+
+- Scraper: "Loop may start it": the loop starts the /biz/ scraper (`biz watch`)
+  on the real archive (`biz_scraper/data/biz.sqlite3`) as a background
+  process, next to the feed watcher and the copier.
+- After the loop: "Keep them running": the scraper, `biz-insights feed
+  --watch` and `scripts/biz_feed_to_pi.sh` keep running detached on the
+  laptop after the loop ends.

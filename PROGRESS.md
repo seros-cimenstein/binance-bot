@@ -17,15 +17,21 @@ biz-app, no LLM, no chat, no timer, no Telegram (`docs/decisions.md`,
   `.env.docker`, data `docker-data/`) is **stopped** since 2026-10-22 05:00
   UTC. No open position: about 17.41 USDT, 15.05 of it USDT cash, plus BNB
   and dust. No stop file exists.
-- The Pi still has the old LLM trader image. Do not start it: `docker compose
-  up -d` with no service names would start it. A reboot does not: the boot
-  unit `binance-bot-compose.service` is disabled, and `bot-spot` (restart
-  `unless-stopped`) was stopped by hand, so Docker leaves it exited (checked
-  2026-10-29).
-- The Pi also runs the old compose file. The next deploy uses
-  `docker compose --profile all up -d --remove-orphans`, or names the
-  services (`... up -d --remove-orphans cryptobot-gui scheduler`) while the
-  trader must stay stopped (`OPERATIONS.md`, "Docker").
+- The Pi runs the Phase 52 image since 2026-10-30 08:16 UTC (`binance-bot:latest`
+  = e9efbd3c98dc; rollback `binance-bot:pre-algo-20261030` = the old LLM
+  image 428220df4d0f). `cryptobot-gui` and `scheduler` (only the 23:45 backup
+  job) run on it; the old paper/sniper/signals containers are removed.
+  `bot-spot` stays exited on the old image until the operator's go; never
+  `docker compose up -d` without service names. The boot unit
+  `binance-bot-compose.service` is disabled. Backup of the trader files:
+  `docker-data/backup-20261030T065538Z-phase52/`; `.env.docker` before the
+  rule lines: `.env.docker.bak-20261030T082713Z-phase52`.
+- Feed pipeline, running detached on the laptop since 2026-10-30 (operator,
+  `docs/decisions.md`): the /biz/ scraper `biz watch` on the real archive,
+  `biz-insights feed --watch` (a round every 15 min) and
+  `scripts/biz_feed_to_pi.sh` (a copy every 5 min) into the Pi's
+  `docker-data/biz-feed.json`. Stop: `pkill -f 'biz watch'`,
+  `pkill -f 'biz-insights.*feed --watch'`, `pkill -f biz_feed_to_pi`.
 
 ## Repo
 
@@ -41,13 +47,11 @@ biz-app, no LLM, no chat, no timer, no Telegram (`docs/decisions.md`,
   Pi's `.env.docker` still sets the `BOT_SPOT_EXIT_*` and
   `BOT_SPOT_DEFAULT_EXIT_PLAN*` variables; the new image ignores them with one
   warning, so remove them at the Pi rollout.
-- Feed pipeline (laptop, biz-app): `biz-insights feed --watch` (live feed),
-  `--history --step 60` (backtest input), `scripts/biz_feed_to_pi.sh` (copy).
-  The lead study found no /biz/ lead and the chosen rule lost 11.18% on the
+- Feed history for backtests: `biz-insights feed --history --step 60`. The
+  lead study found no /biz/ lead and the chosen rule lost 11.18% on the
   backtest's judging half (`IMPLEMENTATION_PLAN.md`, Phase 52).
 
 ## Next steps
 
-1. Pi rollout (`LOOP_ALGO.md` E1-E6): backup and rollback tag, new image,
-   feed copy, plan-only practice run (`bot-spot-paper`), operator review,
-   live only on the operator's go.
+1. Plan-only practice run on the Pi (`bot-spot-paper`), operator review,
+   live only on the operator's go (`LOOP_ALGO.md` E4-E6).
