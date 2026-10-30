@@ -1,0 +1,3 @@
+variant,net_pnl_usdt,net_pnl_pct,max_drawdown_pct,round_trips,win_rate_pct,sharpe,fees_usdt
+biz_algo@older,184.1893958704,18.418940,11.458175,12,66.6667,5.448932,19.0993976511
+biz_algo@newer,-111.8199715772,-11.181997,12.997847,11,18.1818,-5.528767,16.3192037633

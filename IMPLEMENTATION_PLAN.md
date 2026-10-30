@@ -28,9 +28,12 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
 
 ### Decide with the operator
 
-- [ ] The algorithm's rules: inputs (feed fields, Binance data), buy, sell
+- [x] The algorithm's rules: inputs (feed fields, Binance data), buy, sell
   and hold logic, position size, how often it may act, what it does while
   the feed is unavailable. Agents propose and backtest; the operator picks.
+  Chosen 2026-10-29 (`docs/decisions.md`, "2026-10-29 algorithm rules";
+  `reports/algo_backtest_2026-10-25.md`): weights `0,1,1,0.5,-0.5`, all cash
+  into one coin, no buys without a fresh feed (held coin still scored).
 - [x] How live prices arrive: REST polling every 15 s with the existing spot
   client (operator, 2026-10-29). Coins the algorithm may buy: the /biz/ feed
   coins with an eligible USDT market plus the coin held; 1h moves from the

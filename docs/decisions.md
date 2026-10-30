@@ -87,3 +87,26 @@ Answers the operator gave through the ask tool on 2026-10-29:
   algorithm may buy are the coins in the /biz/ feed with an eligible USDT
   market, plus the coin held; each coin's 1h move comes from the trader's own
   15 s price polls, seeded at start from 1m candles.
+
+## 2026-10-29 algorithm rules (`LOOP_ALGO.md` D6)
+
+Shown to the operator: `reports/algo_backtest_2026-10-25.md`, the 2026-10-01
+to 2026-10-25 /biz/ feed history and 1m candles, tuned on the older half
+(2026-10-01T14:00Z to 2026-10-13T14:00Z, 72 weight sets) and judged on the
+newer half. The grid best, talk 0, stance +1, momentum +1, buy at score
++0.5 or more, sell below -0.5, made +18.42% on the older half (in sample, 12
+round trips) and -11.18% on the newer half (11 round trips, 2 wins), while
+BTC moved -3.47% and the 20-coin liquid basket -9.78% over the newer half.
+`bb biz-lead-study` found no /biz/ lead (`IMPLEMENTATION_PLAN.md`, Phase 52).
+
+Answers the operator gave through the ask tool on 2026-10-29:
+
+- Rule: "(a) Grid-best weights": `BOT_SPOT_ALGO_WEIGHTS=0,1,1,0.5,-0.5`
+  (talk 0, stance +1, 1h momentum +1, buy at score >= +0.5, sell below
+  -0.5), stances counted with at least 2 distinct posters
+  (`BOT_SPOT_ALGO_MIN_POSTERS=2`), rule set name `algo-2026-10-29`.
+- Size: "All cash, one coin": all USDT into the best-scoring coin, one
+  position at a time.
+- Without a fresh feed: "No buys; score the held coin": no buys; the held
+  coin is still scored (talk and stance count 0, momentum only) and sold when
+  it falls below the sell level.

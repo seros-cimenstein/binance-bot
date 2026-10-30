@@ -54,6 +54,13 @@ when the task needs them.
   change them, and a loop manager may not answer for the operator on them.
   Do not add trading limits (caps, cooldowns, stop-loss or take-profit
   levels) unless the operator chooses them as part of the rules.
+- The rules in force (operator, 2026-10-29, `docs/decisions.md` "2026-10-29
+  algorithm rules"): score = 0 talk + 1 stance + 1 momentum
+  (`BOT_SPOT_ALGO_WEIGHTS=0,1,1,0.5,-0.5`, stances need 2 posters); buy the
+  best-scoring coin with all USDT when its score is +0.5 or more, one
+  position at a time; sell the held coin into USDT when it scores below
+  -0.5. Without a fresh /biz/ feed nothing is bought and the held coin is
+  scored on momentum alone. Rule set name `algo-2026-10-29`.
 - AI only reads supplied content. biz-app
   (`~/projects/automation/imageboards/biz-app`, outside this repo) reads /biz/
   threads and writes the `biz-feed-v1` score file; the trader reads that file

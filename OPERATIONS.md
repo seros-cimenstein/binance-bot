@@ -270,6 +270,14 @@ the first failed order ends the cycle's orders. Without a fresh feed nothing
 is a buy candidate, so it can only hold or sell; a coin whose price read fails
 is left out of that cycle.
 
+The rule in force (operator, 2026-10-29, `docs/decisions.md`):
+`BOT_SPOT_ALGO_WEIGHTS=0,1,1,0.5,-0.5`, `BOT_SPOT_ALGO_MIN_POSTERS=2`,
+`BOT_SPOT_RULES_VERSION=algo-2026-10-29`: score = /biz/ 6h stance + 1h
+momentum (talk weight 0); buy at +0.5, sell below -0.5. Its backtest:
+`reports/algo_backtest_2026-10-25.md` (`bb algo-backtest --biz-feeds
+<biz-feed-history> --end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
+tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
+
 - **Records.** Cycle summaries carry `algo` (rule, best candidate and score,
   held coins and scores, orders), `rules_version` (`BOT_SPOT_RULES_VERSION`,
   required) and `session_id` `algo`. The Bot tab's cycle details show the

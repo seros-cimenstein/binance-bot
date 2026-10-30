@@ -42,9 +42,9 @@ biz-app, no LLM, no chat, no timer, no Telegram (`docs/decisions.md`,
 
 ## Next steps
 
-1. biz-app writes `biz-feed-v1` and its hourly history; run the lead study.
-2. Backtest candidate rules on the feed history; the operator picks the rules
-   (Phase 52, "Decide with the operator"; live prices: REST polling every
-   15 s, decided 2026-10-29).
-3. Build the nonstop trader (replaces the 20-minute cycle), then a plan-only
-   run on the Pi.
+1. Build the nonstop trader (replaces the 20-minute cycle; REST price polls
+   every 15 s), then a plan-only run on the Pi with the chosen rule
+   (`algo-2026-10-29`, `docs/decisions.md`).
+2. The feed pipeline is built (biz-app `feed`, `--watch`, `--history`); the
+   lead study found no /biz/ lead and the chosen rule lost 11.18% on the
+   backtest's judging half (`IMPLEMENTATION_PLAN.md`, Phase 52).
