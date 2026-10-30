@@ -1,6 +1,6 @@
 # Loop ledger: Phase 52, the nonstop algorithm trader (2026-10-29)
 
-STATUS: OPEN
+STATUS: DONE
 
 Source: `IMPLEMENTATION_PLAN.md` Phase 52 and `docs/decisions.md` "2026-10-29 algorithm trader" (operator decisions 2026-10-29), checked against the code by three read-only scouts (LLM path, removable extras, dashboard + biz-app; transcripts `agent://LlmPathScout`, `agent://ExtrasScout`, `agent://GuiBizScout` in the setup session) and by the setup agent on the laptop and the Pi (`ssh pi-wired`) on 2026-10-29 16:00-16:20 UTC. This file is the loop's memory and its stop switch: the gate `~/projects/seref_omp_tools/seref_loop/bin/seref-loop-gate LOOP_ALGO.md`
 (run by `/seref_manager run LOOP_ALGO.md` or `/loop --until`) stops the loop only when the line
@@ -108,4 +108,19 @@ Rules:
 
 ## F. Close
 
-- [ ] F1 Move Phase 52 to `docs/archive/` if all its boxes are ticked (otherwise leave the open ones), rewrite `PROGRESS.md` to the new state (what runs on the Pi, the feed pipeline, next steps), and confirm `AGENTS.md`/`CODEX.md` still describe the repo. Acceptance: `PROGRESS.md` matches `ssh pi-wired 'docker ps -a'` and the plan file; the Protocol 8 final checks pass.
+- [x] F1 Move Phase 52 to `docs/archive/` if all its boxes are ticked (otherwise leave the open ones), rewrite `PROGRESS.md` to the new state (what runs on the Pi, the feed pipeline, next steps), and confirm `AGENTS.md`/`CODEX.md` still describe the repo. Acceptance: `PROGRESS.md` matches `ssh pi-wired 'docker ps -a'` and the plan file; the Protocol 8 final checks pass. — DONE: Phase 52 not moved: its 'Live' roll-out box stays open (operator: keep practising), so the section stays in IMPLEMENTATION_PLAN.md with every other box ticked ('Plan-only run on the Pi' ticked now). PROGRESS.md rewritten (Updated 2026-10-30): Pi image/rollback tag, what runs (bot-spot-paper, cryptobot-gui, scheduler), bot-spot stopped, env and backups, the detached feed pipeline and how to stop it, evidence, next steps. AGENTS.md (reading order, file map) and CODEX.md (nonstop algorithm, rule in force algo-2026-10-29, hard safety, rollout rule) still describe the repo. Acceptance: `ssh pi-wired 'docker ps -a'` = bot-spot-paper Up, scheduler Up, cryptobot-gui Up (binance-bot:latest e9efbd3c98dc), bot-spot Exited (0) on 428220df4d0f, silly_swirles (unrelated, named in PROGRESS) - matches PROGRESS and the plan. Protocol 8 final checks: cargo test --workspace 179 passed; cargo clippy --workspace --all-targets -D warnings exit 0 (both with CARGO_TARGET_DIR=/tmp, debug info off: the laptop disk was at 1.1 GB free after the operator's Arduino ESP32 toolchain install); scripts/smoke.sh passed; git diff --check clean; grep returns only REMOVED_VARS' "BOT_SPOT_DECIDER"; `docker build -t binance-bot:loop-check .` exit 0 on the Pi from a tree verified byte-identical to the laptop's (sha256 of all 134 tracked files), since the laptop had no room for Docker layers; the check tag was removed afterwards (the laptop D9 build of the same code: 75d43c289eea).
+
+## Summary (2026-10-30)
+
+- Done (39): A1-A5 operator decisions; B1-B5 preparation; C1-C13 removal of the LLM trader
+  (Telegram, bb-social, the LLM path and bb-omp, GCP2/schizo, MDP, personas, exit plans,
+  Sessions tab and LLM UI, breadth and the mood gauge); D1-D9 build (biz-app feed writer, hourly
+  history, watch mode, candle cache, lead study: no /biz/ lead, backtest and the operator's rule
+  `algo-2026-10-29`, the nonstop 15 s trader with rows on change plus an hourly heartbeat, the
+  dashboard Algorithm tab, docs); E1-E6 Pi rollout (backup and rollback tag
+  `binance-bot:pre-algo-20261030`, new image with gui and scheduler, live feed pipeline, plan-only
+  practice run `bot-spot-paper`, operator review "(a) Keep practising", no live go); F1 close.
+- Invalid: none.
+- Blocked: none.
+- Left open by the operator, not by the loop: going live (Phase 52 "Live" box); `bot-spot` stays
+  stopped and `bot-spot-paper` practises plan-only on the Pi.

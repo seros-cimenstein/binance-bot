@@ -94,6 +94,8 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
 
 ### Roll out
 
-- [ ] Plan-only run on the Pi; the operator reviews the planned orders.
+- [x] Plan-only run on the Pi; the operator reviews the planned orders
+  (`bot-spot-paper` since 2026-10-30; review: "(a) Keep practising",
+  `docs/decisions.md`).
 - [ ] Live: operator go, rollback tag `binance-bot:pre-algo-<date>`, entry in
   `PROGRESS.md`, watch the first orders.
