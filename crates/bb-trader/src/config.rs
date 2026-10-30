@@ -71,7 +71,7 @@ pub const REMOVED_VARS: &[&str] = &[
     "BOT_SPOT_MARKET_EVIDENCE_MAX_SYMBOLS",
     "BOT_SPOT_MARKET_EVIDENCE_TIMEFRAME",
     "BOT_SPOT_JOURNAL_PATH",
-    // Phase 52: no GCP2 or schizo state.
+    // Phase 52: no GCP2 random-number input.
     "BOT_SPOT_GCP2_ENABLED",
     "BOT_SPOT_GCP2_BASE_URL",
     // Phase 52 (operator, A5): no Markov value model.

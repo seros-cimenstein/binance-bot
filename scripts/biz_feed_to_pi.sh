@@ -2,8 +2,8 @@
 # Copy the /biz/ feed from this machine to the Pi, once or every COPY_SECONDS.
 #
 # biz-app writes biz-feed.json (biz-feed-v1) on the laptop; the trader on the Pi reads
-# data/biz-feed.json (BOT_SPOT_BIZ_FEED_PATH) every cycle and records it in the cycle
-# summary, information only. This is the reverse of scripts/cryptobot_gui_pi.sh: the only
+# data/biz-feed.json (BOT_SPOT_BIZ_FEED_PATH) every 15 s tick and records it on each
+# decision row; the algorithm scores its coins on it. This is the reverse of scripts/cryptobot_gui_pi.sh: the only
 # remote write is that one file, and rsync replaces it by rename, so the trader never reads
 # a half-copied feed. A missing local feed is skipped with a message; the trader then
 # records "/biz/ unavailable" once its copy is older than BOT_SPOT_BIZ_MAX_AGE_MINUTES.

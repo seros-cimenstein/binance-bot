@@ -34,7 +34,7 @@ deployed is in `PROGRESS.md`.
 
 ## Safety Posture
 
-The only order path is Bot Spot's `execute_route`. `bot-spot-algo-paper`
+The only order path is Bot Spot's `execute_route`. `bot-spot-paper`
 (plan-only) and the dashboard place no orders. The legacy
 `binance-bot.service` and the paper
 pool units are no longer shipped; on a host that still has them installed,
@@ -80,8 +80,8 @@ docker compose --profile all up -d --remove-orphans
 
 Profiles: `live` and `all` (bot trader, dashboard, scheduler;
 `deploy/seref/binance-bot-compose.service` brings up `all` at boot), `gui`
-(dashboard only), `algo-paper`
-(plan-only rule-based decider). The `scheduler` container runs the nightly
+(dashboard only), `paper` (the nonstop trader plan-only, `bot-spot-paper`).
+The `scheduler` container runs the nightly
 Bot Spot data backup from `docker/crontab` (baked into the image, so a crontab
 change needs a rebuild).
 
@@ -128,7 +128,7 @@ instead of showing empty tabs. Overrides: `PI_HOST`, `PI_DATA_DIR`,
 
 Bot Spot checks its stop file on every tick and before every route, leg and
 order, and refuses to trade while it exists. Create it to stop, delete it to
-resume. `bot-spot-algo-paper` shares the same file. Paths are relative to the
+resume. `bot-spot-paper` shares the same file. Paths are relative to the
 bot directory (`~/.local/share/binance-bot/data/...` on systemd hosts,
 `docker-data/...` on the Docker host).
 
@@ -230,7 +230,7 @@ journalctl --user -u binance-bot-spot.service -f
 The service always passes `--submit-live`; whether it trades is decided by the
 live arming variables in `.env` and the stop file.
 
-### /biz/ feed (Phase 51)
+### /biz/ feed
 
 biz-app (`~/projects/automation/imageboards/biz-app`, on the laptop) writes
 the /biz/ feed `biz-feed-v1` with `uv run --directory
@@ -293,12 +293,11 @@ tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
 
 - **Records.** Decision rows carry `algo` (rule, best candidate and score,
   held coins and scores, orders), `rules_version` (`BOT_SPOT_RULES_VERSION`,
-  required) and `session_id` `algo`. The Bot tab's details show the rule's
-  scores.
-- **Practice run.** `docker compose --profile algo-paper up -d
-  bot-spot-algo-paper` runs it plan-only with its own files
-  (`bot-spot-algo-paper-{decisions.jsonl,state.json}`, lock
-  `bot-spot-algo-paper.lock`) and the shared stop file. Plan-only rows do not
+  required) and `session_id` `algo`. The dashboard's Algorithm tab shows
+  every scored coin.
+- **Practice run.** `docker compose --profile paper up -d bot-spot-paper`
+  runs the nonstop trader plan-only with its own files
+  (`bot-spot-paper-{decisions.jsonl,state.json}`, lock `bot-spot-paper.lock`) and the shared stop file. Plan-only rows do not
   move the wallet, so it keeps deciding on the real balances.
 - **Going live** (after the practice run and the operator's go):
   `docker tag binance-bot:latest binance-bot:pre-algo-<date>`, set the

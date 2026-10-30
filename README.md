@@ -72,7 +72,7 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
 - **Backtest.** `bb algo-backtest --biz-feeds <history dir>` tunes the
   weights on the older half of the window and judges them on the newer
   (OPERATIONS.md, "Algorithm backtest"). The compose profile
-  `algo-paper` runs the trader plan-only.
+  `paper` runs the nonstop trader plan-only.
 - **Rule in force:** `0,1,1,0.5,-0.5` (`algo-2026-10-29`, `docs/decisions.md`).
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
@@ -187,7 +187,7 @@ touch docker-data/bot-spot.stop                      # emergency stop for the bo
 Profiles:
 - `live` / `all`: the bot trader, the dashboard and the scheduler.
 - `gui`: the `cryptobot-gui` dashboard alone (the data volume is mounted read-only).
-- `algo-paper`: the plan-only rule-based decider `bot-spot-algo-paper`.
+- `paper`: the nonstop trader plan-only, `bot-spot-paper` (its own audit, state and lock).
 
 Periodic jobs (the nightly Bot Spot data backup) live in `docker/crontab`.
 systemd user units for non-Docker hosts are in `deploy/user/`, installed by

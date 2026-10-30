@@ -2,5 +2,5 @@
 #
 # Format: minute hour day month dow  command
 
-# Bot Spot data (audit, journal, state, exit-plan files, session) — 23:45 UTC, keep 14
+# Bot Spot data (decisions audit and trader state) — 23:45 UTC, keep 14
 45  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=14 bash scripts/backup_bot_data.sh

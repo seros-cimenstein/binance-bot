@@ -15,7 +15,7 @@
 #   live       -> Bot Spot trader + dashboard + scheduler
 #   all        -> same as live (deploy/seref/binance-bot-compose.service runs --profile all)
 #   gui        -> cryptobot-gui read-only dashboard only
-#   algo-paper -> bot-spot-algo-paper: the Phase 51 rule-based decider, plan-only (no orders)
+#   paper      -> bot-spot-paper: the nonstop trader plan-only (no orders)
 #
 
 x-base: &base
@@ -62,17 +62,17 @@ services:
   # no order. Its own audit, state and lock; the emergency stop file is shared, so
   # data/bot-spot.stop stops it too. Needs BOT_SPOT_ALGO_WEIGHTS in the env file. Plan-only
   # decisions do not move the wallet: it keeps deciding on the real balances.
-  bot-spot-algo-paper:
+  bot-spot-paper:
     <<: *base
-    container_name: bot-spot-algo-paper
-    profiles: ["algo-paper"]
+    container_name: bot-spot-paper
+    profiles: ["paper"]
     environment:
       TZ: UTC
       BINANCE_BOT_BACKUP_DIR: /app/backups
       BINANCE_BOT_PROJECT_DIR: /app
-      BOT_SPOT_AUDIT_PATH: /app/data/bot-spot-algo-paper-decisions.jsonl
-      BOT_SPOT_STATE_PATH: /app/data/bot-spot-algo-paper-state.json
-      BOT_SPOT_LOCK_PATH: /app/data/bot-spot-algo-paper.lock
+      BOT_SPOT_AUDIT_PATH: /app/data/bot-spot-paper-decisions.jsonl
+      BOT_SPOT_STATE_PATH: /app/data/bot-spot-paper-state.json
+      BOT_SPOT_LOCK_PATH: /app/data/bot-spot-paper.lock
     command: ["bb", "bot-spot", "--plan-only", "--nonstop"]
 
   # ---------- DASHBOARD ----------
