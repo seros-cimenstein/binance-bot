@@ -74,7 +74,7 @@ running services after a deploy to load the new binary.
 ### Docker
 
 ```bash
-docker compose build
+docker compose --profile all build   # every service has a profile; plain `build` builds nothing
 docker compose --profile all up -d --remove-orphans
 ```
 

@@ -178,7 +178,7 @@ Docker is the primary target (Raspberry Pi 5 / ARM64 and x86_64). The image
 contains `bb`, `cryptobot-gui` and supercronic.
 
 ```bash
-docker compose build
+docker compose --profile all build   # every service has a profile; plain `build` builds nothing
 docker compose --profile all up -d --remove-orphans
 touch docker-data/bot-spot.stop                      # emergency stop for the bot trader
 # dashboard: http://localhost:8787 on the Docker host (published on 127.0.0.1 only)
