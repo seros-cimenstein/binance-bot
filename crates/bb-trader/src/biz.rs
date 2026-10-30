@@ -1,8 +1,8 @@
 //! The /biz/ feed, read once per cycle and recorded in the cycle summary (audit field
 //! `biz`); the algorithm ([`crate::decider`]) scores its coins on it.
 //!
-//! biz-app writes the feed (`biz-feed-v1`) on the operator's laptop and
-//! `scripts/biz_feed_to_pi.sh` copies it into the trader's data dir. Per coin and per window
+//! biz-app writes the feed (`biz-feed-v1`) into the trader's data dir (on the Pi, the
+//! `biz-feed` systemd user unit, `deploy/seref/biz-feed.service`). Per coin and per window
 //! (`1h`, `6h`, `24h`) it holds the mentions over every post, the distinct posters, and the
 //! AI's bullish and bearish tags weighted by post score; `as_of` is the newest moment whose
 //! posts it includes. A missing or unreadable file, another schema, or an `as_of` older than

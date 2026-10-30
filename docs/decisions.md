@@ -122,6 +122,20 @@ Answers the operator gave through the ask tool on 2026-10-30:
   --watch` and `scripts/biz_feed_to_pi.sh` keep running detached on the
   laptop after the loop ends.
 
+## 2026-10-30 feed pipeline on the Pi
+
+Asked why the laptop feeds the /biz/ scores and whether all of it can run on
+the Pi; shown the Pi's checks (4chan API reachable, AI calls are remote,
+35 GB free so posts only, omp and uv missing). Options: its own Docker
+container, plain Pi programs, or keep it on the laptop.
+
+Answer through the ask tool on 2026-10-30: "Plain Pi programs". The scraper
+(`biz watch --no-media`) and the feed writer (`biz-insights feed --watch`)
+run as systemd user units on the Pi (`deploy/seref/biz-watch.service`,
+`deploy/seref/biz-feed.service`) and write `docker-data/biz-feed.json`
+directly. The laptop feed watcher and `scripts/biz_feed_to_pi.sh` are
+stopped and the copier removed. This supersedes "feed pipeline on the laptop".
+
 ## 2026-10-30 practice run review (`LOOP_ALGO.md` E5, E6)
 
 Shown to the operator at 09:41 UTC: the Pi's plan-only practice run

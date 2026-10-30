@@ -36,16 +36,20 @@ operator's go.
   `docker-data/backup-20261030T065538Z-phase52/` (the trader files before
   the rollout).
 
-## Feed pipeline (laptop)
+## Feed pipeline (on the Pi)
 
-Running detached since 2026-10-30 (operator, `docs/decisions.md`): the /biz/
-scraper `biz watch` on the real archive, `biz-insights feed --watch` (a
-round every 15 min) and `scripts/biz_feed_to_pi.sh` (a copy every 5 min)
-into the Pi's `docker-data/biz-feed.json`. The trader treats a feed older
-than 45 minutes as unavailable and then buys nothing. Stop them with
-`pkill -f 'biz watch'`, `pkill -f 'biz-insights.*feed --watch'`,
-`pkill -f biz_feed_to_pi`. Backtest input: `biz-insights feed --history
---step 60`.
+Since 2026-10-30 (operator: "Plain Pi programs", `docs/decisions.md`) two
+systemd user units on the Pi, enabled at boot (linger on): `biz-watch`
+(scraper, `biz watch --no-media` in `~/biz-app/biz_scraper`) and `biz-feed`
+(`biz-insights feed --watch`, a round every 15 min, Gemini through omp with
+its own agent dir `~/.local/share/biz-feed/omp-agent`) writing
+`docker-data/biz-feed.json` directly. Bun 1.4.4, omp 18.14.0 and uv installed
+for user `seref`. The laptop copier is removed; the laptop's own scraper
+(`biz watch`, with images) still runs for the operator's archive. The trader
+treats a feed older than 45 minutes as unavailable and then buys nothing.
+Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
+(OPERATIONS.md, "/biz/ feed"). Backtest input: `biz-insights feed --history
+--step 60` on the laptop.
 
 ## Evidence so far
 

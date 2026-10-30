@@ -232,9 +232,9 @@ live arming variables in `.env` and the stop file.
 
 ### /biz/ feed
 
-biz-app (`~/projects/automation/imageboards/biz-app`, on the laptop) writes
-the /biz/ feed `biz-feed-v1` with `uv run --directory
-biz-app/biz_insights biz-insights feed` (`--at <UTC>` for a past moment): per
+biz-app (`~/projects/automation/imageboards/biz-app` on the laptop, a copy in
+`~/biz-app` on the Pi) writes the /biz/ feed `biz-feed-v1` with `uv run
+--directory biz-app/biz_insights biz-insights feed` (`--at <UTC>` for a past moment): per
 Binance spot coin and per window (1h, 6h, 24h) the posts naming it (no AI),
 the distinct posters among them (a lower bound: /biz/ shows poster IDs only on
 some posts), and its AI's bullish and bearish tags on every post, weighted by
@@ -247,16 +247,32 @@ hour into `biz_insights/out/biz-feed-history/<as_of>.json` (from 2026-10-01;
 and `bb algo-backtest --biz-feeds`. Every post is tagged once (cache
 `out/feed.sqlite3`), so a rerun makes no model call.
 
-Live, three laptop processes keep the Pi's feed fresh: the scraper
-(`biz-watch`, the operator's), `biz-feed` (`biz-insights feed --watch`, a
-round every 900 s: it tags the new posts and replaces `out/biz-feed.json` by
-rename, so the copier never sees half a file; a failed round keeps the old
-file, which then ages) and `scripts/biz_feed_to_pi.sh`. `as_of` is the start
-of the scraper's newest sync pass, so it advances only while the scraper
-runs. `scripts/biz_feed_to_pi.sh` copies `out/biz-feed.json` to
-`~/binance-bot/docker-data/biz-feed.json` on the Pi every 5 minutes
-(`--once` for one copy; `PI_HOST`, `PI_DATA_DIR`, `BIZ_FEED`,
-`COPY_SECONDS`). The trader reads `BOT_SPOT_BIZ_FEED_PATH` (default
+Live, two systemd user units on the Pi keep the feed fresh (operator,
+2026-10-30, `docs/decisions.md`; unit files in `deploy/seref/`, installed in
+`~/.config/systemd/user/`, enabled, the user has linger so they start at boot):
+
+- `biz-watch.service`: the scraper, `biz watch --no-media` in
+  `~/biz-app/biz_scraper` (a sync every 60 s into `data/biz.sqlite3`). Posts
+  only: the feed reads post text, and `i.4cdn.org` (images) does not connect
+  from the Pi's network.
+- `biz-feed.service`: `biz-insights --out ~/binance-bot/docker-data feed
+  --watch` in `~/biz-app/biz_insights`, a round every 900 s: it tags the new
+  posts with Gemini through omp and replaces `docker-data/biz-feed.json` by
+  rename, so the trader never reads half a file; a failed round keeps the old
+  file, which then ages. `docker-data/` also holds its tag cache
+  (`feed.sqlite3`) and Binance asset list (`binance-spot-assets.json`). omp
+  (Bun, `~/.bun/bin/omp`) uses `PI_CODING_AGENT_DIR=~/.local/share/biz-feed/omp-agent`,
+  which holds only the `google-antigravity` login (re-login: `PI_CODING_AGENT_DIR=…
+  omp login`, or `omp auth export | ssh pi-wired 'PI_CODING_AGENT_DIR=… ~/.bun/bin/omp auth import -'`).
+
+```bash
+ssh pi-wired 'systemctl --user status biz-watch biz-feed'
+ssh pi-wired 'journalctl _SYSTEMD_USER_UNIT=biz-feed.service -n 20 --no-pager'
+ssh pi-wired 'systemctl --user stop biz-feed biz-watch'   # the feed then ages; after 45 min no buys
+```
+
+`as_of` is the start of the scraper's newest sync pass, so it advances only
+while `biz-watch` runs. The trader reads `BOT_SPOT_BIZ_FEED_PATH` (default
 `data/biz-feed.json`) every tick and records it on each decision row as
 `biz`: `status` `fresh` with `as_of`, `age_minutes`, `model`,
 `prompt_version`, the coins with an eligible Binance market and the `dropped`

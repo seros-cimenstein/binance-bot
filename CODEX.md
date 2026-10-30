@@ -62,8 +62,9 @@ when the task needs them.
   -0.5. Without a fresh /biz/ feed nothing is bought and the held coin is
   scored on momentum alone. Rule set name `algo-2026-10-29`.
 - AI only reads supplied content. biz-app
-  (`~/projects/automation/imageboards/biz-app`, outside this repo) reads /biz/
-  threads and writes the `biz-feed-v1` score file; the trader reads that file
+  (`~/projects/automation/imageboards/biz-app`, outside this repo; its live
+  copy runs on the Pi in `~/biz-app`) reads /biz/ threads and writes the
+  `biz-feed-v1` score file; the trader reads that file
   as data, next to Binance data. A missing, unreadable or stale feed is
   recorded as unavailable, never guessed.
 - No Telegram or other phone alerts from any process. Watching is the

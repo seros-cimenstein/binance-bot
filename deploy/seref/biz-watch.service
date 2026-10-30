@@ -1,0 +1,19 @@
+[Unit]
+Description=/biz/ scraper (biz-app biz_scraper): posts only, for the Bot Spot /biz/ feed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# systemd user unit on the Pi. Syncs a.4cdn.org every 60 s into ~/biz-app/biz_scraper/data/biz.sqlite3.
+# --no-media: the feed reads post text only, and i.4cdn.org (images) does not connect from the Pi's network.
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/uv run --frozen --quiet --directory %h/biz-app/biz_scraper biz watch --no-media
+KillSignal=SIGINT
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

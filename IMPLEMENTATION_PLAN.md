@@ -57,7 +57,7 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
 ### Build
 
 - [x] /biz/ feed reader `crate::biz` (`BOT_SPOT_BIZ_FEED_PATH`,
-  `BOT_SPOT_BIZ_MAX_AGE_MINUTES`) and the copier `scripts/biz_feed_to_pi.sh`.
+  `BOT_SPOT_BIZ_MAX_AGE_MINUTES`).
 - [x] `bb biz-lead-study`: the move after each feed against the same coin's
   random hours, older and newer half.
 - [x] biz-app, outside this repo: `biz-insights feed` writes
@@ -97,5 +97,8 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
 - [x] Plan-only run on the Pi; the operator reviews the planned orders
   (`bot-spot-paper` since 2026-10-30; review: "(a) Keep practising",
   `docs/decisions.md`).
+- [x] Feed pipeline on the Pi (operator, 2026-10-30, "Plain Pi programs"):
+  `biz-watch` and `biz-feed` systemd user units (`deploy/seref/`) write
+  `docker-data/biz-feed.json` directly; the laptop copier is removed.
 - [ ] Live: operator go, rollback tag `binance-bot:pre-algo-<date>`, entry in
   `PROGRESS.md`, watch the first orders.
