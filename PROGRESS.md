@@ -61,10 +61,11 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
 
 ## Next steps
 
-1. Phase 53, dynamic tags and two horizons (`IMPLEMENTATION_PLAN.md`;
-   operator decisions 2026-10-30): feed first, then trader, backtest,
-   dashboard, plan-only rollout. Then a tuning phase where the operator
-   picks the new terms and the sleeve split.
+1. Phase 53, dynamic tags, scoreboard and two horizons
+   (`IMPLEMENTATION_PLAN.md`; operator decisions 2026-10-30): feed (seven
+   tag kinds), signals and scoreboard, trader (rule file, sleeves, risk-off),
+   backtest, dashboard, plan-only rollout. Then a tuning phase where the
+   operator picks weights, rule style and the sleeve split.
 2. Live only on the operator's go (`CODEX.md`, rollout rule): back up
    `.env.docker`, `docker compose up -d bot-spot`, watch the first decisions
    and orders; back: retag `binance-bot:pre-algo-20261030` and recreate.

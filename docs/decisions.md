@@ -173,3 +173,18 @@ afterwards we will tune the algorithm". Answers through the ask tool:
   split chosen at tuning; until then fast 100% = `algo-2026-10-29`.
 - History: "Re-tag all" posts since 2026-10-01 with the new prompt.
 - Geopolitical Risk Index as an outside slow feed: "Later phase".
+
+Same day, the operator: "not just war ... see the bigger picture". Shown a
+source-neutral tag pipeline (seven tag kinds with the posters' horizon,
+signals per tag, data-built tag-to-asset links, a scoreboard of measured
+tag value, market-wide risk-off). Answers through the ask tool:
+
+- Tag kinds: "All seven": asset, narrative/sector, macro, event/catalyst,
+  entity, claim/prediction, board mood.
+- Scoreboard: "Both, later decide": build it and support both rule styles
+  (operator-set weights; an operator-chosen meta-rule whose weights follow
+  the measured edge); the operator picks at tuning.
+- Defensive: "Yes": a sleeve may hold USDT or a gold proxy (PAXG/XAUT) when
+  its rule says risk-off.
+- Sources: "Source-neutral, /biz/ only": the format accepts any source;
+  only /biz/ is wired in this phase.
