@@ -51,10 +51,11 @@ Run `bb --help` or `bb <command> --help`.
 ## Algorithm Spot trader (`bb bot-spot`)
 
 The trader is an algorithm (operator decision 2026-10-29, Phase 52): no LLM, no
-chat, no host tools. Each cycle it reads the wallet and the /biz/ feed, reads 1m
-prices for the feed's coins with an eligible USDT market and for the coins it
-holds, and runs the operator's rule (`crate::decider`, `BOT_SPOT_ALGO_WEIGHTS`,
-required):
+chat, no host tools. With `--nonstop` it ticks every 15 s: it polls every
+price with one request, reads the /biz/ feed, and runs the operator's rule
+(`crate::decider`, `BOT_SPOT_ALGO_WEIGHTS`, required) on the feed's coins with
+an eligible USDT market and the coins it holds. A decision row is written when
+the decided action changes and once an hour; an unchanged tick writes nothing:
 
 - **Score.** `w_talk·talk + w_stance·stance + w_momentum·momentum` per coin:
   /biz/ talk surge, /biz/ AI stance (needs `BOT_SPOT_ALGO_MIN_POSTERS`) and the
@@ -72,10 +73,10 @@ required):
   weights on the older half of the window and judges them on the newer
   (OPERATIONS.md, "Algorithm backtest"). The compose profile
   `algo-paper` runs the trader plan-only.
-- **Still in the code until Phase 52 removes it:** the 20-minute cycle.
+- **Rule in force:** `0,1,1,0.5,-0.5` (`algo-2026-10-29`, `docs/decisions.md`).
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
-  - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked at cycle start, before every route, before every leg and before every order;
+  - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked on every tick, before every route, before every leg and before every order;
   - an exclusive run lock;
   - account READING plus canTrade;
   - Binance `order/test` before every leg;
@@ -84,16 +85,17 @@ required):
   - a failed-route halt, cleared only by `bb bot-spot --mark-failed-route-reviewed`;
   - operator scope (allow/block lists, blocked quotes, fiat blocking);
   - Spot MARKET orders only, at most `BOT_SPOT_MAX_ROUTE_LEGS` legs.
-- **Audit.** Each route or cycle is one fsync'd row in `BOT_SPOT_AUDIT_PATH`.
-  It uses the Python schema plus `rules_version` (`BOT_SPOT_RULES_VERSION`,
-  required) and, on cycle summaries, the rule's verdict (`algo`).
+- **Audit.** Each route and each recorded decision is one fsync'd row in
+  `BOT_SPOT_AUDIT_PATH`. It uses the Python schema plus `rules_version`
+  (`BOT_SPOT_RULES_VERSION`, required) and, on decision rows, the rule's
+  verdict (`algo`).
   There are no Telegram or phone alerts (operator decision 2026-10-29); watch
   the dashboard and the audit log.
 
 ```bash
-bb bot-spot --evidence-only                 # decision context, no orders
-bb bot-spot --plan-only                     # the algorithm decides; execute_route only records plans
-bb bot-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
+bb bot-spot --evidence-only                 # decision context and quotable routes, no row, no order
+bb bot-spot --plan-only                     # one decision; execute_route only records plans
+bb bot-spot --submit-live --nonstop         # the nonstop trader, live (a tick every 15 s)
 bb bot-spot --mark-failed-route-reviewed    # clear the failed-route halt after review
 bb algo-backtest --end 2026-10-18T10:43:00Z   # the algorithm, offline backtest (no orders)
 ```

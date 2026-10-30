@@ -1,0 +1,834 @@
+//! The nonstop trader (operator decisions 2026-10-29, `docs/decisions.md`): one tick every
+//! [`TICK`] instead of a fixed cycle.
+//!
+//! Each tick:
+//! 1. The emergency stop file is checked first: while it exists the tick reads and decides
+//!    nothing (one log line when the stop starts and when it ends).
+//! 2. Slow state (the market catalog with its fees, and the wallet balances) is reloaded
+//!    every [`SLOW_REFRESH_MS`] and on the tick after every executed route; a failed reload
+//!    keeps the previous state.
+//! 3. Per-tick inputs: the /biz/ feed file and one all-symbols `ticker/price` request
+//!    (weight 4). Each coin's minute closes come from those polls, seeded once from 1m
+//!    klines, so its 15m/1h moves are the trader's own (no breadth read).
+//! 4. The operator's rule ([`crate::decider`]) decides. A decision row (the cycle summary,
+//!    after the orders it asks for) is written only when the decided action changes, and
+//!    once an hour as a heartbeat ([`HEARTBEAT_MS`]); an unchanged tick writes nothing and
+//!    sends no order. Orders go through `execute_route` with every hard-safety check.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
+use std::time::Duration;
+
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
+use tokio_util::sync::CancellationToken;
+
+use crate::audit::{AuditRow, EndCycle, RowStatus, failed_route_halt};
+use crate::biz::BizNow;
+use crate::book::{CoinView, coin_view_from_minutes, live_book};
+use crate::context::{DecisionContext, execution_invariants, route_scope};
+use crate::cycle::{ALGO_SESSION_ID, CycleMode, Runtime, Snapshot};
+use crate::decider::{Action, Inputs, Verdict, decide};
+use crate::error::{Result, TraderError};
+use crate::state::{LastCycle, TraderState};
+use crate::universe::{Balances, MarketView, build_route_candidates};
+
+/// Price poll and decision interval (operator decision 2026-10-29: REST polling every 15 s).
+pub const TICK: Duration = Duration::from_secs(15);
+/// Catalog, fees and balances are reloaded this often (and after every executed route).
+pub const SLOW_REFRESH_MS: i64 = 5 * 60_000;
+/// An unchanged decision is still recorded this often (operator decision 2026-10-29).
+pub const HEARTBEAT_MS: i64 = 60 * 60_000;
+/// 1m klines read to seed a coin: 61 closed minutes plus the forming one.
+const SEED_MINUTES: u32 = 62;
+const MINUTE_MS: i64 = 60_000;
+/// Minute closes kept per coin (the 1h move needs the minute 60 minutes back).
+const KEEP_MINUTES: i64 = 70;
+/// The decision key of a tick that could not read the market at all.
+const NO_MARKET_KEY: &str = "market data unavailable";
+
+/// Each coin's minute closes: seeded from 1m klines, then the newest ticker price of each
+/// minute.
+#[derive(Debug, Default)]
+pub struct PriceBook {
+    minutes: HashMap<String, BTreeMap<i64, f64>>,
+}
+
+impl PriceBook {
+    /// Whether `asset` needs its history read from klines: it has no minute before the
+    /// current one, or a gap of more than two minutes before it (missed polls).
+    pub fn needs_seed(&self, asset: &str, now_ms: i64) -> bool {
+        let current = floor_minute(now_ms);
+        self.minutes
+            .get(asset)
+            .and_then(|m| m.range(..current).next_back())
+            .is_none_or(|(&open, _)| open < current - 2 * MINUTE_MS)
+    }
+
+    /// Closed 1m bars `(open ms, close)`.
+    pub fn seed(&mut self, asset: &str, bars: impl IntoIterator<Item = (i64, f64)>, now_ms: i64) {
+        let minutes = self.minutes.entry(asset.to_owned()).or_default();
+        minutes.extend(bars.into_iter().filter(|(_, close)| *close > 0.0));
+        prune(minutes, now_ms);
+    }
+
+    /// The price polled at `now_ms` becomes the close of its minute.
+    pub fn record(&mut self, asset: &str, now_ms: i64, price: f64) {
+        if price > 0.0 {
+            let minutes = self.minutes.entry(asset.to_owned()).or_default();
+            minutes.insert(floor_minute(now_ms), price);
+            prune(minutes, now_ms);
+        }
+    }
+
+    pub fn coin_view(&self, asset: &str) -> Option<CoinView> {
+        let bars: Vec<(i64, f64)> = self
+            .minutes
+            .get(asset)?
+            .iter()
+            .map(|(t, c)| (*t, *c))
+            .collect();
+        coin_view_from_minutes(&bars)
+    }
+}
+
+fn floor_minute(ms: i64) -> i64 {
+    ms - ms.rem_euclid(MINUTE_MS)
+}
+
+fn prune(minutes: &mut BTreeMap<i64, f64>, now_ms: i64) {
+    let oldest = floor_minute(now_ms) - KEEP_MINUTES * MINUTE_MS;
+    *minutes = minutes.split_off(&oldest);
+}
+
+/// Catalog, fees and balances, reloaded on the slow timer and after every executed route.
+#[derive(Debug)]
+struct Slow {
+    view: Arc<MarketView>,
+    balances: Balances,
+    loaded_ms: i64,
+}
+
+/// What a tick did.
+#[derive(Debug)]
+pub enum Tick {
+    /// The emergency stop file exists: nothing read, decided or sent.
+    Stopped,
+    /// The decision is the one already recorded (or the price poll failed): no row, no order.
+    Unchanged,
+    /// A decision row was written (after its orders, if any).
+    Recorded(Box<AuditRow>),
+}
+
+/// The rule's verdict on one tick's inputs.
+struct Decision {
+    verdict: Verdict,
+    key: String,
+    biz: BizNow,
+    equity: Decimal,
+}
+
+/// The nonstop trader: the runtime plus the state kept between ticks.
+pub struct Nonstop {
+    runtime: Arc<Runtime>,
+    slow: Option<Slow>,
+    refresh_slow: bool,
+    prices: PriceBook,
+    /// The last recorded decision key and when it was recorded.
+    last: Option<(String, i64)>,
+    stopped: bool,
+}
+
+impl Nonstop {
+    pub fn new(runtime: Arc<Runtime>) -> Self {
+        Self {
+            runtime,
+            slow: None,
+            refresh_slow: false,
+            prices: PriceBook::default(),
+            last: None,
+            stopped: false,
+        }
+    }
+
+    pub fn runtime(&self) -> &Arc<Runtime> {
+        &self.runtime
+    }
+
+    /// Tick every [`TICK`] until `shutdown`; a tick error is logged and the next tick runs.
+    pub async fn run(&mut self, shutdown: &CancellationToken) {
+        let mut interval = tokio::time::interval(TICK);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        while !shutdown.is_cancelled() {
+            tokio::select! {
+                _ = interval.tick() => {}
+                () = shutdown.cancelled() => break,
+            }
+            match self.tick(bb_core::time::now_ms(), false, shutdown).await {
+                Ok(Tick::Recorded(row)) => match serde_json::to_string(&row) {
+                    Ok(line) => println!("{line}"),
+                    Err(error) => tracing::warn!(%error, "decision row not printed"),
+                },
+                Ok(Tick::Stopped | Tick::Unchanged) => {}
+                Err(error) => tracing::error!(%error, "tick failed"),
+            }
+        }
+    }
+
+    /// One decision, recorded whatever the last one was (`bb bot-spot` without `--nonstop`).
+    pub async fn once(&mut self, shutdown: &CancellationToken) -> Result<AuditRow> {
+        match self.tick(bb_core::time::now_ms(), true, shutdown).await? {
+            Tick::Recorded(row) => Ok(*row),
+            Tick::Stopped => Err(TraderError::safety(format!(
+                "Bot Spot emergency stop is active: {}",
+                self.runtime.config.stop_path.display()
+            ))),
+            Tick::Unchanged => Err(TraderError::config("no Binance prices: nothing decided")),
+        }
+    }
+
+    /// The decision context the next tick would record, with the routes quotable from the
+    /// wallet now (`--evidence-only`; no row, no order).
+    pub async fn evidence(&mut self) -> Result<DecisionContext> {
+        let now_ms = bb_core::time::now_ms();
+        self.refresh(now_ms).await?;
+        let (biz, candidates, held) = self.inputs()?;
+        self.poll_prices(now_ms, &candidates, &held).await;
+        let decision = self.decide(now_ms, biz, candidates, &held)?;
+        let slow = self.slow_state()?;
+        let mut context = self.context(slow, &decision);
+        context.candidate_routes =
+            build_route_candidates(&slow.view, &self.runtime.config, &slow.balances.free).await?;
+        Ok(context)
+    }
+
+    /// One tick at `now_ms` (see the module docs). `force` records the decision even when it
+    /// is unchanged.
+    pub async fn tick(
+        &mut self,
+        now_ms: i64,
+        force: bool,
+        shutdown: &CancellationToken,
+    ) -> Result<Tick> {
+        let config = Arc::clone(&self.runtime.config);
+        if bb_core::fsutil::stop_requested(&config.stop_path) {
+            if !self.stopped {
+                tracing::warn!(path = %config.stop_path.display(), "emergency stop active: no decisions until the stop file is removed");
+            }
+            self.stopped = true;
+            return Ok(Tick::Stopped);
+        }
+        if self.stopped {
+            tracing::info!("emergency stop removed: deciding again");
+            self.stopped = false;
+        }
+        if self.runtime.mode == CycleMode::Live {
+            config.check_live_arming()?;
+        }
+        if let Err(error) = self.refresh(now_ms).await {
+            // No market view at all yet: record that (on change) and give up this tick.
+            if self.due(NO_MARKET_KEY, now_ms, force) {
+                let status = match self.runtime.mode {
+                    CycleMode::PlanOnly => RowStatus::Blocked,
+                    CycleMode::Live => RowStatus::Failed,
+                };
+                let message = error.to_string();
+                let cycle_id = uuid::Uuid::now_v7().to_string();
+                let row = self
+                    .runtime
+                    .record_skipped(&cycle_id, status, &message, &message)
+                    .await?;
+                self.remember(NO_MARKET_KEY.to_owned(), now_ms, &row);
+            }
+            return Err(error);
+        }
+        let (biz, candidates, held) = self.inputs()?;
+        if !self.poll_prices(now_ms, &candidates, &held).await && !force {
+            return Ok(Tick::Unchanged);
+        }
+        let decision = self.decide(now_ms, biz, candidates, &held)?;
+        if !self.due(&decision.key, now_ms, force) {
+            return Ok(Tick::Unchanged);
+        }
+        let cycle_id = uuid::Uuid::now_v7().to_string();
+        if self.runtime.mode == CycleMode::Live
+            && let Some(halt) = failed_route_halt(&self.runtime.audit.rows())
+        {
+            let row = self
+                .runtime
+                .record_skipped(&cycle_id, RowStatus::Held, &halt, "")
+                .await?;
+            self.remember(decision.key, now_ms, &row);
+            return Ok(Tick::Recorded(Box::new(row)));
+        }
+        let slow = self.slow_state()?;
+        let snapshot = Snapshot {
+            context: self.context(slow, &decision),
+            view: Arc::clone(&slow.view),
+            balances: slow.balances.clone(),
+        };
+        let rule = config.algo_rule;
+        self.runtime
+            .begin_cycle(&cycle_id, ALGO_SESSION_ID, snapshot)
+            .await;
+        let report = self
+            .runtime
+            .run_algo_turn(Ok(decision.verdict), &rule, shutdown)
+            .await;
+        if shutdown.is_cancelled() {
+            self.runtime.begin_shutdown();
+        }
+        let (row, executions) = self.runtime.finish_cycle(&report).await?;
+        if !executions.is_empty() {
+            // Balances moved (or may have): reload them before the next decision.
+            self.refresh_slow = true;
+        }
+        self.remember(decision.key, now_ms, &row);
+        tracing::info!(
+            action = %row.decision.action,
+            reason = %row.decision.reason,
+            used_weight_1m = ?self.runtime.client.used_weight_1m(),
+            "decision recorded"
+        );
+        Ok(Tick::Recorded(Box::new(row)))
+    }
+
+    /// Whether a decision with `key` is written now: it differs from the last recorded one,
+    /// the heartbeat is due, or `force`.
+    fn due(&self, key: &str, now_ms: i64, force: bool) -> bool {
+        force
+            || self
+                .last
+                .as_ref()
+                .is_none_or(|(last, at)| last != key || now_ms - at >= HEARTBEAT_MS)
+    }
+
+    fn remember(&mut self, key: String, now_ms: i64, row: &AuditRow) {
+        self.last = Some((key, now_ms));
+        let state_path = &self.runtime.config.state_path;
+        let mut state = TraderState::load(state_path);
+        state.cycle_count += 1;
+        state.last_cycle = Some(LastCycle {
+            cycle_id: row.cycle_id.clone(),
+            finished_at: row.timestamp.clone(),
+            status: row.status.as_str().into(),
+            end_cycle: Some(EndCycle {
+                action: row.decision.action.clone(),
+                summary: row.decision.reason.clone(),
+            }),
+            executions: Vec::new(),
+            error: row.error.clone(),
+        });
+        if let Err(error) = state.save(state_path) {
+            tracing::warn!(%error, "trader state not saved");
+        }
+    }
+
+    fn slow_state(&self) -> Result<&Slow> {
+        self.slow
+            .as_ref()
+            .ok_or_else(|| TraderError::config("no market view loaded"))
+    }
+
+    /// Reload the slow state when it is missing, old, or an executed route moved balances.
+    /// Balances and the catalog reload independently; a failed part keeps its previous value
+    /// (logged) and is tried again on the slow timer. `Err` only when there is no state yet.
+    async fn refresh(&mut self, now_ms: i64) -> Result<()> {
+        let due = self.refresh_slow
+            || self
+                .slow
+                .as_ref()
+                .is_none_or(|slow| now_ms - slow.loaded_ms >= SLOW_REFRESH_MS);
+        if !due {
+            return Ok(());
+        }
+        let balances = self.runtime.balances().await;
+        let view = self.runtime.load_view().await;
+        let slow = match (balances, view, self.slow.take()) {
+            (Ok(balances), Ok(view), _) => Slow {
+                view,
+                balances,
+                loaded_ms: now_ms,
+            },
+            (balances, view, Some(old)) => {
+                if let Err(error) = &balances {
+                    tracing::warn!(%error, "balance reload failed; keeping the previous balances");
+                }
+                if let Err(error) = &view {
+                    tracing::warn!(%error, "catalog reload failed; keeping the previous catalog");
+                }
+                Slow {
+                    view: view.unwrap_or(old.view),
+                    balances: balances.unwrap_or(old.balances),
+                    loaded_ms: now_ms,
+                }
+            }
+            (Err(error), _, None) | (_, Err(error), None) => return Err(error),
+        };
+        self.slow = Some(slow);
+        self.refresh_slow = false;
+        Ok(())
+    }
+
+    /// This tick's /biz/ feed, the coins the rule may buy (the fresh feed's coins with an
+    /// eligible USDT market, cash-like coins left out) and the coins it holds.
+    fn inputs(&self) -> Result<(BizNow, Vec<String>, BTreeSet<String>)> {
+        let slow = self.slow_state()?;
+        let biz = self.runtime.biz_feed(&slow.view);
+        let usdt_market = |asset: &str| {
+            slow.view
+                .markets
+                .get(&format!("{asset}/USDT"))
+                .is_some_and(|market| market.eligible)
+        };
+        let candidates = match &biz {
+            BizNow::Fresh(feed) => feed
+                .coins
+                .keys()
+                .filter(|asset| {
+                    asset.as_str() != "USDT"
+                        && !crate::assets::is_low_upside(asset)
+                        && usdt_market(asset)
+                })
+                .cloned()
+                .collect(),
+            BizNow::Unavailable { .. } => Vec::new(),
+        };
+        let held = self
+            .book(slow, 0)
+            .holdings
+            .into_keys()
+            .filter(|asset| usdt_market(asset))
+            .collect();
+        Ok((biz, candidates, held))
+    }
+
+    fn book(&self, slow: &Slow, t: i64) -> crate::book::Book {
+        let view = &slow.view;
+        live_book(
+            t,
+            &slow.balances,
+            slow.balances.free_value_usdt(view),
+            |asset, amount| view.usdt_value(asset, amount),
+            |asset| {
+                view.markets
+                    .get(&format!("{asset}/USDT"))
+                    .map(|m| m.min_notional)
+            },
+        )
+    }
+
+    /// Poll every price once and record the coins of interest; seed the ones without recent
+    /// minutes from 1m klines. Returns false when the poll failed.
+    async fn poll_prices(
+        &mut self,
+        now_ms: i64,
+        candidates: &[String],
+        held: &BTreeSet<String>,
+    ) -> bool {
+        let assets: BTreeSet<&String> = candidates.iter().chain(held).collect();
+        let polled = match self.runtime.client.prices().await {
+            Ok(tickers) => {
+                let prices: HashMap<&str, f64> = tickers
+                    .iter()
+                    .filter_map(|t| Some((t.symbol.as_str(), t.price.to_f64()?)))
+                    .collect();
+                for asset in &assets {
+                    if let Some(price) = prices.get(format!("{asset}USDT").as_str()) {
+                        self.prices.record(asset, now_ms, *price);
+                    }
+                }
+                true
+            }
+            Err(error) => {
+                tracing::warn!(%error, "price poll failed; nothing decided this tick");
+                false
+            }
+        };
+        tracing::debug!(
+            coins = assets.len(),
+            used_weight_1m = ?self.runtime.client.used_weight_1m(),
+            "price poll"
+        );
+        for asset in assets {
+            if !self.prices.needs_seed(asset, now_ms) {
+                continue;
+            }
+            let symbol = format!("{asset}/USDT");
+            match self
+                .runtime
+                .client
+                .klines(&symbol, "1m", None, None, Some(SEED_MINUTES))
+                .await
+            {
+                Ok(klines) => {
+                    let bars = klines
+                        .iter()
+                        .filter(|k| k.close_time.is_some_and(|close| close < now_ms))
+                        .filter_map(|k| Some((k.open_time, k.close.to_f64()?)));
+                    self.prices.seed(asset, bars, now_ms);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, %symbol, "price history read failed; coin left out this tick");
+                }
+            }
+        }
+        polled
+    }
+
+    /// The rule's verdict on this tick's inputs.
+    fn decide(
+        &self,
+        now_ms: i64,
+        biz: BizNow,
+        candidates: Vec<String>,
+        held: &BTreeSet<String>,
+    ) -> Result<Decision> {
+        let slow = self.slow_state()?;
+        let coins: BTreeMap<String, CoinView> = candidates
+            .iter()
+            .chain(held)
+            .filter_map(|asset| Some((asset.clone(), self.prices.coin_view(asset)?)))
+            .collect();
+        let step = crate::book::Snapshot::live(now_ms, coins, candidates);
+        let book = self.book(slow, now_ms);
+        let feed = match &biz {
+            BizNow::Fresh(feed) => Some(&feed.coins),
+            BizNow::Unavailable { .. } => None,
+        };
+        let verdict = decide(
+            &Inputs {
+                snap: &step,
+                book: &book,
+                biz: feed,
+            },
+            &self.runtime.config.algo_rule,
+        );
+        Ok(Decision {
+            key: decision_key(&verdict),
+            verdict,
+            biz,
+            equity: slow.balances.free_value_usdt(&slow.view),
+        })
+    }
+
+    fn context(&self, slow: &Slow, decision: &Decision) -> DecisionContext {
+        let config = &self.runtime.config;
+        DecisionContext {
+            timestamp: crate::audit::utc_timestamp(),
+            rules_version: config.rules_version.clone(),
+            market_pick_mode: config.market_pick_mode.as_str(),
+            portfolio_value_usdt: decision.equity,
+            balances: slow.balances.clone(),
+            candidate_routes: Vec::new(),
+            execution_invariants: execution_invariants(config),
+            route_scope: route_scope(config),
+            trade_memory: self.runtime.trade_memory(
+                &slow.balances,
+                &slow.view,
+                config.trade_memory_limit,
+            ),
+            biz: Some(decision.biz.clone()),
+        }
+    }
+}
+
+/// What the rule decided, without scores: its orders, or the coins it keeps (cash when
+/// none). Rows are written when this changes.
+pub fn decision_key(verdict: &Verdict) -> String {
+    if verdict.actions.is_empty() {
+        let kept: Vec<&str> = verdict
+            .held
+            .iter()
+            .map(|(asset, _)| asset.as_str())
+            .collect();
+        return if kept.is_empty() {
+            "hold cash".to_owned()
+        } else {
+            format!("keep {}", kept.join(" "))
+        };
+    }
+    verdict
+        .actions
+        .iter()
+        .map(|action| match action {
+            Action::Sell { asset, .. } => format!("sell {asset}"),
+            Action::Buy { asset, .. } => format!("buy {asset}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use rust_decimal_macros::dec;
+    use serde_json::{Value, json};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+    use crate::config::TraderConfig;
+    use crate::universe::tests::{config, view};
+
+    const BUY_ETH: &str = "0,0,1,0.5,0";
+    const HOLD: &str = "0,0,1,5,0";
+
+    fn trader_config(dir: &Path, weights: &str) -> TraderConfig {
+        let p = |name: &str| dir.join(name).to_string_lossy().into_owned();
+        let (audit, state, stop, feed) =
+            (p("audit.jsonl"), p("state.json"), p("stop"), p("feed.json"));
+        config(&[
+            ("BOT_SPOT_AUDIT_PATH", audit.as_str()),
+            ("BOT_SPOT_STATE_PATH", state.as_str()),
+            ("BOT_SPOT_STOP_PATH", stop.as_str()),
+            ("BOT_SPOT_BIZ_FEED_PATH", feed.as_str()),
+            ("BOT_SPOT_ALGO_WEIGHTS", weights),
+        ])
+    }
+
+    /// The feed names ETH; prices: ETH 3000 now, 2800 an hour ago (+7%, momentum 1).
+    async fn market(server: &MockServer, dir: &Path, now_ms: i64, eth_held: bool) {
+        let as_of = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now_ms)
+            .unwrap()
+            .to_rfc3339();
+        std::fs::write(
+            dir.join("feed.json"),
+            json!({"schema": "biz-feed-v1", "as_of": as_of, "coins": {"ETH": {"6h": {"mentions": 3}}}}).to_string(),
+        )
+        .unwrap();
+        let minute = now_ms - now_ms.rem_euclid(60_000);
+        let klines: Vec<Value> = (1..=61)
+            .map(|back| {
+                let open = minute - back * 60_000;
+                json!([
+                    open,
+                    "1",
+                    "1",
+                    "1",
+                    "2800",
+                    "1",
+                    open + 59_999,
+                    "1",
+                    1,
+                    "1",
+                    "1",
+                    "0"
+                ])
+            })
+            .collect();
+        let balances = if eth_held {
+            json!([{"asset": "ETH", "free": "0.05", "locked": "0"}])
+        } else {
+            json!([{"asset": "USDT", "free": "100", "locked": "0"}])
+        };
+        for (route, body) in [
+            (
+                "/api/v3/time",
+                json!({"serverTime": bb_core::time::now_ms()}),
+            ),
+            (
+                "/api/v3/ticker/price",
+                json!([{"symbol": "ETHUSDT", "price": "3000"}, {"symbol": "BTCUSDT", "price": "60000"}]),
+            ),
+            ("/api/v3/klines", json!(klines)),
+            (
+                "/api/v3/account",
+                json!({"canTrade": true, "balances": balances}),
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(server)
+                .await;
+        }
+    }
+
+    fn nonstop(server: &MockServer, config: TraderConfig, now_ms: i64) -> Nonstop {
+        let client = bb_binance::BinanceClient::new(
+            bb_binance::BinanceConfig::new(false)
+                .with_credentials(bb_binance::Credentials::new("key", "secret").unwrap())
+                .with_spot_rest_url(server.uri())
+                .with_retries(0, Duration::from_millis(1), Duration::from_millis(1)),
+        )
+        .unwrap();
+        let config = Arc::new(config);
+        let view = Arc::new(view(&config));
+        let runtime = Arc::new(Runtime::new(config, CycleMode::PlanOnly, client));
+        let mut trader = Nonstop::new(runtime);
+        trader.slow = Some(Slow {
+            view,
+            balances: Balances {
+                free: [("USDT".to_owned(), dec!(100))].into(),
+                used: Default::default(),
+                total: [("USDT".to_owned(), dec!(100))].into(),
+            },
+            loaded_ms: now_ms,
+        });
+        trader
+    }
+
+    fn rows(dir: &Path) -> Vec<Value> {
+        std::fs::read_to_string(dir.join("audit.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    async fn requests(server: &MockServer, route: &str) -> usize {
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| r.url.path() == route)
+            .count()
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_decision_writes_no_row_until_the_hourly_heartbeat() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let now = bb_core::time::now_ms();
+        market(&server, dir.path(), now, false).await;
+        let mut trader = nonstop(&server, trader_config(dir.path(), HOLD), now);
+        let token = CancellationToken::new();
+
+        assert!(matches!(
+            trader.tick(now, false, &token).await.unwrap(),
+            Tick::Recorded(_)
+        ));
+        let first = rows(dir.path());
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0]["row_type"], "cycle_summary");
+        assert!(
+            first[0]["decision"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("hold in cash")
+        );
+        for k in 1..=4 {
+            let tick = trader.tick(now + k * 15_000, false, &token).await.unwrap();
+            assert!(matches!(tick, Tick::Unchanged), "{tick:?}");
+        }
+        assert_eq!(rows(dir.path()).len(), 1, "no row on an unchanged tick");
+        // The heartbeat: the same decision is recorded again an hour later.
+        let later = now + HEARTBEAT_MS;
+        assert!(matches!(
+            trader.tick(later, false, &token).await.unwrap(),
+            Tick::Recorded(_)
+        ));
+        assert_eq!(rows(dir.path()).len(), 2);
+        // One price poll per tick and the klines seed once (the hour gap re-seeds it).
+        assert_eq!(requests(&server, "/api/v3/ticker/price").await, 6);
+        assert_eq!(requests(&server, "/api/v3/klines").await, 2);
+    }
+
+    #[tokio::test]
+    async fn the_stop_file_is_seen_on_the_next_tick_and_nothing_is_read_or_decided() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let now = bb_core::time::now_ms();
+        market(&server, dir.path(), now, false).await;
+        let mut trader = nonstop(&server, trader_config(dir.path(), BUY_ETH), now);
+        let token = CancellationToken::new();
+        assert!(matches!(
+            trader.tick(now, false, &token).await.unwrap(),
+            Tick::Recorded(_)
+        ));
+        let before = (
+            server.received_requests().await.unwrap().len(),
+            rows(dir.path()).len(),
+        );
+
+        std::fs::write(dir.path().join("stop"), "").unwrap();
+        for k in 1..=3 {
+            let tick = trader.tick(now + k * 15_000, true, &token).await.unwrap();
+            assert!(matches!(tick, Tick::Stopped), "{tick:?}");
+        }
+        assert_eq!(
+            (
+                server.received_requests().await.unwrap().len(),
+                rows(dir.path()).len()
+            ),
+            before,
+            "a stopped tick sends no request and writes no row"
+        );
+        assert!(
+            trader
+                .once(&token)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("emergency stop")
+        );
+
+        std::fs::remove_file(dir.path().join("stop")).unwrap();
+        let tick = trader.tick(now + 60_000, false, &token).await.unwrap();
+        assert!(!matches!(tick, Tick::Stopped), "{tick:?}");
+    }
+
+    #[tokio::test]
+    async fn balances_are_reloaded_on_the_tick_after_an_executed_route() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let now = bb_core::time::now_ms();
+        // The account now holds ETH (as after the buy).
+        market(&server, dir.path(), now, true).await;
+        let mut trader = nonstop(&server, trader_config(dir.path(), BUY_ETH), now);
+        let token = CancellationToken::new();
+
+        let Tick::Recorded(buy) = trader.tick(now, false, &token).await.unwrap() else {
+            panic!("the first decision is recorded");
+        };
+        assert_eq!(buy.decision.action, "traded");
+        let first = rows(dir.path());
+        assert_eq!(
+            (first[0]["row_type"].as_str(), first[0]["status"].as_str()),
+            (Some("route"), Some("planned"))
+        );
+        assert_eq!(first[0]["decision"]["destination_asset"], "ETH");
+        let accounts = requests(&server, "/api/v3/account").await;
+
+        // The next tick reloads the balances (the catalog reload fails here and is kept) and
+        // decides on them: ETH is held, so the decision changes to keeping it.
+        let Tick::Recorded(keep) = trader.tick(now + 15_000, false, &token).await.unwrap() else {
+            panic!("the changed decision is recorded");
+        };
+        assert!(requests(&server, "/api/v3/account").await > accounts);
+        assert_eq!(keep.decision.action, "hold");
+        assert!(
+            keep.decision.reason.contains("keep ETH"),
+            "{}",
+            keep.decision.reason
+        );
+        // No reload without an executed route before the slow timer.
+        let accounts = requests(&server, "/api/v3/account").await;
+        assert!(matches!(
+            trader.tick(now + 30_000, false, &token).await.unwrap(),
+            Tick::Unchanged
+        ));
+        assert_eq!(requests(&server, "/api/v3/account").await, accounts);
+    }
+
+    #[test]
+    fn the_price_book_turns_polls_into_minute_closes_and_reseeds_after_a_gap() {
+        let t0 = 1_792_933_200_000; // a minute boundary
+        let mut book = PriceBook::default();
+        assert!(book.needs_seed("SOL", t0));
+        book.seed("SOL", (1..=61).map(|back| (t0 - back * 60_000, 100.0)), t0);
+        book.record("SOL", t0 + 20_000, 104.0);
+        book.record("SOL", t0 + 40_000, 106.0);
+        assert!(!book.needs_seed("SOL", t0 + 40_000));
+        let view = book.coin_view("SOL").unwrap();
+        // The newest poll of the minute against the close an hour before it.
+        assert!((view.ret_1h.unwrap() - 6.0).abs() < 1e-9, "{view:?}");
+        assert!(
+            book.needs_seed("SOL", t0 + 4 * 60_000),
+            "three missed minutes"
+        );
+    }
+}

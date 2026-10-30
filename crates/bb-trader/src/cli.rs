@@ -1,8 +1,7 @@
-//! `bot-spot` command (port of `python -m src.claude_spot`).
+//! `bot-spot` command: one decision, or the nonstop trader with `--nonstop`.
 
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
 
 use bb_binance::{BinanceClient, BinanceConfig, Credentials};
 use tokio_util::sync::CancellationToken;
@@ -10,13 +9,14 @@ use serde_json::json;
 
 use crate::audit::{DEFAULT_REVIEW_REASON, mark_failed_route_reviewed};
 use crate::config::TraderConfig;
-use crate::cycle::{CycleMode, Runtime, Trader};
+use crate::cycle::{CycleMode, Runtime};
+use crate::nonstop::Nonstop;
 use crate::error::{Result, TraderError};
 
 /// Trader commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Run the algorithm Spot trader (one cycle, or a daemon with --daemon).
+    /// Run the algorithm Spot trader (one decision, or nonstop with --nonstop).
     BotSpot(BotSpotArgs),
     /// Backtest the algorithm offline on cached 1m candles (no network, no orders).
     AlgoBacktest(crate::algo_backtest::report::AlgoBacktestArgs),
@@ -30,7 +30,7 @@ pub struct BotSpotArgs {
     /// The algorithm decides; execute_route only records plans (overrides --submit-live).
     #[arg(long)]
     pub plan_only: bool,
-    /// Print the decision context without asking the bot or submitting orders.
+    /// Print the decision context and the routes quotable now; no row, no order.
     #[arg(long)]
     pub evidence_only: bool,
     /// Append an operator-review audit marker that clears the failed-route halt.
@@ -39,11 +39,10 @@ pub struct BotSpotArgs {
     /// Reason stored with --mark-failed-route-reviewed.
     #[arg(long, default_value = DEFAULT_REVIEW_REASON)]
     pub review_reason: String,
-    /// Keep running and decide once every --interval-seconds.
+    /// Keep trading: poll prices and decide every 15 s until SIGTERM; a decision row only
+    /// when the decided action changes, plus one an hour.
     #[arg(long)]
-    pub daemon: bool,
-    #[arg(long, default_value_t = 240)]
-    pub interval_seconds: u64,
+    pub nonstop: bool,
 }
 
 pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
@@ -78,31 +77,17 @@ fn print_json(value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-/// One-shot runs refuse to start under the emergency stop file. The daemon starts anyway and
-/// idles (see [`daemon_slot_runs`]), so a paused trader survives restarts and deploys instead
-/// of exiting into a `restart: unless-stopped` loop.
-fn stop_guard(config: &TraderConfig, daemon: bool) -> Result<()> {
-    if !daemon && bb_core::fsutil::stop_requested(&config.stop_path) {
+/// One-shot runs refuse to start under the emergency stop file. The nonstop trader starts
+/// anyway and idles until the file is removed, so a paused trader survives restarts and
+/// deploys instead of exiting into a `restart: unless-stopped` loop.
+fn stop_guard(config: &TraderConfig, nonstop: bool) -> Result<()> {
+    if !nonstop && bb_core::fsutil::stop_requested(&config.stop_path) {
         return Err(TraderError::safety(format!(
             "Bot Spot emergency stop is active: {}",
             config.stop_path.display()
         )));
     }
     Ok(())
-}
-
-/// Daemon: whether this cycle slot runs a cycle. Under the stop file it skips the cycle (no
-/// LLM call, no order) and logs only when the stop starts or ends, not every interval.
-fn daemon_slot_runs(stop_active: bool, idling: &mut bool, stop_path: &std::path::Path) -> bool {
-    if stop_active != *idling {
-        *idling = stop_active;
-        if stop_active {
-            tracing::warn!(path = %stop_path.display(), "emergency stop active: no cycles until the stop file is removed");
-        } else {
-            tracing::info!("emergency stop removed: cycles resume");
-        }
-    }
-    !stop_active
 }
 
 async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
@@ -117,9 +102,9 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
     } else {
         CycleMode::PlanOnly
     };
-    stop_guard(&config, args.daemon)?;
+    stop_guard(&config, args.nonstop)?;
     if mode == CycleMode::Live {
-        // Hard safety: refuse before any LLM call, lock or order.
+        // Hard safety: refuse before any lock or order.
         config.check_live_arming()?;
     }
     let runtime = Arc::new(Runtime::new(
@@ -127,90 +112,31 @@ async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
         mode,
         binance_client(&config)?,
     ));
-    let _ = runtime
-        .run_config
-        .set(config.run_config(args.daemon.then_some(args.interval_seconds)));
+    let _ = runtime.run_config.set(config.run_config(args.nonstop));
+    let mut trader = Nonstop::new(Arc::clone(&runtime));
     if args.evidence_only {
-        let snapshot = runtime.build_snapshot().await?;
-        print_json(&snapshot.context.as_payload())?;
+        print_json(&trader.evidence().await?.as_payload())?;
         return Ok(ExitCode::SUCCESS);
     }
 
     let _lock = bb_core::fsutil::RunLock::try_acquire(&config.lock_path)?;
     let shutdown = CancellationToken::new();
     spawn_signal_listener(shutdown.clone(), Arc::clone(&runtime));
-    let mut trader = Trader::new(Arc::clone(&runtime));
-    let mut exit = ExitCode::SUCCESS;
-    let interval = Duration::from_secs(args.interval_seconds);
-    // A restart keeps the cadence: the first cycle waits until one interval after the last
-    // one, so restarts do not add cycles.
-    if args.daemon
-        && let Some(wait) = cadence_wait(
-            &crate::state::TraderState::load(&config.state_path),
-            interval,
-            bb_core::time::now(),
-        )
-    {
-        tracing::info!(
-            wait_seconds = wait.as_secs(),
-            "keeping the cycle cadence: first cycle one interval after the last one"
-        );
-        pause(tokio::time::Instant::now() + wait, &shutdown).await;
-    }
-    let mut idling = false;
-    while !shutdown.is_cancelled() {
-        if args.daemon
-            && !daemon_slot_runs(
-                bb_core::fsutil::stop_requested(&config.stop_path),
-                &mut idling,
-                &config.stop_path,
-            )
-        {
-            pause(tokio::time::Instant::now() + interval, &shutdown).await;
-            continue;
+    let exit = if args.nonstop {
+        tracing::info!(mode = mode.as_str(), "nonstop trader started");
+        trader.run(&shutdown).await;
+        ExitCode::SUCCESS
+    } else {
+        let row = trader.once(&shutdown).await?;
+        print_json(&serde_json::to_value(&row)?)?;
+        if mode == CycleMode::Live && row.status == crate::audit::RowStatus::Failed {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
         }
-        match trader.run_cycle(&shutdown).await {
-            Ok(outcome) => {
-                print_json(&serde_json::to_value(&outcome.summary)?)?;
-                if outcome.failed {
-                    exit = ExitCode::FAILURE;
-                }
-            }
-            Err(error) => {
-                if !args.daemon {
-                    return Err(error);
-                }
-                tracing::error!(%error, "Bot Spot cycle failed");
-            }
-        }
-        if !args.daemon || shutdown.is_cancelled() {
-            break;
-        }
-        pause(tokio::time::Instant::now() + interval, &shutdown).await;
-    }
+    };
     runtime.begin_shutdown();
     Ok(exit)
-}
-
-/// Sleep until `until` or shutdown.
-async fn pause(until: tokio::time::Instant, shutdown: &CancellationToken) {
-    tokio::select! {
-        () = tokio::time::sleep_until(until) => {}
-        () = shutdown.cancelled() => {}
-    }
-}
-
-/// How long a restarted daemon waits before its first cycle: the rest of the interval since
-/// the last finished cycle, if any is left.
-fn cadence_wait(
-    state: &crate::state::TraderState,
-    interval: Duration,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Option<Duration> {
-    let finished = state.last_cycle.as_ref()?.finished_at.as_str();
-    let finished = chrono::DateTime::parse_from_rfc3339(finished).ok()?;
-    let elapsed = (now - finished.with_timezone(&chrono::Utc)).to_std().ok()?;
-    interval.checked_sub(elapsed).filter(|wait| !wait.is_zero())
 }
 
 /// SIGTERM / SIGINT: refuse new routes at once and cancel `token` (aborts the agent turn);
@@ -239,7 +165,7 @@ fn spawn_signal_listener(token: CancellationToken, runtime: Arc<Runtime>) {
         {
             let _ = tokio::signal::ctrl_c().await;
         }
-        tracing::warn!("shutdown signal received; finishing the current cycle");
+        tracing::warn!("shutdown signal received; finishing the current decision");
         runtime.begin_shutdown();
         token.cancel();
     });
@@ -248,37 +174,9 @@ fn spawn_signal_listener(token: CancellationToken, runtime: Arc<Runtime>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{LastCycle, TraderState};
 
     #[test]
-    fn restart_waits_out_the_rest_of_the_interval_since_the_last_cycle() {
-        let interval = Duration::from_secs(1200);
-        let now = chrono::DateTime::parse_from_rfc3339("2026-10-17T13:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let state = |finished_at: &str| TraderState {
-            last_cycle: Some(LastCycle {
-                cycle_id: "c".into(),
-                finished_at: finished_at.into(),
-                status: "held".into(),
-                end_cycle: None,
-                executions: Vec::new(),
-                error: String::new(),
-            }),
-            ..TraderState::default()
-        };
-        assert_eq!(
-            cadence_wait(&state("2026-10-17T12:55:00+00:00"), interval, now),
-            Some(Duration::from_secs(900))
-        );
-        // A whole interval ago, no record or an unreadable time: cycle at once.
-        assert_eq!(cadence_wait(&state("2026-10-17T12:30:00+00:00"), interval, now), None);
-        assert_eq!(cadence_wait(&TraderState::default(), interval, now), None);
-        assert_eq!(cadence_wait(&state("yesterday"), interval, now), None);
-    }
-
-    #[test]
-    fn under_the_stop_file_one_shot_refuses_but_the_daemon_starts_and_idles() {
+    fn under_the_stop_file_one_shot_refuses_but_the_nonstop_trader_starts() {
         let dir = tempfile::tempdir().unwrap();
         let stop = dir.path().join("bot-spot.stop");
         let stop_text = stop.to_string_lossy().into_owned();
@@ -293,14 +191,5 @@ mod tests {
         std::fs::write(&stop, "").unwrap();
         assert!(stop_guard(&config, false).is_err());
         assert!(stop_guard(&config, true).is_ok());
-
-        // Stopped slots run no cycle (no LLM call, no order); removing the file resumes.
-        let mut idling = false;
-        let runs: Vec<bool> = [true, true, false, false, true]
-            .into_iter()
-            .map(|stopped| daemon_slot_runs(stopped, &mut idling, &stop))
-            .collect();
-        assert_eq!(runs, [false, false, true, true, false]);
-        assert!(idling);
     }
 }

@@ -125,7 +125,7 @@ instead of showing empty tabs. Overrides: `PI_HOST`, `PI_DATA_DIR`,
 
 ## Emergency Stop Files
 
-Bot Spot checks its stop file at cycle start and before every route, leg and
+Bot Spot checks its stop file on every tick and before every route, leg and
 order, and refuses to trade while it exists. Create it to stop, delete it to
 resume. `bot-spot-algo-paper` shares the same file. Paths are relative to the
 bot directory (`~/.local/share/binance-bot/data/...` on systemd hosts,
@@ -170,11 +170,12 @@ are ignored; the trader logs one warning listing any that are still set.
   `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`,
   `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`.
 - The emergency stop file `data/bot-spot.stop` (`BOT_SPOT_STOP_PATH`),
-  checked at cycle start, before every route, before every leg and before
-  every order. A one-shot run refuses to start under it; the `--daemon`
-  keeps running and idles (no cycle, one log line when the stop
-  starts and one when it ends), so a paused trader survives restarts and
-  deploys. Cycles resume at the next interval after the file is deleted.
+  checked on every 15 s tick (before any read), before every route, before
+  every leg and before every order. A one-shot run refuses to start under
+  it; the `--nonstop` trader keeps running and idles (no read, no decision,
+  one log line when the stop starts and one when it ends), so a paused
+  trader survives restarts and deploys. It decides again on the first tick
+  after the file is deleted.
 - An exclusive run lock (`BOT_SPOT_LOCK_PATH`).
 - Account READING plus canTrade.
 - Binance `order/test` before every leg.
@@ -186,27 +187,38 @@ are ignored; the trader logs one warning listing any that are still set.
 - Spot MARKET orders only, at most `BOT_SPOT_MAX_ROUTE_LEGS` legs.
 - Margin, futures, transfer, withdrawal, and prediction writes are unavailable.
 
-Each route or cycle is one fsync'd row in `BOT_SPOT_AUDIT_PATH` (default
-`data/bot-spot-decisions.jsonl`); cycle summaries carry the rule's verdict
-(`algo`). There are no Telegram or phone alerts (operator decision
+Each route and each recorded decision is one fsync'd row in
+`BOT_SPOT_AUDIT_PATH` (default `data/bot-spot-decisions.jsonl`); decision rows
+(`row_type` `cycle_summary`) carry the rule's verdict (`algo`). There are no Telegram or phone alerts (operator decision
 2026-10-29).
 
 ### Commands
 
 ```bash
-bb bot-spot --evidence-only                 # decision context, no orders
-bb bot-spot --plan-only                     # the algorithm decides; execute_route only records plans
-bb bot-spot --submit-live --daemon          # live, one cycle every --interval-seconds (240)
+bb bot-spot --evidence-only                 # decision context and quotable routes, no row, no order
+bb bot-spot --plan-only                     # one decision; execute_route only records plans
+bb bot-spot --plan-only --nonstop           # the nonstop trader, plan-only
+bb bot-spot --submit-live --nonstop         # the nonstop trader, live
 bb bot-spot --mark-failed-route-reviewed --review-reason "reconciled by hand"
 ```
 
 ### Deployment
 
-Bot Spot is a long-running daemon, not a timer:
+Bot Spot runs nonstop (operator decisions 2026-10-29), not on a timer:
 
+- Every 15 s a tick checks the stop file, polls every price with one
+  `ticker/price` request (weight 4), reads the /biz/ feed file and decides.
+  Each coin's minute closes come from those polls (seeded once from 1m
+  klines), so its 1h move is the trader's own. The catalog, fees and
+  balances reload every 5 minutes and on the tick after every executed
+  route. A decision row is written only when the decided action changes
+  (its orders, or the coins it keeps) and once an hour as a heartbeat; an
+  unchanged tick writes nothing and sends nothing, so an order that failed
+  is tried again when the decision changes or at the heartbeat. The log has
+  `used_weight_1m` (Binance's request weight) on every decision row, and on
+  every tick at `RUST_LOG=bb_trader=debug`.
 - Docker: compose service `bot-spot` (profiles `live` and `all`), running
-  `bb bot-spot --submit-live --daemon --interval-seconds 1200` (every 20
-  minutes until Phase 52 makes the trader continuous).
+  `bb bot-spot --submit-live --nonstop`.
 - systemd: `binance-bot-spot.service` (same command, `Restart=always`):
 
 ```bash
@@ -244,7 +256,7 @@ runs. `scripts/biz_feed_to_pi.sh` copies `out/biz-feed.json` to
 `~/binance-bot/docker-data/biz-feed.json` on the Pi every 5 minutes
 (`--once` for one copy; `PI_HOST`, `PI_DATA_DIR`, `BIZ_FEED`,
 `COPY_SECONDS`). The trader reads `BOT_SPOT_BIZ_FEED_PATH` (default
-`data/biz-feed.json`) every cycle and records it in the cycle summary as
+`data/biz-feed.json`) every tick and records it on each decision row as
 `biz`: `status` `fresh` with `as_of`, `age_minutes`, `model`,
 `prompt_version`, the coins with an eligible Binance market and the `dropped`
 names, or `unavailable` with the reason (missing or unreadable file, another
@@ -254,9 +266,9 @@ it. The dashboard's /biz/ tab shows the newest recorded feed.
 
 ### The algorithm
 
-`crate::decider` decides every cycle with the operator's rule
+`crate::decider` decides on every tick with the operator's rule
 (`BOT_SPOT_ALGO_WEIGHTS`, required; the trader refuses to start without it).
-Each cycle it reads the wallet and the /biz/ feed, then reads 1m prices for
+It reads the wallet and the /biz/ feed, and the prices of
 the coins it may buy (the feed's coins with an eligible USDT market,
 stablecoins left out) and for the coins it holds (operator decision
 2026-10-29: no market breadth read). It scores those coins with
@@ -266,9 +278,9 @@ scoring below the sell level into USDT and, with nothing held, buys the best
 coin with all USDT at or above the buy level. Every order is quoted for the
 whole free balance and sent through `execute_route`, so the stop file,
 arming, scope, `order/test`, reconciliation and the failed-route halt apply;
-the first failed order ends the cycle's orders. Without a fresh feed nothing
-is a buy candidate, so it can only hold or sell; a coin whose price read fails
-is left out of that cycle.
+the first failed order ends that decision's orders. Without a fresh feed
+nothing is a buy candidate, so it can only hold or sell; a coin without a
+price is left out of that tick.
 
 The rule in force (operator, 2026-10-29, `docs/decisions.md`):
 `BOT_SPOT_ALGO_WEIGHTS=0,1,1,0.5,-0.5`, `BOT_SPOT_ALGO_MIN_POSTERS=2`,
@@ -278,19 +290,19 @@ momentum (talk weight 0); buy at +0.5, sell below -0.5. Its backtest:
 <biz-feed-history> --end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
 tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
 
-- **Records.** Cycle summaries carry `algo` (rule, best candidate and score,
+- **Records.** Decision rows carry `algo` (rule, best candidate and score,
   held coins and scores, orders), `rules_version` (`BOT_SPOT_RULES_VERSION`,
-  required) and `session_id` `algo`. The Bot tab's cycle details show the
-  rule's scores.
+  required) and `session_id` `algo`. The Bot tab's details show the rule's
+  scores.
 - **Practice run.** `docker compose --profile algo-paper up -d
   bot-spot-algo-paper` runs it plan-only with its own files
   (`bot-spot-algo-paper-{decisions.jsonl,state.json}`, lock
   `bot-spot-algo-paper.lock`) and the shared stop file. Plan-only rows do not
-  move the wallet, so it re-decides on the real balances every cycle.
+  move the wallet, so it keeps deciding on the real balances.
 - **Going live** (after the practice run and the operator's go):
   `docker tag binance-bot:latest binance-bot:pre-algo-<date>`, set the
   operator's `BOT_SPOT_ALGO_WEIGHTS` in `~/binance-bot/.env.docker`, `docker
-  compose up -d bot-spot`, watch the first cycles. Back: retag
+  compose up -d bot-spot`, watch the first decisions. Back: retag
   the rollback image and recreate. `touch docker-data/bot-spot.stop` stops it.
 
 ### Failed-route halt
@@ -305,7 +317,7 @@ bb bot-spot --mark-failed-route-reviewed --review-reason "<what you checked>"
 docker compose run --rm bot-spot bb bot-spot --mark-failed-route-reviewed
 ```
 
-The halt is recomputed from the audit log, so the next cycle sees the marker.
+The halt is recomputed from the audit log, so the next decision sees the marker.
 Remove the stop file to resume.
 
 ### Backtesting

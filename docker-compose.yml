@@ -48,21 +48,20 @@ services:
 
   # ---------- LIVE ----------
 
-  # The algorithm trader (no LLM; needs BOT_SPOT_ALGO_WEIGHTS), a cycle every 20 minutes until
-  # Phase 52 makes it continuous.
+  # The nonstop algorithm trader (needs BOT_SPOT_ALGO_WEIGHTS): polls prices every 15 s and
+  # writes a decision row when the decided action changes, plus one an hour.
   # Live submission still requires BOT_SPOT_ENABLED=true, BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot,
   # USE_TESTNET=false, DRY_RUN=false, CONFIRM_LIVE_TRADING=yes. Emergency stop: touch data/bot-spot.stop.
   bot-spot:
     <<: *base
     container_name: bot-spot
     profiles: ["live", "all"]
-    command: ["bb", "bot-spot", "--submit-live", "--daemon", "--interval-seconds", "1200"]
+    command: ["bb", "bot-spot", "--submit-live", "--nonstop"]
 
-  # Practice run of the algorithm (no LLM): plan-only,
-  # so it records `planned` routes and places no order, next to the live trader. Its own audit,
-  # state and lock; the emergency stop file is shared, so data/bot-spot.stop stops it
-  # too. Needs BOT_SPOT_ALGO_WEIGHTS (talk,stance,momentum,buy_above,sell_below) in the
-  # env file. Plan-only cycles do not move the wallet: it re-decides on the real balances.
+  # Practice run of the nonstop trader: plan-only, so it records `planned` routes and places
+  # no order. Its own audit, state and lock; the emergency stop file is shared, so
+  # data/bot-spot.stop stops it too. Needs BOT_SPOT_ALGO_WEIGHTS in the env file. Plan-only
+  # decisions do not move the wallet: it keeps deciding on the real balances.
   bot-spot-algo-paper:
     <<: *base
     container_name: bot-spot-algo-paper
@@ -74,7 +73,7 @@ services:
       BOT_SPOT_AUDIT_PATH: /app/data/bot-spot-algo-paper-decisions.jsonl
       BOT_SPOT_STATE_PATH: /app/data/bot-spot-algo-paper-state.json
       BOT_SPOT_LOCK_PATH: /app/data/bot-spot-algo-paper.lock
-    command: ["bb", "bot-spot", "--plan-only", "--daemon", "--interval-seconds", "1200"]
+    command: ["bb", "bot-spot", "--plan-only", "--nonstop"]
 
   # ---------- DASHBOARD ----------
 

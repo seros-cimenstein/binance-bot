@@ -19,7 +19,8 @@
 //! - [`biz`]: the /biz/ feed from biz-app, recorded per cycle, information only (Phase 51).
 //! - [`decider`]: the operator's rule (no LLM); backtested as `biz_algo`.
 //! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
-//! - [`cycle`]: per-cycle runtime and the [`cycle::Trader`] loop. [`cli`]: `bot-spot`,
+//! - [`nonstop`]: the trader loop (a tick every 15 s, rows on change plus an hourly
+//!   heartbeat). [`cycle`]: the decision runtime (routes, audit rows). [`cli`]: `bot-spot`,
 //!   `algo-backtest`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -37,11 +38,13 @@ pub mod decider;
 pub mod error;
 pub mod executor;
 pub mod memory;
+pub mod nonstop;
 pub mod scope;
 pub mod state;
 pub mod trades;
 pub mod universe;
 
 pub use config::TraderConfig;
-pub use cycle::{CycleMode, CycleOutcome, Runtime, Trader};
+pub use cycle::{CycleMode, Runtime};
+pub use nonstop::Nonstop;
 pub use error::{Result, TraderError};

@@ -352,12 +352,12 @@ impl TraderConfig {
 
     /// Non-secret run configuration, recorded on every cycle summary so the dashboard can
     /// group cycles and trades by the setup that produced them. Never includes credentials.
-    pub fn run_config(&self, cycle_interval_seconds: Option<u64>) -> serde_json::Value {
+    pub fn run_config(&self, nonstop: bool) -> serde_json::Value {
         let decimal = |value: Decimal| value.normalize().to_string();
         serde_json::json!({
             "mode": self.mode(),
             "rules_version": self.rules_version,
-            "cycle_interval_seconds": cycle_interval_seconds,
+            "tick_seconds": nonstop.then_some(crate::nonstop::TICK.as_secs()),
             "routing": {
                 "market_pick_mode": self.market_pick_mode.as_str(),
                 "max_route_legs": self.max_route_legs,
@@ -581,11 +581,11 @@ pub(crate) mod tests {
             ("BOT_SPOT_RULES_VERSION", "rules-2026-10-30"),
         ]))
         .unwrap();
-        let snapshot = config.run_config(Some(1200));
+        let snapshot = config.run_config(true);
         let text = snapshot.to_string();
         assert!(!text.contains("must-not-leak"), "{text}");
         assert_eq!(snapshot["rules_version"], "rules-2026-10-30");
-        assert_eq!(snapshot["cycle_interval_seconds"], 1200);
+        assert_eq!(snapshot["tick_seconds"], 15);
     }
 
     #[test]
@@ -710,7 +710,7 @@ pub(crate) mod tests {
         ]))
         .unwrap();
         assert_eq!((config.algo_rule.min_posters, config.algo_rule.weights.stance), (3, 0.25));
-        assert_eq!(config.run_config(None)["rule"]["min_posters"], 3);
+        assert_eq!(config.run_config(false)["rule"]["min_posters"], 3);
         assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_ALGO_WEIGHTS", "1,2")])).is_err());
         // An env file still carrying the six-number LLM-era rule (with a value weight)
         // refuses to start instead of shifting the levels into the wrong slots.

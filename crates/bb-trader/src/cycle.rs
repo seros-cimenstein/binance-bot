@@ -1,5 +1,5 @@
-//! Cycle runtime: the per-cycle market snapshot, route
-//! planning/execution with audit rows, and the [`Trader`] cycle the algorithm decides.
+//! Decision runtime: route planning/execution with audit rows for each recorded decision
+//! (the [`crate::nonstop`] loop decides when).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,17 +15,14 @@ use tokio::sync::Mutex;
 
 use crate::audit::{AuditLog, AuditRow, Decision, EndCycle, RowStatus, RowType, failed_route_halt};
 use crate::config::TraderConfig;
-use crate::context::{DecisionContext, decimal_json, execution_invariants, route_scope};
+use crate::context::{DecisionContext, decimal_json};
 use crate::error::{Result, TraderError};
 use crate::executor::{Executor, LegResult};
-use crate::state::{ExecutionSummary, LastCycle, TraderState};
+use crate::state::ExecutionSummary;
 use crate::memory::TradeMemory;
 use crate::universe::{
-    Balances, MarketView, RouteCandidate, build_route_candidates, quote_candidate,
+    Balances, MarketView, RouteCandidate, quote_candidate,
 };
-
-/// 1m bars read per coin for the algorithm's 15m/1h returns: 61 closed bars plus the open one.
-const ALGO_PRICE_MINUTES: u32 = 62;
 
 /// What one cycle's orders produced.
 #[derive(Debug, Clone, Default)]
@@ -73,14 +70,12 @@ pub struct CycleState {
     pub algo: Option<Value>,
 }
 
-/// Market snapshot built for a cycle (or `--evidence-only`).
+/// What a decision is recorded against: its context, the market view and the balances.
 #[derive(Debug)]
 pub struct Snapshot {
     pub context: DecisionContext,
     pub view: Arc<MarketView>,
     pub balances: Balances,
-    /// The rule's point-in-time market view (`None` in tests that skip the market read).
-    pub step: Option<crate::book::Snapshot>,
 }
 
 /// Shared by the cycle loop and the host tools.
@@ -156,110 +151,8 @@ impl Runtime {
         )
     }
 
-    /// Catalog, balances, candidate routes, trade memory, the /biz/ feed and the
-    /// algorithm's market view.
-    pub async fn build_snapshot(&self) -> Result<Snapshot> {
-        let balances = self.balances().await?;
-        let view = self.load_view().await?;
-        let candidates = build_route_candidates(&view, &self.config, &balances.free).await?;
-        let trade_memory = self.trade_memory(&balances, &view, self.config.trade_memory_limit);
-        let portfolio_value_usdt = balances.free_value_usdt(&view);
-        let biz = self.biz_feed(&view);
-        let step = Some(self.algo_step(&view, &balances, portfolio_value_usdt, &biz).await);
-        let biz = Some(biz);
-        let context = DecisionContext {
-            timestamp: crate::audit::utc_timestamp(),
-            rules_version: self.config.rules_version.clone(),
-            market_pick_mode: self.config.market_pick_mode.as_str(),
-            portfolio_value_usdt,
-            balances: balances.clone(),
-            candidate_routes: candidates,
-            execution_invariants: execution_invariants(&self.config),
-            route_scope: route_scope(&self.config),
-            trade_memory,
-            biz,
-        };
-        Ok(Snapshot {
-            context,
-            view,
-            balances,
-            step,
-        })
-    }
-
-    /// The algorithm's market view (operator decision 2026-10-29, "Feed coins + own
-    /// prices"): the coins it may buy are the /biz/ feed coins with an eligible USDT market
-    /// (stablecoins left out), and it reads 1m prices for those and for every held coin.
-    /// Without a fresh feed it may only hold or sell. A coin whose price read fails is left
-    /// out (logged), so it is neither bought nor scored as held.
-    async fn algo_step(
-        &self,
-        view: &MarketView,
-        balances: &Balances,
-        equity: Decimal,
-        biz: &crate::biz::BizNow,
-    ) -> crate::book::Snapshot {
-        use futures::StreamExt;
-        use rust_decimal::prelude::ToPrimitive;
-        let t = bb_core::time::now_ms();
-        let usdt_market = |asset: &str| {
-            view.markets
-                .get(&format!("{asset}/USDT"))
-                .filter(|market| market.eligible)
-                .is_some()
-        };
-        let candidates: Vec<String> = match biz {
-            crate::biz::BizNow::Fresh(feed) => feed
-                .coins
-                .keys()
-                .filter(|asset| {
-                    asset.as_str() != "USDT"
-                        && !crate::assets::is_low_upside(asset)
-                        && usdt_market(asset)
-                })
-                .cloned()
-                .collect(),
-            crate::biz::BizNow::Unavailable { .. } => Vec::new(),
-        };
-        let held = crate::book::live_book(
-            t,
-            balances,
-            equity,
-            |asset, amount| view.usdt_value(asset, amount),
-            |asset| view.markets.get(&format!("{asset}/USDT")).map(|m| m.min_notional),
-        );
-        let mut assets: Vec<String> = candidates.clone();
-        assets.extend(held.holdings.keys().filter(|a| usdt_market(a)).cloned());
-        assets.sort();
-        assets.dedup();
-        let client = &self.client;
-        let coins = futures::stream::iter(assets)
-            .map(|asset| async move {
-                let symbol = format!("{asset}/USDT");
-                match client.klines(&symbol, "1m", None, None, Some(ALGO_PRICE_MINUTES)).await {
-                    Ok(klines) => {
-                        let bars: Vec<(i64, f64)> = klines
-                            .iter()
-                            .filter(|k| k.close_time.is_some_and(|close| close < t))
-                            .filter_map(|k| Some((k.open_time, k.close.to_f64()?)))
-                            .collect();
-                        crate::book::coin_view_from_minutes(&bars).map(|view| (asset, view))
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, %symbol, "price read failed; coin left out this cycle");
-                        None
-                    }
-                }
-            })
-            .buffer_unordered(8)
-            .filter_map(|coin| async move { coin })
-            .collect()
-            .await;
-        crate::book::Snapshot::live(t, coins, candidates)
-    }
-
-    /// The /biz/ feed for this cycle, keeping the coins with an eligible market in the view.
-    fn biz_feed(&self, view: &MarketView) -> crate::biz::BizNow {
+    /// The /biz/ feed now, keeping the coins with an eligible market in the view.
+    pub(crate) fn biz_feed(&self, view: &MarketView) -> crate::biz::BizNow {
         let listed: std::collections::BTreeSet<&str> = view
             .markets
             .values()
@@ -272,38 +165,6 @@ impl Runtime {
             self.config.biz_max_age_minutes,
             |coin| listed.contains(coin),
         )
-    }
-
-    /// The rule-based decider's verdict on this snapshot; `Err` with the reason when it
-    /// cannot decide (no market view this cycle).
-    pub(crate) fn algo_verdict(
-        &self,
-        snapshot: &Snapshot,
-        rule: &crate::decider::Rule,
-    ) -> std::result::Result<crate::decider::Verdict, String> {
-        let Some(step) = &snapshot.step else {
-            return Err("no market view this cycle".into());
-        };
-        let view = &snapshot.view;
-        let book = crate::book::live_book(
-            step.t,
-            &snapshot.balances,
-            snapshot.context.portfolio_value_usdt,
-            |asset, amount| view.usdt_value(asset, amount),
-            |asset| view.markets.get(&format!("{asset}/USDT")).map(|m| m.min_notional),
-        );
-        let biz = match &snapshot.context.biz {
-            Some(crate::biz::BizNow::Fresh(feed)) => Some(&feed.coins),
-            _ => None,
-        };
-        Ok(crate::decider::decide(
-            &crate::decider::Inputs {
-                snap: step,
-                book: &book,
-                biz,
-            },
-            rule,
-        ))
     }
 
     /// Quote `source` → `destination` for the whole free `source` balance into the active
@@ -845,98 +706,6 @@ fn leg_summaries(legs: &[LegResult]) -> Vec<Value> {
         .collect()
 }
 
-/// Result of one trader cycle.
-#[derive(Debug, Clone)]
-pub struct CycleOutcome {
-    pub summary: AuditRow,
-    /// A live route failed or the cycle could not run (non-zero exit for one-shot runs).
-    pub failed: bool,
-}
-
-/// The trader: the runtime plus the operator's rule (the algorithm decides; no LLM).
-pub struct Trader {
-    runtime: Arc<Runtime>,
-}
-
-impl Trader {
-    pub fn new(runtime: Arc<Runtime>) -> Self {
-        Self { runtime }
-    }
-
-    pub fn runtime(&self) -> &Arc<Runtime> {
-        &self.runtime
-    }
-
-    /// One full cycle decided by the algorithm ([`crate::decider`]). Hard-safety refusals
-    /// before any order are errors.
-    pub async fn run_cycle(&mut self, shutdown: &CancellationToken) -> Result<CycleOutcome> {
-        let runtime = Arc::clone(&self.runtime);
-        let config = Arc::clone(&runtime.config);
-        if bb_core::fsutil::stop_requested(&config.stop_path) {
-            return Err(TraderError::safety(format!(
-                "Bot Spot emergency stop is active: {}",
-                config.stop_path.display()
-            )));
-        }
-        if runtime.mode == CycleMode::Live {
-            config.check_live_arming()?;
-        }
-        let cycle_id = uuid::Uuid::now_v7().to_string();
-        let mut state = TraderState::load(&config.state_path);
-
-        if runtime.mode == CycleMode::Live
-            && let Some(halt) = failed_route_halt(&runtime.audit.rows())
-        {
-            let summary = runtime
-                .record_skipped(&cycle_id, RowStatus::Held, &halt, "")
-                .await?;
-            return Ok(CycleOutcome {
-                summary,
-                failed: false,
-            });
-        }
-        let rule = config.algo_rule;
-        let snapshot = match runtime.build_snapshot().await {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                let status = match runtime.mode {
-                    CycleMode::PlanOnly => RowStatus::Blocked,
-                    CycleMode::Live => RowStatus::Failed,
-                };
-                let message = error.to_string();
-                runtime
-                    .record_skipped(&cycle_id, status, &message, &message)
-                    .await?;
-                return Err(error);
-            }
-        };
-        let verdict = runtime.algo_verdict(&snapshot, &rule);
-        runtime.begin_cycle(&cycle_id, ALGO_SESSION_ID, snapshot).await;
-        let report = runtime.run_algo_turn(verdict, &rule, shutdown).await;
-        if shutdown.is_cancelled() {
-            runtime.begin_shutdown();
-        }
-        let (summary, executions) = runtime.finish_cycle(&report).await?;
-        state.cycle_count += 1;
-        state.last_cycle = Some(LastCycle {
-            cycle_id: cycle_id.clone(),
-            finished_at: summary.timestamp.clone(),
-            status: summary.status.as_str().into(),
-            end_cycle: Some(EndCycle {
-                action: summary.decision.action.clone(),
-                summary: summary.decision.reason.clone(),
-            }),
-            executions,
-            error: summary.error.clone(),
-        });
-        if let Err(error) = state.save(&config.state_path) {
-            tracing::warn!(%error, "trader state not saved");
-        }
-        let failed = summary.status == RowStatus::Failed && runtime.mode == CycleMode::Live;
-        Ok(CycleOutcome { summary, failed })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -946,6 +715,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+    use crate::context::{execution_invariants, route_scope};
+    use crate::universe::build_route_candidates;
     use crate::universe::tests::{config, view};
 
     fn trader_config(dir: &Path, extra: &[(&str, &str)]) -> TraderConfig {
@@ -1004,7 +775,6 @@ mod tests {
                     context,
                     view,
                     balances,
-                    step: None,
                 },
             )
             .await;
@@ -1170,67 +940,6 @@ mod tests {
         let (summary, _) = second.finish_cycle(&report).await.unwrap();
         assert_eq!(summary.status, RowStatus::Held);
         assert_eq!(audit_rows(dir.path()).len(), 1);
-    }
-
-    #[tokio::test]
-    async fn the_algo_view_is_the_feed_coins_plus_held_coins_from_klines_only() {
-        use wiremock::matchers::query_param;
-        let server = MockServer::start().await;
-        let now = bb_core::time::now_ms();
-        let newest = now - now.rem_euclid(60_000) - 60_000;
-        // 61 closed bars rising 0.1 per minute from 100, plus the still-open minute.
-        let klines: Vec<Value> = (0..=61)
-            .map(|i| {
-                let open = newest - (60 - i) * 60_000;
-                let close = 100.0 + 0.1 * i as f64;
-                json!([open, "1", "1", "1", close.to_string(), "1", open + 59_999, "1", 1, "1", "1", "0"])
-            })
-            .collect();
-        for symbol in ["ETHUSDT", "BTCUSDT"] {
-            Mock::given(method("GET"))
-                .and(path("/api/v3/klines"))
-                .and(query_param("symbol", symbol))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!(klines)))
-                .mount(&server)
-                .await;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let algo = [("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0.5,0")];
-        let config = trader_config(dir.path(), &algo);
-        let view = view(&config);
-        let runtime = runtime(&server, config, CycleMode::PlanOnly).await;
-        let balances = Balances {
-            free: [("USDT".to_owned(), dec!(10)), ("BTC".to_owned(), dec!(0.01))].into(),
-            ..Balances::default()
-        };
-        let window = crate::biz::Window { mentions: 5, ..Default::default() };
-        let windows = crate::biz::CoinWindows { h6: window, h24: window, ..Default::default() };
-        let feed = crate::biz::BizFeed {
-            as_of: "now".into(),
-            age_minutes: 1,
-            model: String::new(),
-            prompt_version: String::new(),
-            // SOL has no USDT market and USDC is cash-like: neither may be bought.
-            coins: [("ETH", windows), ("SOL", windows), ("USDC", windows)]
-                .map(|(a, w)| (a.to_owned(), w))
-                .into(),
-            dropped: Vec::new(),
-        };
-        let step = runtime
-            .algo_step(&view, &balances, dec!(610), &crate::biz::BizNow::Fresh(Box::new(feed)))
-            .await;
-        assert_eq!(step.liquid_top, vec!["ETH"]);
-        assert_eq!(step.coins.keys().collect::<Vec<_>>(), vec!["BTC", "ETH"]);
-        let eth = step.coin("ETH").unwrap();
-        assert!((eth.ret_1h.unwrap() - (106.0 / 100.0 - 1.0) * 100.0).abs() < 1e-9, "{eth:?}");
-        let requests = server.received_requests().await.unwrap_or_default();
-        assert!(requests.iter().all(|r| r.url.path() == "/api/v3/klines"), "klines only, no ticker read");
-
-        // Without a fresh feed only the held coin is read and nothing is a buy candidate.
-        let unavailable = crate::biz::BizNow::Unavailable { reason: "stale".into() };
-        let step = runtime.algo_step(&view, &balances, dec!(610), &unavailable).await;
-        assert!(step.liquid_top.is_empty());
-        assert_eq!(step.coins.keys().collect::<Vec<_>>(), vec!["BTC"]);
     }
 
     #[tokio::test]
