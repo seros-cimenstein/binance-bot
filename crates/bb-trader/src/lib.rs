@@ -44,6 +44,7 @@ pub mod memory;
 pub mod nonstop;
 pub mod reach;
 pub mod scope;
+pub mod scoreboard;
 pub mod signals;
 pub mod state;
 pub mod tags;

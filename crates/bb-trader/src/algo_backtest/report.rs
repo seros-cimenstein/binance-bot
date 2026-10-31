@@ -61,8 +61,8 @@ pub struct AlgoBacktestArgs {
     /// A feed older than this at a step is not visible (hourly history needs more than 60).
     #[arg(long, default_value_t = 90)]
     pub tags_max_age_minutes: i64,
-    /// Fixed weights `talk,stance,momentum,buy_above,sell_below` (e.g. read
-    /// off the `bb biz-lead-study` report) instead of tuning them on the older half.
+    /// Fixed weights `talk,stance,momentum,buy_above,sell_below` (e.g. read off the
+    /// `bb tag-scoreboard` file) instead of tuning them on the older half.
     #[arg(long)]
     pub biz_weights: Option<String>,
     /// Distinct posters a 6h /biz/ window needs before its stance counts.

@@ -20,6 +20,8 @@ pub enum Command {
     BotSpot(BotSpotArgs),
     /// Backtest the algorithm offline on cached 1m candles (no network, no orders).
     AlgoBacktest(crate::algo_backtest::report::AlgoBacktestArgs),
+    /// Measure which tags and signals moved prices their way (public klines, no orders).
+    TagScoreboard(crate::scoreboard::TagScoreboardArgs),
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -58,6 +60,13 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("Algorithm backtest failed: {error}");
+                ExitCode::FAILURE
+            }
+        }),
+        Command::TagScoreboard(args) => Ok(match crate::scoreboard::run_cli(&args).await {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("Tag scoreboard failed: {error}");
                 ExitCode::FAILURE
             }
         }),

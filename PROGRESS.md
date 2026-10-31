@@ -53,7 +53,8 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
 
 ## Evidence so far
 
-- `bb biz-lead-study` on 2026-10-01..25: no /biz/ lead (`IMPLEMENTATION_PLAN.md`).
+- The Phase 52 lead study on 2026-10-01..25: no /biz/ lead (`IMPLEMENTATION_PLAN.md`);
+  `bb tag-scoreboard` (Phase 53 C6) replaces it.
 - The chosen rule's backtest: +18.42% on the tuning half, -11.18% on the
   judging half (`reports/algo_backtest_2026-10-25.md`).
 - Practice run review 2026-10-30 09:41 UTC: one planned ETH buy in 42

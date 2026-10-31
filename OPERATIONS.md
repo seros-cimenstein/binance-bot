@@ -447,8 +447,8 @@ hourly `tags-feed-v1` history from biz-app (a feed counts at a step from its
 0. The window is split: the weights are picked on the older half from a grid
 (talk and stance −1/0/+1, momentum 0/1, buy at 0.5/1, sell below −0.5/0; 72
 sets with feeds) by net %, or given with
-`--biz-weights talk,stance,momentum,buy,sell` (e.g. from
-`bb biz-lead-study`). The rule then runs on both halves as `biz_algo@older`
+`--biz-weights talk,stance,momentum,buy,sell` (e.g. from the tag
+scoreboard below). The rule then runs on both halves as `biz_algo@older`
 and `biz_algo@newer`; the `@newer` row is the out-of-sample result. The
 report has a `biz_algo` rule section with the best grid rows, and
 `_biz_algo@<half>_trace.csv` (time, feed `as_of`, best coin and score, held
@@ -466,6 +466,40 @@ half), `_trades.csv` (one row per trade) and `_biz_algo@<half>_trace.csv`
 across reruns. The cache comes from `bb entry-study` (`data/` is gitignored).
 The liquid universe is the 2026-10-18 top 20, so results carry survivorship
 bias.
+
+#### Tag scoreboard
+
+`bb tag-scoreboard` measures which tags and signals moved prices their way
+(`crate::scoreboard`). Research only: public klines, no account, no order
+path. For every hourly `tags-feed-v1` file of `--history-dir` and every signal
+name (`crate::signals`) it takes the non-zero values at the feed's hour: per
+asset for every tradable asset the feed reaches (with `--proxies`, default
+`config/proxies.json`), market-wide against BTC and the liquid basket. It
+compares the forward return at +1h, +24h and +7d with the same target's
+random hours (every hour of the history), weighted by the signal and in its
+direction: `excess_pct`, `net_pct` after the round-trip fee (`--fee-bps`, 15),
+hit rate and `t` over horizon-long blocks (0 under 5 blocks, so a +7d `t`
+needs a history of 5 weeks), for the whole history and its older
+and newer half, `decayed` when the newer half keeps under half of a positive
+older edge.
+
+```bash
+cargo run --release -p bb-cli --bin bb -- tag-scoreboard \
+  --history-dir ~/biz-tags-retag/tags-history \
+  --cache-dir data/scoreboard-cache --output-dir data/scoreboard
+```
+
+It writes `scoreboard-<as_of date>.json` and `latest.json` (schema
+`tag-scoreboard-v1`). Point in time: `--as-of` (default now) drops feeds
+after it and every outcome not observed by it; the file is stamped with
+`available_at`, its latest outcome close (per horizon `signals_to` and
+`outcomes_to`), so a +7d result appears only 7 days after its signal and a
+decision may use a scoreboard only from `available_at` on. Candles come from
+an incremental cache of closed 1h bars per asset (`1h_<ASSET>_USDT.json`):
+a run reads only the hours before or after what is cached that the history
+needs (`--max-bars`, 10000, per asset), and logs its kline reads. The
+universe is today's Spot USDT markets (survivorship). It replaces the Phase 52
+lead study.
 
 ## Bot Spot Data Backups
 

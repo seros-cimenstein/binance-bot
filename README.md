@@ -16,9 +16,9 @@ Polymarket, airdrop, funding arb, trend filter, mean reversion) were moved to
 |---|---|
 | `bb-core` | env config, `Decimal` money helpers, fsync'd JSONL audit, run locks, stop files |
 | `bb-binance` | native Binance Spot REST client: HMAC/Ed25519 signing, time sync, rate-limit tracking, exchange rules, spot market data and orders, wallet balance totals, klines history |
-| `bb-trader` | `bot-spot`: the algorithm trader (the operator's rule) and its offline backtest `algo-backtest` |
+| `bb-trader` | `bot-spot`: the algorithm trader (the operator's rule), its offline backtest `algo-backtest` and the `tag-scoreboard` |
 | `bb-pool` | library for the trader: market catalog, commission/fee service, multi-leg route engine, models (no commands, no order path) |
-| `bb-strategies` | bot research: `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
+| `bb-strategies` | bot research: `bot-spot-backtest`, `spec-snapshot`, `entry-study` |
 | `bb-cli` | the `bb` binary |
 | `cryptobot-gui` | read-only localhost web dashboard (`cryptobot-gui` binary) |
 
@@ -46,7 +46,7 @@ Run `bb --help` or `bb <command> --help`.
 | Area | Commands |
 |---|---|
 | Bot trader | `bot-spot` |
-| Bot research | `algo-backtest`, `bot-spot-backtest`, `spec-snapshot`, `entry-study`, `biz-lead-study` |
+| Bot research | `algo-backtest`, `tag-scoreboard`, `bot-spot-backtest`, `spec-snapshot`, `entry-study` |
 
 ## Algorithm Spot trader (`bb bot-spot`)
 
@@ -168,7 +168,7 @@ ssh -L 8787:localhost:8787 <bot-host>          # view a remote box from your lap
 bb spec-snapshot                      # data/speculation/<UTC date>/ CSVs + SUMMARY.md
 bb bot-spot-backtest --help
 bb entry-study --help
-bb biz-lead-study --help
+bb tag-scoreboard --history-dir <tags history>   # which tags and signals led prices (data/scoreboard/)
 ```
 
 Historical replay is for strategy research only: it uses public candles and

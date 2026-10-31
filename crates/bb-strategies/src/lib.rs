@@ -3,7 +3,6 @@
 //! - [`bot_spot_backtest`] replays Bot Spot's cost-aware momentum rule on historical klines.
 //! - [`spec_snapshot`] writes a public-data speculation snapshot (CSVs + `SUMMARY.md`).
 //! - [`entry_study`] measures entries after costs.
-//! - [`biz_lead_study`] checks whether /biz/ talk comes before price moves.
 //!
 //! Shared plumbing lives in [`common`]; [`cli`] exposes the `bb` subcommands.
 
@@ -17,7 +16,6 @@
     )
 )]
 
-pub mod biz_lead_study;
 pub mod bot_spot_backtest;
 pub mod cli;
 pub mod common;

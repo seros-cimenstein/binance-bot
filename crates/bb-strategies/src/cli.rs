@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use crate::{biz_lead_study, bot_spot_backtest, entry_study, spec_snapshot};
+use crate::{bot_spot_backtest, entry_study, spec_snapshot};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -12,8 +12,6 @@ pub enum Command {
     SpecSnapshot(spec_snapshot::Args),
     /// Research: net forward return after each kind of entry over liquid USDT coins.
     EntryStudy(entry_study::Args),
-    /// Research: does /biz/ talk about a coin (biz-app feeds) come before its price moves?
-    BizLeadStudy(biz_lead_study::Args),
 }
 
 pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
@@ -21,7 +19,6 @@ pub async fn run(cmd: Command) -> anyhow::Result<ExitCode> {
         Command::BotSpotBacktest(args) => bot_spot_backtest::run_cli(args).await,
         Command::SpecSnapshot(args) => spec_snapshot::run_cli(args).await,
         Command::EntryStudy(args) => entry_study::run_cli(args).await,
-        Command::BizLeadStudy(args) => biz_lead_study::run_cli(args).await,
     }
 }
 
