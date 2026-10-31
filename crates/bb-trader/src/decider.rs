@@ -26,14 +26,15 @@
 //! sold; with nothing held after that, the candidate (the step's buy candidates in order;
 //! live: the feed's asset tags with a USDT market) with the highest score is bought when
 //! its score reaches `buy_above` (live, for the sleeve's share of the portfolio:
-//! `cycle::Sizing`; the backtest buys with all cash). One coin at a time; no stop-loss,
+//! `cycle::Sizing`; the backtest buys with all cash). One coin at a time per sleeve; a sleeve's `horizon` filters its candidates and below
+//! its `risk_off_below` it moves to a defensive asset ([`decide`]); no stop-loss,
 //! take-profit or exit plan, only the score.
 
 use std::collections::BTreeMap;
 
 use crate::book::{Book, Snapshot};
 use crate::reach::Reach;
-use crate::rules::Sleeve;
+use crate::rules::{Horizon, Sleeve};
 use crate::signals::{Name, Signals, own_value};
 use crate::tags::{Feed, Windows};
 
@@ -107,6 +108,65 @@ impl<'a> Scorer<'a> {
             .collect();
         Scored { score, values }
     }
+
+    /// `asset`'s score without the market-wide names (the same for every asset): what
+    /// risk-off compares its defensive assets (and USDT's 0) on.
+    pub fn asset_score(&self, asset: &str) -> f64 {
+        let scored = self.score(asset);
+        let market: f64 = self
+            .sleeve
+            .weights
+            .iter()
+            .zip(&scored.values)
+            .filter(|((name, _), _)| matches!(name, Name::Market { .. }))
+            .map(|((_, weight), (_, value))| weight * value)
+            .sum();
+        scored.score - market
+    }
+
+    /// The sleeve's market-wide score: `Σ weight × value` over its weighted `market.*`
+    /// names (0 without a feed or without such names).
+    pub fn market_score(&self) -> f64 {
+        let Some(signals) = &self.signals else {
+            return 0.0;
+        };
+        self.sleeve
+            .weights
+            .iter()
+            .filter(|(name, _)| matches!(name, Name::Market { .. }))
+            .map(|(name, weight)| weight * signals.value(name, "", None, None))
+            .sum::<f64>()
+            + 0.0 // an empty sum is −0.0; record 0
+    }
+}
+
+/// The horizons a coin's own asset tag leans to: the largest of short, swing and long over
+/// its 7d window (all tied ones); none without a stated horizon (operator, 2026-10-31).
+pub fn dominant_horizons(windows: Option<&Windows>) -> Vec<Horizon> {
+    let Some(mix) = windows.map(|w| w.d7.horizon) else {
+        return Vec::new();
+    };
+    let parts = [
+        (Horizon::Short, mix.short),
+        (Horizon::Swing, mix.swing),
+        (Horizon::Long, mix.long),
+    ];
+    let top = parts.iter().map(|(_, v)| *v).fold(0.0, f64::max);
+    if top <= 0.0 {
+        return Vec::new();
+    }
+    parts
+        .into_iter()
+        .filter(|(_, v)| *v >= top)
+        .map(|(h, _)| h)
+        .collect()
+}
+
+/// Whether `asset` may be bought by `sleeve`: any coin for `horizon` `any`, else coins whose
+/// own tag leans to the sleeve's horizon ([`dominant_horizons`]).
+fn fits(inputs: &Inputs<'_>, sleeve: &Sleeve, asset: &str) -> bool {
+    sleeve.horizon == Horizon::Any
+        || dominant_horizons(inputs.tags.and_then(|t| t.get(asset))).contains(&sleeve.horizon)
 }
 
 /// One order the rule asks for, with the reason in words.
@@ -117,16 +177,21 @@ pub enum Action {
 }
 
 /// The rule's answer at a step: the orders (none = hold) and the scores behind them.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Verdict {
     pub actions: Vec<Action>,
-    /// The best candidate and its score (computed whenever nothing is held after sells).
+    /// The best candidate and its score (computed whenever nothing is held after sells;
+    /// risk-off: the defensive target).
     pub best: Option<(String, f64)>,
     /// Each held coin and its score.
     pub held: Vec<(String, f64)>,
     /// Why the rule could not score at all (an edge rule without a valid scoreboard): no
     /// orders, nothing scored.
     pub blocked: Option<String>,
+    /// The sleeve's market-wide score ([`Scorer::market_score`]).
+    pub market_score: f64,
+    /// The market-wide score was below the sleeve's `risk_off_below`.
+    pub risk_off: bool,
 }
 
 impl Verdict {
@@ -134,17 +199,23 @@ impl Verdict {
     /// evidence, [`crate::edge`]).
     pub fn no_evidence(reason: String) -> Self {
         Self {
-            actions: Vec::new(),
-            best: None,
-            held: Vec::new(),
             blocked: Some(reason),
+            ..Self::default()
         }
     }
 }
 
-/// Buy, sell or hold at `inputs.snap.t` with `sleeve` (see the module docs).
+/// Buy, sell or hold at `inputs.snap.t` with `sleeve` (see the module docs): the sleeve's
+/// holdings are `inputs.book`; candidates outside its horizon are skipped; below its
+/// `risk_off_below` it moves to its best defensive asset instead (see `risk_off`).
 pub fn decide(inputs: &Inputs<'_>, sleeve: &Sleeve) -> Verdict {
     let scorer = Scorer::new(*inputs, sleeve);
+    let market_score = scorer.market_score();
+    if let Some(level) = sleeve.risk_off_below
+        && market_score < level
+    {
+        return risk_off(inputs, sleeve, &scorer, market_score, level);
+    }
     let mut actions = Vec::new();
     let mut held = Vec::new();
     let mut kept = 0usize;
@@ -167,7 +238,7 @@ pub fn decide(inputs: &Inputs<'_>, sleeve: &Sleeve) -> Verdict {
     let mut best: Option<(String, Scored)> = None;
     if kept == 0 {
         for asset in &inputs.snap.liquid_top {
-            if inputs.snap.coin(asset).is_none() {
+            if inputs.snap.coin(asset).is_none() || !fits(inputs, sleeve, asset) {
                 continue;
             }
             let scored = scorer.score(asset);
@@ -192,7 +263,64 @@ pub fn decide(inputs: &Inputs<'_>, sleeve: &Sleeve) -> Verdict {
         actions,
         best: best.map(|(asset, scored)| (asset, scored.score)),
         held,
-        blocked: None,
+        market_score,
+        ..Verdict::default()
+    }
+}
+
+/// Risk-off (operator "Yes" 2026-10-30; rule 2026-10-31): the target is the sleeve's
+/// defensive asset with the highest score among those priced ([`Scorer::asset_score`]: the
+/// market-wide names, equal for all, left out; USDT scores 0; ties go to the earlier one
+/// listed); a holding that is not the target is sold and the target bought (no buy level).
+/// Nothing else is bought.
+fn risk_off(
+    inputs: &Inputs<'_>,
+    sleeve: &Sleeve,
+    scorer: &Scorer<'_>,
+    market_score: f64,
+    level: f64,
+) -> Verdict {
+    let mut target: Option<(String, f64)> = None;
+    for asset in &sleeve.defensive {
+        let score = if asset == "USDT" {
+            0.0
+        } else if inputs.snap.coin(asset).is_some() {
+            scorer.asset_score(asset)
+        } else {
+            continue;
+        };
+        if target.as_ref().is_none_or(|(_, best)| score > *best) {
+            target = Some((asset.clone(), score));
+        }
+    }
+    let (to, to_score) = target.unwrap_or_else(|| ("USDT".to_owned(), 0.0));
+    let why = format!(
+        "risk-off: market score {market_score:+.3} < risk-off level {level:+}; defensive {to} (score {to_score:+.3})"
+    );
+    let mut actions = Vec::new();
+    let mut held = Vec::new();
+    for asset in inputs.book.holdings.keys() {
+        held.push((asset.clone(), scorer.score(asset).score));
+        if *asset != to {
+            actions.push(Action::Sell {
+                asset: asset.clone(),
+                reason: format!("{asset}: {why}"),
+            });
+        }
+    }
+    if to != "USDT" && !inputs.book.holdings.contains_key(&to) {
+        actions.push(Action::Buy {
+            asset: to.clone(),
+            reason: format!("{to}: {why}"),
+        });
+    }
+    Verdict {
+        actions,
+        best: Some((to, to_score)),
+        held,
+        market_score,
+        risk_off: true,
+        ..Verdict::default()
     }
 }
 
@@ -466,5 +594,102 @@ mod tests {
         let windows_only = Inputs { feed: None, ..full };
         assert_eq!(Scorer::new(windows_only, sleeve).score("ETH").score, 0.0);
         assert!(decide(&windows_only, sleeve).actions.is_empty());
+    }
+
+    /// A sleeve from JSON fields over the one-sleeve test rule (2 posters, USDT defensive).
+    fn sleeve_with(weights: &[(&str, f64)], buy_above: f64, sell_below: f64, extra: serde_json::Value) -> Sleeve {
+        let mut rule: serde_json::Value = serde_json::from_str(&one_sleeve(weights, buy_above, sell_below)).unwrap();
+        for (key, value) in extra.as_object().unwrap() {
+            rule["sleeves"][0][key] = value.clone();
+        }
+        Rule::parse(&rule.to_string()).unwrap().sleeves[0].clone()
+    }
+
+    fn mix(short: f64, swing: f64, long: f64) -> Windows {
+        let mut windows = Windows::default();
+        windows.d7.horizon = crate::tags::Horizon { short, swing, long, unstated: 3.0 };
+        windows
+    }
+
+    #[test]
+    fn a_horizon_sleeve_buys_only_coins_whose_own_tag_leans_its_way() {
+        // ETH: long theses over 7d; SOL: short; ADA: swing and long tied; DOGE: none stated.
+        let tags = BTreeMap::from([
+            ("ETH".to_string(), mix(1.0, 2.0, 5.0)),
+            ("SOL".to_string(), mix(6.0, 1.0, 0.0)),
+            ("ADA".to_string(), mix(0.0, 2.0, 2.0)),
+            ("DOGE".to_string(), mix(0.0, 0.0, 0.0)),
+        ]);
+        assert_eq!(dominant_horizons(tags.get("ADA")), [Horizon::Swing, Horizon::Long]);
+        assert!(dominant_horizons(tags.get("DOGE")).is_empty() && dominant_horizons(None).is_empty());
+        // SOL and DOGE lead on momentum, but a long sleeve buys only ETH or ADA.
+        let snap = snap(&[("SOL", 0.0, 4.0, 1.0, 1e9), ("DOGE", 0.0, 3.5, 1.0, 1e9), ("ETH", 0.0, 1.0, 1.0, 1e9), ("ADA", 0.0, 2.0, 1.0, 1e9)]);
+        let book = flat_book();
+        let inputs = Inputs { snap: &snap, book: &book, tags: Some(&tags), feed: None };
+        let weights = [("momentum.1h", 1.0)];
+        let long = sleeve_with(&weights, 0.1, 0.0, serde_json::json!({"horizon": "long"}));
+        assert!(matches!(&decide(&inputs, &long).actions[..], [Action::Buy { asset, .. }] if asset == "ADA"));
+        let short = sleeve_with(&weights, 0.1, 0.0, serde_json::json!({"horizon": "short"}));
+        assert!(matches!(&decide(&inputs, &short).actions[..], [Action::Buy { asset, .. }] if asset == "SOL"));
+        let swing = sleeve_with(&weights, 0.1, 0.0, serde_json::json!({"horizon": "swing"}));
+        assert!(matches!(&decide(&inputs, &swing).actions[..], [Action::Buy { asset, .. }] if asset == "ADA"));
+        let any = sleeve_with(&weights, 0.1, 0.0, serde_json::json!({}));
+        assert!(matches!(&decide(&inputs, &any).actions[..], [Action::Buy { asset, .. }] if asset == "SOL"));
+        // Without a feed no coin has a horizon: a filtered sleeve buys nothing.
+        assert!(decide(&Inputs { tags: None, ..inputs }, &long).actions.is_empty());
+        // A held coin outside the horizon is still scored and sold.
+        let held = holding(&["SOL"]);
+        let selling = sleeve_with(&weights, 5.0, 5.0, serde_json::json!({"horizon": "long"}));
+        let verdict = decide(&Inputs { book: &held, ..inputs }, &selling);
+        assert!(matches!(&verdict.actions[..], [Action::Sell { asset, .. }] if asset == "SOL"));
+    }
+
+    #[test]
+    fn risk_off_moves_the_sleeve_to_its_best_defensive_asset() {
+        // The board's mood: 5 posters, up 1 down 4 (direction −0.6) or the reverse (+0.6).
+        let feed = |up: f64, down: f64| {
+            let text = serde_json::json!({"schema": "tags-feed-v1", "as_of": "2026-10-25T13:00:00Z",
+                "tags": {"mood:fear": {"kind": "mood", "name": "fear",
+                    "windows": {"24h": {"mentions": 10, "posters": 5, "up": up, "down": down}}}}})
+            .to_string();
+            crate::tags::parse(&text, 1_792_933_200_000 + 60_000, 45, |_| true, &Default::default()).unwrap()
+        };
+        let (gloomy, bright) = (feed(1.0, 4.0), feed(4.0, 1.0));
+        let sleeve = sleeve_with(
+            &[("market.mood.direction.24h", 1.0), ("momentum.1h", 1.0)],
+            0.5,
+            -0.5,
+            serde_json::json!({"risk_off_below": -0.2, "defensive": ["USDT", "PAXG", "XAUT"]}),
+        );
+        let book = holding(&["BTC"]);
+        let decide_on = |paxg: f64, xaut: f64, feed: &crate::tags::TagsFeed, book: &Book| {
+            let snap = snap(&[("BTC", 0.0, 4.0, 1.0, 9e9), ("PAXG", 0.0, paxg, 1.0, 1e8), ("XAUT", 0.0, xaut, 1.0, 1e8)]);
+            decide(&Inputs { snap: &snap, book, tags: Some(&feed.assets), feed: Some((&feed.feed, &feed.reach)) }, &sleeve)
+        };
+        let orders = |v: &Verdict| -> Vec<(String, String)> {
+            v.actions
+                .iter()
+                .map(|a| match a {
+                    Action::Sell { asset, .. } => ("sell".to_owned(), asset.clone()),
+                    Action::Buy { asset, .. } => ("buy".to_owned(), asset.clone()),
+                })
+                .collect()
+        };
+        let pair = |side: &str, asset: &str| (side.to_owned(), asset.to_owned());
+        // Gloomy board (market score −0.6 < −0.2): BTC is sold though its +4% scores well,
+        // and the best defensive asset is bought: XAUT, then PAXG, then plain USDT.
+        let to_xaut = decide_on(1.0, 2.0, &gloomy, &book);
+        assert!(to_xaut.risk_off && (to_xaut.market_score + 0.6).abs() < 1e-12);
+        assert_eq!(orders(&to_xaut), [pair("sell", "BTC"), pair("buy", "XAUT")]);
+        assert_eq!(orders(&decide_on(3.0, 2.0, &gloomy, &book)), [pair("sell", "BTC"), pair("buy", "PAXG")]);
+        let to_usdt = decide_on(-1.0, -2.0, &gloomy, &book);
+        assert_eq!(orders(&to_usdt), [pair("sell", "BTC")]);
+        assert_eq!(to_usdt.best.as_ref().map(|(a, _)| a.as_str()), Some("USDT"));
+        // Already in the target: nothing to do.
+        let in_paxg = holding(&["PAXG"]);
+        assert!(decide_on(3.0, 2.0, &gloomy, &in_paxg).actions.is_empty());
+        // Bright board: the normal rule keeps BTC (score 0.6 + 0.8 ≥ −0.5).
+        let normal = decide_on(3.0, 2.0, &bright, &book);
+        assert!(!normal.risk_off && normal.actions.is_empty());
     }
 }

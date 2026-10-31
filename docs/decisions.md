@@ -266,3 +266,27 @@ Manager note (iteration 19): a missing state file or one without `sleeves`
 migrates; an unreadable file or malformed `sleeves` halts; unowned balances
 never block buys and are never sold; the halt survives restarts and no tick
 clears it.
+
+## 2026-10-31 Phase 53 loop: per-sleeve decisions (`LOOP_TAGS.md` D5)
+
+Three answers through the ask tool, given by the loop manager for the
+operator:
+
+- Horizon filter, "Own tag, 7d, dominant": a sleeve with `horizon` short,
+  swing or long buys only coins whose own asset tag's 7d horizon mix has that
+  horizon largest (ties count for each; no stated horizon: excluded); held
+  coins are always scored and may be sold.
+- Risk-off, "Market names, best defensive": the sleeve's market-wide score is
+  Σ weight × value over its weighted `market.*` names (0 without a feed);
+  below `risk_off_below` the target is its priced defensive asset with the
+  highest score (USDT 0, ties to the earlier listed; compared on the
+  sleeve's other names); a non-target holding is sold and the target bought
+  without the buy level; nothing else is bought.
+- Rows, "Active sleeves only": a sleeve with a share or a holding decides,
+  with its own decision key, heartbeat and rows; the shipped rule (core 0,
+  nothing held) writes exactly today's rows.
+
+Manager note (iteration 21): sleeve identity on decisions, orders, fill
+booking, trades and memory; the shipped fast=1/core=0 rule unchanged;
+alternate splits, horizon filters and defensive assets only in tests or
+isolated smoke fixtures.

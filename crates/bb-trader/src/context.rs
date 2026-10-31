@@ -270,7 +270,7 @@ mod tests {
                     reason: None,
                     recent_trade_count: 0,
                     recent_loss_streak: 0,
-                    current_holding: None,
+                    current_holdings: Default::default(),
                     recent_outcomes: Vec::new(),
                 },
                 tags: Some(crate::tags::TagsNow::Fresh(Box::new(feed))),

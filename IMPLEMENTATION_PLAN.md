@@ -201,14 +201,13 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
   and either fixed weights (selected by kind, signal, window) or the
   meta-rule (weights from the newest scoreboard, capped, refreshed at a
   set interval). `algo-2026-10-29` as a rule file; a test shows it gives
-  the old formula's scores and actions (LOOP_TAGS D1, D2; horizon filter and
-  risk-off are refused until the two-sleeve box below).
-- [ ] Two sleeves: each holds one asset (coin, gold proxy or USDT), buys
+  the old formula's scores and actions (LOOP_TAGS D1, D2).
+- [x] Two sleeves: each holds one asset (coin, gold proxy or USDT), buys
   with its share of the portfolio value, sells only its own quantity, moves
   to its defensive asset when market-wide signals fall below its risk-off
   level; sleeve holdings in the state file, checked against balances every
   tick (a mismatch halts, fail closed); orders only through
-  `execute_route` with every hard-safety item.
+  `execute_route` with every hard-safety item (LOOP_TAGS D3-D5).
 - [ ] Audit: a decision row when a sleeve's action changes plus hourly, with
   each candidate's signals, the market-wide signals and the live tags.
 

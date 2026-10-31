@@ -2,7 +2,8 @@
 //! and the dashboard (`cryptobot-gui` History, Sessions).
 //!
 //! Every submitted route opens one trade in its destination asset. The trade closes at the
-//! first later submitted route that sells that asset. Amounts come from the orders the
+//! first later submitted route of the same sleeve (Phase 53 D5: two sleeves may hold the
+//! same asset; rows without a sleeve form their own group) that sells that asset. Amounts come from the orders the
 //! exchange filled (`submitted_legs[].final_order`, else `order`), compared per unit so
 //! partial sells and repeat buys stay consistent:
 //!
@@ -60,6 +61,8 @@ pub struct RouteRecord {
     pub timestamp: String,
     /// The cycle that placed it (empty in older rows).
     pub cycle_id: String,
+    /// The sleeve that placed it (empty in rows from before Phase 53 D5).
+    pub sleeve: String,
     pub route_id: String,
     pub source_asset: String,
     pub destination_asset: String,
@@ -100,6 +103,7 @@ pub fn route_record(row: &Value) -> RouteRecord {
     let mut record = RouteRecord {
         timestamp: text(row, "/timestamp"),
         cycle_id: text(row, "/cycle_id"),
+        sleeve: text(row, "/sleeve"),
         route_id: row_route_id(row),
         reason: text(row, "/decision/reason"),
         legs,
@@ -290,6 +294,8 @@ pub struct Trade {
     pub closed_into: Option<String>,
     /// The cycle that opened it.
     pub cycle_id: String,
+    /// The sleeve that opened it (empty before Phase 53 D5).
+    pub sleeve: String,
     pub route_id: String,
     pub source_asset: String,
     pub destination_asset: String,
@@ -340,7 +346,7 @@ pub fn build_trades(
                 .then(|| {
                     routes[index + 1..]
                         .iter()
-                        .find(|later| later.source_asset == destination)
+                        .find(|later| later.source_asset == destination && later.sleeve == route.sleeve)
                 })
                 .flatten();
             let (exit, closed_at, marked) = match closing {
@@ -387,6 +393,7 @@ pub fn build_trades(
                 closed_at,
                 closed_into: closing.map(|later| later.destination_asset.clone()),
                 cycle_id: route.cycle_id.clone(),
+                sleeve: route.sleeve.clone(),
                 route_id: route.route_id.clone(),
                 source_asset: route.source_asset.clone(),
                 destination_asset: route.destination_asset.clone(),
@@ -452,6 +459,7 @@ mod tests {
         RouteRecord {
             timestamp: at.into(),
             cycle_id: String::new(),
+            sleeve: String::new(),
             route_id: format!("{from}>{to}"),
             source_asset: from.into(),
             destination_asset: to.into(),
@@ -632,4 +640,24 @@ mod tests {
         assert_eq!(parked[0].pnl_usdt, Some(dec!(-0.5)));
     }
 
+    #[test]
+    fn each_sleeve_closes_its_own_trade_in_a_shared_asset() {
+        let in_sleeve = |sleeve: &str, mut r: RouteRecord| {
+            r.sleeve = sleeve.into();
+            r
+        };
+        // fast and core both buy ETH; core sells first, then fast.
+        let routes = vec![
+            in_sleeve("fast", route("2026-11-01T00:00:00Z", "USDT", "ETH", dec!(60), dec!(60), dec!(60), dec!(0.02))),
+            in_sleeve("core", route("2026-11-01T01:00:00Z", "USDT", "ETH", dec!(30), dec!(30), dec!(30), dec!(0.01))),
+            in_sleeve("core", route("2026-11-02T00:00:00Z", "ETH", "USDT", dec!(33), dec!(33), dec!(0.01), dec!(33))),
+            in_sleeve("fast", route("2026-11-03T00:00:00Z", "ETH", "USDT", dec!(54), dec!(54), dec!(0.02), dec!(54))),
+        ];
+        let trades = build_trades(&routes, |_| None, now());
+        assert_eq!((trades[0].sleeve.as_str(), trades[0].closed_at.as_deref()), ("fast", Some("2026-11-03T00:00:00Z")));
+        assert_eq!((trades[1].sleeve.as_str(), trades[1].closed_at.as_deref()), ("core", Some("2026-11-02T00:00:00Z")));
+        // core gained 3 on its 0.01 ETH, fast lost 6 on its 0.02 ETH.
+        assert_eq!((trades[0].pnl_usdt, trades[0].status), (Some(dec!(-6)), TradeStatus::Loss));
+        assert_eq!((trades[1].pnl_usdt, trades[1].status), (Some(dec!(3)), TradeStatus::Win));
+    }
 }

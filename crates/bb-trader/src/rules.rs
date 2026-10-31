@@ -31,9 +31,10 @@
 //! `data/scoreboard/latest.json`), and per sleeve `edge_horizon` (`1h`, `24h` or `7d`)
 //! with empty `weights`. Style `fixed` refuses every `edge_*` field.
 //!
-//! Until sleeves are booked and decided separately (Phase 53 D3-D5) the trader runs one
-//! sleeve: a file with more than one sleeve holding a share, a horizon filter other than
-//! `any`, or a `risk_off_below` is refused, so no file promises what the trader does not do.
+//! Each sleeve decides on its own ([`crate::decider`], Phase 53 D5): its `horizon` filters
+//! its candidates by their own asset tag's dominant 7d horizon, and while its market-wide
+//! score (its weighted `market.*` names) is below `risk_off_below` it moves to its
+//! best-scoring `defensive` asset.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -224,6 +225,12 @@ impl RawSleeve {
         if name.is_empty() {
             return Err("a sleeve has a blank name".into());
         }
+        if !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(format!("sleeve name {name:?}: use letters, digits, _ or -"));
+        }
         let at = |what: String| format!("sleeve {name}: {what}");
         if !(0.0..=1.0).contains(&self.share) {
             return Err(at(format!("share {} is not between 0 and 1", self.share)));
@@ -319,7 +326,6 @@ impl Rule {
             edge,
             sleeves,
         };
-        rule.check_supported()?;
         Ok(rule)
     }
 
@@ -330,44 +336,21 @@ impl Rule {
         Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// Refuse what the trader cannot carry out yet (see the module docs).
-    fn check_supported(&self) -> Result<(), String> {
-        let funded: Vec<&str> = self
-            .sleeves
-            .iter()
-            .filter(|s| s.share > 0.0)
-            .map(|s| s.name.as_str())
-            .collect();
-        if funded.len() > 1 {
-            return Err(format!(
-                "sleeves {} all hold a share: the trader runs one sleeve until sleeve holdings are booked (Phase 53 D3-D5)",
-                funded.join(", ")
-            ));
-        }
-        for sleeve in &self.sleeves {
-            if sleeve.horizon != Horizon::Any {
-                return Err(format!(
-                    "sleeve {}: horizon filters come with per-sleeve decisions (Phase 53 D5); use \"any\"",
-                    sleeve.name
-                ));
-            }
-            if sleeve.risk_off_below.is_some() {
-                return Err(format!(
-                    "sleeve {}: risk-off comes with per-sleeve decisions (Phase 53 D5); use null",
-                    sleeve.name
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// The sleeve the trader runs: the one holding the share (the shares sum to 1 and only
-    /// one sleeve may hold any, so there is exactly one).
+    /// The first sleeve holding a share: the sleeve the offline backtest runs (single-sleeve
+    /// until Phase 53 E1). The live trader decides every active sleeve ([`Sleeve::active`]).
     pub fn trading_sleeve(&self) -> &Sleeve {
         self.sleeves
             .iter()
             .find(|s| s.share > 0.0)
             .unwrap_or(&self.sleeves[0])
+    }
+}
+
+impl Sleeve {
+    /// Whether the trader decides this sleeve: it has a share of the portfolio or holds
+    /// something (a 0-share sleeve with nothing is skipped and writes no rows).
+    pub fn active(&self, holds: bool) -> bool {
+        self.share > 0.0 || holds
     }
 }
 
@@ -493,6 +476,10 @@ pub(crate) mod tests {
                 Box::new(|v| v["rules_version"] = " ".into()),
             ),
             (
+                "sleeve name \"*\"",
+                Box::new(|v| v["sleeves"][0]["name"] = "*".into()),
+            ),
+            (
                 "unknown variant `vibes`",
                 Box::new(|v| v["style"] = "vibes".into()),
             ),
@@ -538,24 +525,6 @@ pub(crate) mod tests {
                     v["sleeves"].as_array_mut().unwrap().push(twin);
                 }),
             ),
-            // Not carried out before per-sleeve decisions: refused, not ignored.
-            (
-                "all hold a share",
-                Box::new(|v| {
-                    v["sleeves"][0]["share"] = 0.5.into();
-                    let mut extra = core.clone();
-                    extra["share"] = 0.5.into();
-                    v["sleeves"].as_array_mut().unwrap().push(extra);
-                }),
-            ),
-            (
-                "horizon filters",
-                Box::new(|v| v["sleeves"][0]["horizon"] = "long".into()),
-            ),
-            (
-                "risk-off",
-                Box::new(|v| v["sleeves"][0]["risk_off_below"] = (-0.2).into()),
-            ),
         ];
         for (reason, edit) in &cases {
             let err = with(edit.as_ref()).unwrap_err();
@@ -568,6 +537,25 @@ pub(crate) mod tests {
         })
         .unwrap();
         assert_eq!(ok.trading_sleeve().name, "fast");
+        // Phase 53 D5: two funded sleeves, a horizon filter and a risk-off level load.
+        let split = with(&|v| {
+            v["sleeves"][0]["share"] = 0.6.into();
+            v["sleeves"][0]["horizon"] = "short".into();
+            let mut core = core.clone();
+            core["share"] = 0.4.into();
+            core["horizon"] = "long".into();
+            core["risk_off_below"] = (-0.2).into();
+            core["defensive"] = serde_json::json!(["USDT", "PAXG", "XAUT"]);
+            v["sleeves"].as_array_mut().unwrap().push(core);
+        })
+        .unwrap();
+        let core = &split.sleeves[1];
+        assert_eq!(
+            (core.share, core.horizon, core.risk_off_below),
+            (0.4, Horizon::Long, Some(-0.2))
+        );
+        assert_eq!(core.defensive, ["USDT", "PAXG", "XAUT"]);
+        assert!(core.active(false) && !ok.sleeves[1].active(false) && ok.sleeves[1].active(true));
         let err = Rule::load(Path::new("/nonexistent/rule.json")).unwrap_err();
         assert!(err.contains("/nonexistent/rule.json"), "{err}");
     }

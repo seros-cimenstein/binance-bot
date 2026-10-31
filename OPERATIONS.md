@@ -335,10 +335,25 @@ shares sum to 1), `horizon` (`any`, `short`, `swing`, `long`), `defensive`
 assets, `risk_off_below` (`null` = never), `buy_above`, `sell_below` (not
 above `buy_above`), `min_posters` and `weights` by signal name. Unknown fields,
 an unknown signal, shares not summing to 1, a missing or unreadable file: the
-trader refuses to start. Until sleeve holdings are booked separately (Phase 53
-D3-D5) the trader runs the one sleeve holding a share and refuses a file with
-two funded sleeves, a horizon filter other than `any` or a `risk_off_below`
-(operator, 2026-10-31). `run_config.rule` records the path, style and sleeves.
+trader refuses to start, as for a sleeve name other than letters, digits, `_`
+or `-`. `run_config.rule` records the path, style and sleeves.
+
+Sleeves (Phase 53 D5, operator 2026-10-31): every sleeve with a share or a
+holding decides on its own each tick (a 0-share sleeve holding nothing, like
+the shipped `core`, is skipped and writes no rows). Its own decision key and
+hourly heartbeat decide when it writes its decision row; rows and its route
+rows carry `sleeve`. A `horizon` other than `any` buys only coins whose own
+asset tag's 7d horizon mix leans that way (the largest of short, swing and
+long; ties count for each; no stated horizon: not bought); held coins are
+always scored and may be sold. The sleeve's market-wide score is `Σ weight ×
+value` over its weighted `market.*` names (0 without a feed); below
+`risk_off_below` the sleeve moves to the `defensive` asset with the highest
+score on its other names among those priced (USDT counts 0, ties go to the
+earlier one listed): it sells a holding that is not that asset and buys it (no
+buy level; sized and min-notional checked as any buy), and buys nothing else;
+the row says "risk-off". After a sleeve's routes ran, later sleeves decide on
+the next tick, once balances are reloaded. Trades and trade memory pair each
+buy with the next sale of the same asset by the same sleeve.
 
 Style `edge` (`crate::edge`; operator 2026-10-30 "Both, later decide", the
 formula chosen 2026-10-31): the weights follow the tag scoreboard instead of
@@ -359,7 +374,7 @@ valid scoreboard: …)"). No edge rule is shipped or enabled.
 
 ### The algorithm
 
-`crate::decider` decides on every tick with the funded sleeve of the operator's
+`crate::decider` decides on every tick for each active sleeve of the operator's
 rule file. It reads the wallet and the tags feed, and the prices of
 the coins it may buy (the tradable assets the feed's live asset tags reach,
 directly or through a proxy, with an eligible USDT market,

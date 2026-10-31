@@ -123,6 +123,8 @@ fn selected_decimal(row: &Value, field: &str) -> Option<Decimal> {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TradeOutcome {
     pub timestamp: String,
+    /// The sleeve that placed the route (empty before Phase 53 D5).
+    pub sleeve: String,
     pub route_id: String,
     pub source_asset: String,
     pub destination_asset: String,
@@ -141,7 +143,7 @@ pub struct TradeOutcome {
     pub route_friction_bps: Option<f64>,
 }
 
-/// The asset bought by the last submitted route.
+/// The asset bought by a sleeve's last submitted route.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CurrentHolding {
     /// `open`, `cash` (parked in cash or fiat), `not_current` or `unknown`.
@@ -183,8 +185,9 @@ pub struct TradeMemory {
     pub recent_trade_count: usize,
     /// Consecutive trailing losing outcomes (information only).
     pub recent_loss_streak: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_holding: Option<CurrentHolding>,
+    /// Per sleeve (Phase 53 D5; `""` for routes from before sleeves), what its last
+    /// submitted route bought.
+    pub current_holdings: BTreeMap<String, CurrentHolding>,
     pub recent_outcomes: Vec<TradeOutcome>,
 }
 
@@ -204,12 +207,12 @@ impl TradeMemory {
             .iter()
             .filter(|row| row_status(row) == "submitted" && row_attempted_submission(row))
             .collect();
-        let Some(last) = submitted.last() else {
+        if submitted.is_empty() {
             return Self::empty(
                 "empty",
                 "no submitted Bot Spot routes in audit history".into(),
             );
-        };
+        }
         let records: Vec<RouteRecord> = submitted.iter().map(|row| route_record(row)).collect();
         let mark = |asset: &str| {
             Some(Mark {
@@ -229,7 +232,7 @@ impl TradeMemory {
             reason: None,
             recent_trade_count: submitted.len(),
             recent_loss_streak: loss_streak(&recent),
-            current_holding: Some(current_holding(last, trades.last(), free, &value_usdt)),
+            current_holdings: current_holdings(&submitted, &records, &trades, free, &value_usdt),
             recent_outcomes: recent,
         }
     }
@@ -240,10 +243,36 @@ impl TradeMemory {
             reason: Some(reason),
             recent_trade_count: 0,
             recent_loss_streak: 0,
-            current_holding: None,
+            current_holdings: BTreeMap::new(),
             recent_outcomes: Vec::new(),
         }
     }
+}
+
+/// Each sleeve's last submitted route as its [`CurrentHolding`].
+fn current_holdings(
+    submitted: &[&Value],
+    records: &[RouteRecord],
+    trades: &[Trade],
+    free: &BTreeMap<String, Decimal>,
+    value_usdt: &impl Fn(&str, Decimal) -> Option<Decimal>,
+) -> BTreeMap<String, CurrentHolding> {
+    let mut last: BTreeMap<&str, usize> = BTreeMap::new();
+    for (index, record) in records.iter().enumerate() {
+        last.insert(record.sleeve.as_str(), index);
+    }
+    last.into_iter()
+        .map(|(sleeve, index)| {
+            let holding = current_holding(
+                submitted[index],
+                records[index].bought_qty,
+                trades.get(index),
+                free,
+                value_usdt,
+            );
+            (sleeve.to_owned(), holding)
+        })
+        .collect()
 }
 
 /// Net result of `trade` in bps of what it cost.
@@ -265,6 +294,7 @@ fn outcomes(submitted: &[&Value], trades: &[Trade]) -> Vec<TradeOutcome> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned(),
+                sleeve: trade.sleeve.clone(),
                 route_id: row_route_id(row),
                 source_asset: row_asset(row, "source_asset"),
                 destination_asset: destination.clone(),
@@ -299,9 +329,11 @@ fn outcomes(submitted: &[&Value], trades: &[Trade]) -> Vec<TradeOutcome> {
         .collect()
 }
 
-/// What the last submitted route bought; `trade` is that route in the trade ledger.
+/// What a sleeve's last submitted route bought (`bought`: the quantity it received, capped
+/// at the free balance two sleeves may share); `trade` is that route in the trade ledger.
 fn current_holding(
     last: &Value,
+    bought: Option<Decimal>,
     trade: Option<&Trade>,
     free: &BTreeMap<String, Decimal>,
     value_usdt: &impl Fn(&str, Decimal) -> Option<Decimal>,
@@ -325,6 +357,7 @@ fn current_holding(
         .get(&destination)
         .copied()
         .filter(|a| *a > Decimal::ZERO)
+        .map(|free| bought.filter(|b| *b > Decimal::ZERO).map_or(free, |b| b.min(free)))
     else {
         return CurrentHolding {
             status: "not_current",
@@ -464,7 +497,7 @@ pub(crate) mod tests {
         let memory = TradeMemory::from_rows(&rows, &free, value, 8);
         assert_eq!(memory.status, "ready");
         assert_eq!(memory.recent_trade_count, 1);
-        let holding = memory.current_holding.unwrap();
+        let holding = &memory.current_holdings[""];
         assert_eq!(holding.status, "open");
         assert_eq!(holding.entry_value_usdt, Some(dec!(100.5)));
         assert_eq!(holding.current_value_usdt, Some(dec!(105.000)));
@@ -502,7 +535,7 @@ pub(crate) mod tests {
         // An old exit-plan sell (Phase 45, removed) counts as an ordinary sell.
         assert_eq!(memory.recent_loss_streak, 0);
         assert_eq!(
-            memory.current_holding.unwrap().status,
+            memory.current_holdings[""].status,
             "not_current",
             "BTC not held any more"
         );
@@ -531,12 +564,41 @@ pub(crate) mod tests {
         };
         let free = BTreeMap::from([("USDT".to_owned(), dec!(15.25))]);
         let holding = TradeMemory::from_rows(&parked, &free, value, 8)
-            .current_holding
+            .current_holdings
+            .remove("")
             .unwrap();
         assert_eq!(
             (holding.status, holding.current_value_usdt, holding.unrealized_pnl_bps),
             ("cash", Some(dec!(15.25)), None)
         );
+    }
+
+    #[test]
+    fn each_sleeve_has_its_own_current_holding_in_a_shared_asset() {
+        let in_sleeve = |sleeve: &str, from: &str, to: &str, spent: f64, got: f64, qty: f64| {
+            let mut row = submitted_row(from, to, spent, got);
+            row["sleeve"] = json!(sleeve);
+            row["selected_route"]["output_amount"] = json!(qty);
+            row
+        };
+        // fast buys 0.02 ETH, core 0.01 ETH, then core sells its own.
+        let rows = AuditRows {
+            rows: vec![
+                in_sleeve("fast", "USDT", "ETH", 60.0, 60.0, 0.02),
+                in_sleeve("core", "USDT", "ETH", 30.0, 30.0, 0.01),
+                in_sleeve("core", "ETH", "USDT", 33.0, 33.0, 33.0),
+            ],
+            error: None,
+        };
+        let free = BTreeMap::from([("ETH".to_owned(), dec!(0.02)), ("USDT".to_owned(), dec!(33))]);
+        let memory = TradeMemory::from_rows(&rows, &free, value, 8);
+        let fast = &memory.current_holdings["fast"];
+        assert_eq!((fast.status, fast.asset.as_deref(), fast.amount), ("open", Some("ETH"), Some(dec!(0.02))));
+        assert_eq!(memory.current_holdings["core"].status, "cash");
+        let sleeves: Vec<&str> = memory.recent_outcomes.iter().map(|o| o.sleeve.as_str()).collect();
+        assert_eq!(sleeves, ["fast", "core", "core"]);
+        // core's ETH trade closed at its own sale (+3), fast's is still open.
+        assert_eq!((memory.recent_outcomes[1].status, memory.recent_outcomes[0].status), ("closed", "open"));
     }
 
     #[test]

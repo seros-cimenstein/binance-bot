@@ -70,9 +70,10 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
   before the decision counts, else the sleeve holds with no orders and the row
   says why; none shipped). A missing file, an unknown signal, shares not
   summing to 1 or a sell level above the buy level: the trader refuses to
-  start. Until sleeves are booked separately it runs the one sleeve holding a
-  share and refuses a second funded sleeve, a horizon filter or a risk-off
-  level.
+  start. Each sleeve with a share or a holding decides on its own (own decision
+  key, heartbeat and rows): its `horizon` filters candidates by their own tag's
+  7d horizon mix, and below `risk_off_below` (its weighted `market.*` score)
+  it moves to its best-scoring `defensive` asset (USDT, PAXG, XAUT).
 - **Orders.** A held coin scoring below the sell level is sold into USDT (exactly
   the sleeve's quantity); with nothing held, the best coin at or above the buy
   level is bought for the sleeve's share of the portfolio value (USDT plus what

@@ -151,6 +151,10 @@ pub struct AuditRow {
     pub row_type: RowType,
     pub cycle_id: String,
     pub session_id: String,
+    /// The rule sleeve the row belongs to (Phase 53 D5: decision rows and their route rows;
+    /// absent on older rows and on rows for the whole trader, such as halts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sleeve: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator_review: Option<OperatorReview>,
     /// Cycle summaries: the trader's non-secret run configuration
@@ -198,6 +202,7 @@ impl AuditRow {
             row_type,
             cycle_id: String::new(),
             session_id: String::new(),
+            sleeve: None,
             operator_review: None,
             run_config: None,
             tags: None,

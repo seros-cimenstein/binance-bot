@@ -80,8 +80,10 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
    Pi's paper state migrates on its first F2 tick: its wallet holds no coin
    position, so nothing is adopted), and orders sized per sleeve (D4: buys
    spend share × portfolio value capped at free USDT, below-min-notional
-   orders hold). Next: per-sleeve decisions and risk-off, row budget (D5,
-   D6), backtest, dashboard, plan-only rollout. The pre-change binary
+   orders hold), and per-sleeve decisions (D5: horizon filter, risk-off to a
+   defensive asset, per-sleeve rows and heartbeats; the shipped rule's `core`
+   has share 0 and writes nothing). Next: the decision-row budget (D6),
+   backtest, dashboard, plan-only rollout. The pre-change binary
    for E1's comparison is kept in `~/binance-bot-prechange/` (README there).
    Then a tuning phase where the operator picks weights, rule style and the
    sleeve split.

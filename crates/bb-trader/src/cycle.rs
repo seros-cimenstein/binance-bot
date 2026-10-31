@@ -100,6 +100,8 @@ pub struct CycleState {
     pub algo: Option<Value>,
     /// The last live route's arrival: its destination and the quantity that arrived.
     pub last_fill: Option<(String, Decimal)>,
+    /// The sleeve deciding this cycle (recorded on its route and summary rows).
+    pub sleeve: Option<String>,
 }
 
 /// What a decision is recorded against: its context, the market view and the balances.
@@ -382,6 +384,13 @@ impl Runtime {
             .collect();
         let summary = if let Some(reason) = &verdict.blocked {
             format!("rule-based decider: hold, no orders ({reason})")
+        } else if verdict.risk_off && said.is_empty() {
+            let (to, score) = verdict.best.clone().unwrap_or_else(|| ("USDT".to_owned(), 0.0));
+            format!(
+                "rule-based decider: risk-off (market score {:+.3} < risk-off level {:+}), holding defensive {to} (score {score:+.3})",
+                verdict.market_score,
+                sleeve.risk_off_below.unwrap_or_default()
+            )
         } else if said.is_empty() {
             let best = verdict.best.as_ref().map_or_else(
                 || "nothing scored".to_owned(),
@@ -438,6 +447,8 @@ impl Runtime {
                 "portfolio_value_usdt": sizing.portfolio_value.round_dp(8).normalize().to_string(),
             },
             "below_min_notional": below,
+            "market_score": verdict.market_score,
+            "risk_off": verdict.risk_off,
         });
         report.error = failure;
         let mut guard = self.cycle.lock().await;
@@ -449,6 +460,13 @@ impl Runtime {
             });
         }
         report
+    }
+
+    /// Name the sleeve the active cycle decides for (its route and summary rows carry it).
+    pub async fn set_cycle_sleeve(&self, sleeve: &str) {
+        if let Some(state) = self.cycle.lock().await.as_mut() {
+            state.sleeve = Some(sleeve.to_owned());
+        }
     }
 
     /// Install the snapshot as the active cycle.
@@ -478,6 +496,7 @@ impl Runtime {
             halted: None,
             algo: None,
             last_fill: None,
+            sleeve: None,
         });
         context
     }
@@ -517,6 +536,7 @@ impl Runtime {
             None => None,
         };
         row.algo = state.algo.clone();
+        row.sleeve = state.sleeve.clone();
         self.audit.append(&row)?;
         Ok((row, state.executions))
     }
@@ -549,6 +569,7 @@ impl Runtime {
         row.candidate_route_count = state.context.candidate_routes.len();
         row.cycle_id = state.cycle_id.clone();
         row.session_id = state.session_id.clone();
+        row.sleeve = state.sleeve.clone();
         self.audit.append(&row)?;
         state.executions.push(ExecutionSummary {
             route_id: row.decision.route_id.clone(),
@@ -1105,6 +1126,7 @@ mod tests {
             best: Some(("SOL".into(), 0.6)),
             held: Vec::new(),
             blocked: None,
+            ..Verdict::default()
         };
         let token = CancellationToken::new();
         // A 0.4 share of a 100 USDT portfolio: the plan is quoted, re-quoted and recorded for
@@ -1168,6 +1190,7 @@ mod tests {
             best: Some(("SOL".into(), 0.6)),
             held: vec![("BTC".into(), -0.5)],
             blocked: None,
+            ..Verdict::default()
         };
         let owns_btc = Sizing {
             owned: BTreeMap::from([("BTC".to_owned(), dec!(0.5))]),
