@@ -37,7 +37,7 @@ use std::process::ExitCode;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use rust_decimal::prelude::ToPrimitive;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::algo_backtest::engine::LIQUID;
 use crate::book::CoinView;
@@ -272,7 +272,7 @@ struct CacheFile {
 }
 
 /// What a sample is measured against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Target {
     /// Each reached tradable asset (per-asset names).
@@ -285,7 +285,7 @@ pub enum Target {
 }
 
 /// One half's (or the whole history's) numbers.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Stats {
     pub n: usize,
     /// Signal-weighted mean of sign(v) × (return − random-hour return), percent.
@@ -301,11 +301,11 @@ pub struct Stats {
 }
 
 /// One name × target × horizon.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Row {
     pub name: String,
     pub target: Target,
-    pub horizon: &'static str,
+    pub horizon: String,
     pub all: Stats,
     pub older: Stats,
     pub newer: Stats,
@@ -314,7 +314,7 @@ pub struct Row {
 }
 
 /// The history a scoreboard used.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct History {
     pub from: String,
     pub to: String,
@@ -324,9 +324,9 @@ pub struct History {
 }
 
 /// A scoreboard file.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scoreboard {
-    pub schema: &'static str,
+    pub schema: String,
     pub generated_at: String,
     /// Nothing after this time was used.
     pub as_of: String,
@@ -337,7 +337,7 @@ pub struct Scoreboard {
     pub available_at_ms: Option<i64>,
     pub history: History,
     /// Per horizon: the latest signal time used and its outcome time (`signals_to` + h).
-    pub horizons: BTreeMap<&'static str, HorizonSpan>,
+    pub horizons: BTreeMap<String, HorizonSpan>,
     pub fee_bps: f64,
     pub min_posters: u64,
     pub assets: usize,
@@ -345,7 +345,7 @@ pub struct Scoreboard {
 }
 
 /// The signals one horizon's rows cover.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HorizonSpan {
     pub signals_to: String,
     pub outcomes_to: String,
@@ -358,6 +358,32 @@ impl Scoreboard {
     /// observable by then.
     pub fn usable_at(&self, decision_ms: i64) -> bool {
         self.available_at_ms.is_some_and(|t| t <= decision_ms)
+    }
+
+    /// Parse a scoreboard file's text: refuses another schema; `available_at_ms` and each
+    /// horizon's `signals_to_ms` come from their timestamps.
+    pub fn parse(text: &str) -> std::result::Result<Self, String> {
+        let mut board: Scoreboard = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if board.schema != SCHEMA {
+            return Err(format!("schema {:?}, expected {SCHEMA}", board.schema));
+        }
+        let ms = |t: &str| {
+            DateTime::parse_from_rfc3339(t)
+                .map(|d| d.timestamp_millis())
+                .map_err(|e| format!("bad timestamp {t:?}: {e}"))
+        };
+        board.available_at_ms = board.available_at.as_deref().map(ms).transpose()?;
+        for span in board.horizons.values_mut() {
+            span.signals_to_ms = ms(&span.signals_to)?;
+        }
+        Ok(board)
+    }
+
+    /// Read and parse the scoreboard file at `path`.
+    pub fn read(path: &Path) -> std::result::Result<Self, String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
     }
 }
 
@@ -604,7 +630,7 @@ impl<'a> Study<'a> {
                 Row {
                     name: names[*i].to_string(),
                     target: *target,
-                    horizon: h.as_str(),
+                    horizon: h.as_str().to_owned(),
                     all: older.merge(newer).stats(fee_pct),
                     decayed: o.n > 0
                         && n.n > 0
@@ -615,7 +641,7 @@ impl<'a> Study<'a> {
                 }
             })
             .collect();
-        let horizons: BTreeMap<&'static str, HorizonSpan> = self
+        let horizons: BTreeMap<String, HorizonSpan> = self
             .signals_to
             .iter()
             .map(|(h, f)| {
@@ -624,12 +650,12 @@ impl<'a> Study<'a> {
                     outcomes_to: iso(f + span_ms(*h)),
                     signals_to_ms: *f,
                 };
-                (h.as_str(), span)
+                (h.as_str().to_owned(), span)
             })
             .collect();
         let available_at_ms = self.signals_to.iter().map(|(h, f)| f + span_ms(*h)).max();
         Scoreboard {
-            schema: SCHEMA,
+            schema: SCHEMA.to_owned(),
             generated_at,
             as_of: iso(self.params.as_of_ms),
             available_at: available_at_ms.map(iso),

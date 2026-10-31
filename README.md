@@ -64,11 +64,15 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
   stance, needs the sleeve's `min_posters`, `momentum.1h` the coin's own 1h
   move, and the tag and market-wide signals). The file holds `rules_version`
   (recorded on every row), sleeves (share, horizon filter, defensive assets,
-  risk-off level, buy and sell levels, poster minimum, weights) and `style`
-  `fixed`. A missing file, an unknown signal, shares not summing to 1 or a
-  sell level above the buy level: the trader refuses to start. Until sleeves
-  are booked separately it runs the one sleeve holding a share and refuses a
-  second funded sleeve, a horizon filter or a risk-off level.
+  risk-off level, buy and sell levels, poster minimum, weights) and `style`:
+  `fixed` (the operator's weights) or `edge` (weights from the tag scoreboard's
+  measured edge, scaled and capped; only a scoreboard whose outcomes all closed
+  before the decision counts, else the sleeve holds with no orders and the row
+  says why; none shipped). A missing file, an unknown signal, shares not
+  summing to 1 or a sell level above the buy level: the trader refuses to
+  start. Until sleeves are booked separately it runs the one sleeve holding a
+  share and refuses a second funded sleeve, a horizon filter or a risk-off
+  level.
 - **Orders.** A held coin scoring below the sell level is sold into USDT; with
   nothing held, the best coin at or above the buy level is bought with all
   USDT. Every order goes through `execute_route` and every hard-safety check

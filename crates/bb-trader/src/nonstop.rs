@@ -209,6 +209,10 @@ struct Decision {
     /// Every held coin and buy candidate with its score terms, highest score first
     /// (recorded on the decision row as `algo.coins`).
     coins: Vec<serde_json::Value>,
+    /// The sleeve as decided (edge style: with the scoreboard's weights).
+    sleeve: crate::rules::Sleeve,
+    /// Edge style: the scoreboard evidence (`algo.edge`).
+    edge: Option<serde_json::Value>,
 }
 
 /// The nonstop trader: the runtime plus the state kept between ticks.
@@ -221,10 +225,18 @@ pub struct Nonstop {
     /// The last recorded decision key and when it was recorded.
     last: Option<(String, i64)>,
     stopped: bool,
+    /// Edge-style rules: the scoreboard, re-read on its schedule.
+    edge: Option<crate::edge::EdgeBook>,
 }
 
 impl Nonstop {
     pub fn new(runtime: Arc<Runtime>) -> Self {
+        let edge = runtime
+            .config
+            .algo_rule
+            .edge
+            .clone()
+            .map(crate::edge::EdgeBook::new);
         Self {
             runtime,
             slow: None,
@@ -233,6 +245,7 @@ impl Nonstop {
             hours: HourBook::default(),
             last: None,
             stopped: false,
+            edge,
         }
     }
 
@@ -279,6 +292,9 @@ impl Nonstop {
         self.refresh(now_ms).await?;
         let (tags, candidates, held) = self.inputs()?;
         self.poll_prices(now_ms, &candidates, &held).await;
+        if let Some(book) = &mut self.edge {
+            book.refresh(now_ms);
+        }
         let decision = self.decide(now_ms, tags, candidates, &held)?;
         let slow = self.slow_state()?;
         let mut context = self.context(slow, &decision);
@@ -331,6 +347,9 @@ impl Nonstop {
         if !self.poll_prices(now_ms, &candidates, &held).await && !force {
             return Ok(Tick::Unchanged);
         }
+        if let Some(book) = &mut self.edge {
+            book.refresh(now_ms);
+        }
         let decision = self.decide(now_ms, tags, candidates, &held)?;
         if !self.due(&decision.key, now_ms, force) {
             return Ok(Tick::Unchanged);
@@ -352,13 +371,18 @@ impl Nonstop {
             view: Arc::clone(&slow.view),
             balances: slow.balances.clone(),
         };
-        let sleeve = config.algo_rule.trading_sleeve();
         self.runtime
             .begin_cycle(&cycle_id, ALGO_SESSION_ID, snapshot)
             .await;
         let report = self
             .runtime
-            .run_algo_turn(decision.verdict, sleeve, decision.coins, shutdown)
+            .run_algo_turn(
+                decision.verdict,
+                &decision.sleeve,
+                decision.coins,
+                decision.edge,
+                shutdown,
+            )
             .await;
         if shutdown.is_cancelled() {
             self.runtime.begin_shutdown();
@@ -624,15 +648,41 @@ impl Nonstop {
             TagsNow::Fresh(feed) => (Some(&feed.assets), Some((&feed.feed, &feed.reach))),
             TagsNow::Unavailable { .. } => (None, None),
         };
-        let sleeve = self.runtime.config.algo_rule.trading_sleeve();
+        let fixed = self.runtime.config.algo_rule.trading_sleeve();
+        // Edge style: the sleeve weighted by the scoreboard valid at `now_ms`, or no
+        // evidence (hold, no orders, the reason on the row).
+        let (sleeve, edge, missing) = match &self.edge {
+            None => (fixed.clone(), None, None),
+            Some(book) => match book.evidence(fixed, now_ms) {
+                Ok(evidence) => {
+                    let mut sleeve = fixed.clone();
+                    sleeve.weights = evidence.weights;
+                    (sleeve, Some(evidence.record), None)
+                }
+                Err((reason, record)) => (fixed.clone(), Some(record), Some(reason)),
+            },
+        };
         let inputs = Inputs {
             snap: &step,
             book: &book,
             tags: assets,
             feed,
         };
-        let verdict = decide(&inputs, sleeve);
-        let scorer = crate::decider::Scorer::new(inputs, sleeve);
+        if let Some(reason) = missing {
+            let verdict = Verdict::no_evidence(format!("no valid scoreboard: {reason}"));
+            return Ok(Decision {
+                key: decision_key(&verdict),
+                verdict,
+                tags,
+                equity: slow.balances.free_value_usdt(&slow.view),
+                coins: Vec::new(),
+                sleeve,
+                edge,
+            });
+        }
+        let sleeve_ref = &sleeve;
+        let verdict = decide(&inputs, sleeve_ref);
+        let scorer = crate::decider::Scorer::new(inputs, sleeve_ref);
         let mut scored: Vec<(f64, serde_json::Value)> = step
             .liquid_top
             .iter()
@@ -665,6 +715,8 @@ impl Nonstop {
             tags,
             equity: slow.balances.free_value_usdt(&slow.view),
             coins: scored.into_iter().map(|(_, coin)| coin).collect(),
+            sleeve,
+            edge,
         })
     }
 
@@ -702,6 +754,9 @@ pub fn ticker_change_pct(market: &bb_pool::MarketSnapshot, now_ms: i64) -> Optio
 /// What the rule decided, without scores: its orders, or the coins it keeps (cash when
 /// none). Rows are written when this changes.
 pub fn decision_key(verdict: &Verdict) -> String {
+    if let Some(reason) = &verdict.blocked {
+        return format!("hold, no evidence: {reason}");
+    }
     if verdict.actions.is_empty() {
         let kept: Vec<&str> = verdict
             .held
@@ -976,6 +1031,58 @@ mod tests {
         std::fs::remove_file(dir.path().join("stop")).unwrap();
         let tick = trader.tick(now + 60_000, false, &token).await.unwrap();
         assert!(!matches!(tick, Tick::Stopped), "{tick:?}");
+    }
+
+    #[tokio::test]
+    async fn an_edge_rule_holds_without_valid_evidence_and_trades_on_the_scoreboard() {
+        use crate::edge::tests::{edge_rule_text, fixture_available_at};
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let now = bb_core::time::now_ms();
+        market(&server, dir.path(), now, false).await;
+        let board = dir.path().join("latest.json");
+        let rule = dir.path().join("edge-rule.json");
+        std::fs::write(&rule, edge_rule_text(board.to_str().unwrap(), "24h")).unwrap();
+        let config = || {
+            let mut config = trader_config(dir.path(), HOLD);
+            config.algo_rule = crate::rules::Rule::load(&rule).unwrap();
+            config
+        };
+        let mut trader = nonstop(&server, config(), now);
+        let token = CancellationToken::new();
+        // ETH moved +7% in 1h: any fixed momentum rule buys it. Without a scoreboard the
+        // edge rule holds, sends nothing and says why.
+        trader.tick(now, false, &token).await.unwrap();
+        let first = rows(dir.path());
+        assert_eq!(first.len(), 1, "no route row: {first:?}");
+        let reason = first[0]["decision"]["reason"].as_str().unwrap();
+        assert!(reason.contains("hold, no orders (no valid scoreboard: cannot read"), "{reason}");
+        assert_eq!(first[0]["algo"]["edge"]["status"], "unavailable");
+        assert_eq!(first[0]["algo"]["orders"], json!([]));
+        // A scoreboard whose outcomes close after the decision time is no evidence either.
+        std::fs::write(&board, fixture_available_at(now + 3_600_000)).unwrap();
+        trader.tick(now + 15_000, false, &token).await.unwrap();
+        let second = rows(dir.path());
+        assert_eq!(second.len(), 2);
+        let reason = second[1]["decision"]["reason"].as_str().unwrap();
+        assert!(reason.contains("is after the decision time"), "{reason}");
+        assert_eq!(requests(&server, "/api/v3/order/test").await, 0);
+        // A usable one weights the sleeve: momentum.24h −1.2 on ETH's −4.2% day gives
+        // +0.504 ≥ +0.5, a buy; momentum.1h has no weight on this board.
+        std::fs::write(&board, fixture_available_at(now - 3_600_000)).unwrap();
+        let fresh = tempfile::tempdir().unwrap();
+        let mut config = config();
+        config.audit_path = fresh.path().join("audit.jsonl");
+        let mut trader = nonstop(&server, config, now);
+        trader.tick(now, false, &token).await.unwrap();
+        let rows = rows(fresh.path());
+        assert_eq!((rows[0]["row_type"].as_str(), rows[0]["decision"]["destination_asset"].as_str()), (Some("route"), Some("ETH")));
+        let algo = &rows[1]["algo"];
+        assert_eq!((algo["edge"]["status"].as_str(), algo["edge"]["weighted"].as_u64()), (Some("valid"), Some(3)));
+        let eth = &algo["coins"][0];
+        assert!((eth["score"].as_f64().unwrap() - 0.504).abs() < 1e-9, "{eth}");
+        assert!(eth["signals"].get("momentum.1h").is_none(), "{eth}");
+        assert_eq!(rows[1]["rules_version"], "edge-test");
     }
 
     #[tokio::test]

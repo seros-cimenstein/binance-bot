@@ -330,7 +330,7 @@ start.
 `/app/config/rules/`). It replaces the env rule (the five weights, the poster
 minimum and `BOT_SPOT_RULES_VERSION`, listed in `REMOVED_VARS`, now ignored with one
 warning). Fields: `rules_version` (recorded on every audit row and in
-`run_config`), `style` `fixed`, and `sleeves`, each with `name`, `share` (the
+`run_config`), `style` (`fixed` or `edge`), and `sleeves`, each with `name`, `share` (the
 shares sum to 1), `horizon` (`any`, `short`, `swing`, `long`), `defensive`
 assets, `risk_off_below` (`null` = never), `buy_above`, `sell_below` (not
 above `buy_above`), `min_posters` and `weights` by signal name. Unknown fields,
@@ -339,6 +339,23 @@ trader refuses to start. Until sleeve holdings are booked separately (Phase 53
 D3-D5) the trader runs the one sleeve holding a share and refuses a file with
 two funded sleeves, a horizon filter other than `any` or a `risk_off_below`
 (operator, 2026-10-31). `run_config.rule` records the path, style and sleeves.
+
+Style `edge` (`crate::edge`; operator 2026-10-30 "Both, later decide", the
+formula chosen 2026-10-31): the weights follow the tag scoreboard instead of
+the operator's numbers. Rule-level `edge_scale`, `edge_cap`,
+`edge_refresh_hours` and `edge_min_t` are required (no defaults),
+`edge_scoreboard` defaults to `data/scoreboard/latest.json`; each sleeve names
+its `edge_horizon` (`1h`, `24h`, `7d`) and has empty `weights`. Every scoreboard
+row at that horizon with |t| ≥ `edge_min_t` and not decayed weighs its signal
+`clamp(edge_scale × excess_pct, ±edge_cap)` (per-asset names from the `assets`
+row, `market.*` names from the `basket` row); the others weigh 0. The trader
+reads the file at start, after `edge_refresh_hours` and after a failed read,
+and uses it for a decision only when it is `tag-scoreboard-v1`, its
+`available_at` (its last outcome's close, which can be days after its history
+ends) is not after the decision time, its `min_posters` equals the sleeve's,
+and it has the horizon. Otherwise the sleeve holds with no orders and the row
+says why (`algo.blocked`, `algo.edge.reason`; decision "hold, no orders (no
+valid scoreboard: …)"). No edge rule is shipped or enabled.
 
 ### The algorithm
 

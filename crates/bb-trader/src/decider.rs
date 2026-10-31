@@ -123,6 +123,22 @@ pub struct Verdict {
     pub best: Option<(String, f64)>,
     /// Each held coin and its score.
     pub held: Vec<(String, f64)>,
+    /// Why the rule could not score at all (an edge rule without a valid scoreboard): no
+    /// orders, nothing scored.
+    pub blocked: Option<String>,
+}
+
+impl Verdict {
+    /// Hold without scoring: no orders, `reason` recorded (an edge rule without valid
+    /// evidence, [`crate::edge`]).
+    pub fn no_evidence(reason: String) -> Self {
+        Self {
+            actions: Vec::new(),
+            best: None,
+            held: Vec::new(),
+            blocked: Some(reason),
+        }
+    }
 }
 
 /// Buy, sell or hold at `inputs.snap.t` with `sleeve` (see the module docs).
@@ -175,6 +191,7 @@ pub fn decide(inputs: &Inputs<'_>, sleeve: &Sleeve) -> Verdict {
         actions,
         best: best.map(|(asset, scored)| (asset, scored.score)),
         held,
+        blocked: None,
     }
 }
 

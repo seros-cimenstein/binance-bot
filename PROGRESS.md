@@ -74,8 +74,9 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
    `BOT_SPOT_ALGO_RULE=config/rules/algo-2026-10-29.json` replaces
    the env rule (weights, poster minimum, `BOT_SPOT_RULES_VERSION`; listed in
    `REMOVED_VARS`); F2 must set it in the Pi's `.env.docker` and drop
-   the three old lines). Next: edge-style rules, sleeves and risk-off
-   (D2-D6), backtest, dashboard, plan-only rollout. The pre-change binary
+   the three old lines) with the edge style available but not shipped (D2:
+   weights from a scoreboard usable at the decision time, else hold). Next:
+   sleeves and risk-off (D3-D6), backtest, dashboard, plan-only rollout. The pre-change binary
    for E1's comparison is kept in `~/binance-bot-prechange/` (README there).
    Then a tuning phase where the operator picks weights, rule style and the
    sleeve split.

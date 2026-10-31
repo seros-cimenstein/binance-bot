@@ -21,7 +21,8 @@
 //!   operator's proxies, baskets, links). [`signals`]: the signal catalog a rule weights,
 //!   by name (legacy `talk.6h`/`stance.6h`, per-asset tag signals through reach,
 //!   market-wide macro and mood, momentum per horizon). [`rules`]: the operator's rule
-//!   file (`BOT_SPOT_ALGO_RULE`: sleeves, levels, weights by signal name).
+//!   file (`BOT_SPOT_ALGO_RULE`: sleeves, levels, weights by signal name; style `fixed`
+//!   or `edge`). [`edge`]: edge-style weights from a point-in-time tag scoreboard.
 //! - [`decider`]: the operator's rule (no LLM); backtested as `biz_algo`.
 //! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
 //! - [`nonstop`]: the trader loop (a tick every 15 s, rows on change plus an hourly
@@ -39,6 +40,7 @@ pub mod config;
 pub mod context;
 pub mod cycle;
 pub mod decider;
+pub mod edge;
 pub mod error;
 pub mod executor;
 pub mod memory;

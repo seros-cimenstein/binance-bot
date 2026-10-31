@@ -14,7 +14,8 @@
 //! ```
 //!
 //! - `rules_version`: the operator's name for the rule, recorded on every audit row.
-//! - `style`: `fixed` (the weights are the operator's numbers).
+//! - `style`: `fixed` (the weights are the operator's numbers) or `edge` (the weights
+//!   follow the measured edge of the scoreboard, [`crate::edge`]).
 //! - per sleeve: `name`; `share` of the portfolio (the shares sum to 1); `horizon` filter
 //!   of its candidates (`any`, `short`, `swing`, `long`); `defensive` assets it may hold
 //!   when risk-off; `risk_off_below` (market-wide score level, `null` = never); `buy_above`
@@ -24,17 +25,27 @@
 //!
 //! A sleeve's score for an asset is `Σ weight × value` over its weights.
 //!
+//! Style `edge` (operator 2026-10-30 "Both, later decide"; fields chosen 2026-10-31) needs,
+//! at the rule level, `edge_scale`, `edge_cap`, `edge_refresh_hours` and `edge_min_t`
+//! (no defaults: they are trading choices) and optionally `edge_scoreboard` (default
+//! `data/scoreboard/latest.json`), and per sleeve `edge_horizon` (`1h`, `24h` or `7d`)
+//! with empty `weights`. Style `fixed` refuses every `edge_*` field.
+//!
 //! Until sleeves are booked and decided separately (Phase 53 D3-D5) the trader runs one
 //! sleeve: a file with more than one sleeve holding a share, a horizon filter other than
 //! `any`, or a `risk_off_below` is refused, so no file promises what the trader does not do.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::scoreboard::HORIZONS;
 use crate::signals::Name;
+
+/// The scoreboard an edge rule reads when `edge_scoreboard` is not set.
+pub const DEFAULT_EDGE_SCOREBOARD: &str = "data/scoreboard/latest.json";
 
 /// How far the shares may sum away from 1 (float noise in a hand-written file).
 const SHARE_TOLERANCE: f64 = 1e-9;
@@ -45,6 +56,26 @@ const SHARE_TOLERANCE: f64 = 1e-9;
 pub enum Style {
     /// The operator's numbers.
     Fixed,
+    /// The scoreboard's measured edge, scaled and capped ([`crate::edge`]).
+    Edge,
+}
+
+/// The edge style's settings (see the module docs).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Edge {
+    #[serde(rename = "edge_scoreboard")]
+    pub scoreboard: PathBuf,
+    /// weight = clamp(scale × excess %, −cap, +cap).
+    #[serde(rename = "edge_scale")]
+    pub scale: f64,
+    #[serde(rename = "edge_cap")]
+    pub cap: f64,
+    /// The scoreboard file is read again after this many hours.
+    #[serde(rename = "edge_refresh_hours")]
+    pub refresh_hours: f64,
+    /// Rows under this |t| give no weight.
+    #[serde(rename = "edge_min_t")]
+    pub min_t: f64,
 }
 
 /// The posts' horizon a sleeve's candidates must lean to.
@@ -68,17 +99,22 @@ pub struct Sleeve {
     pub buy_above: f64,
     pub sell_below: f64,
     pub min_posters: u64,
-    /// Weight per signal, in catalog order.
+    /// Weight per signal, in catalog order (edge style: empty in the file, filled from the
+    /// scoreboard at decision time).
     pub weights: BTreeMap<Name, f64>,
+    /// Edge style: the scoreboard horizon whose rows weight this sleeve.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_horizon: Option<String>,
 }
 
 impl fmt::Display for Sleeve {
-    /// `fast: talk.6h +0, stance.6h +1, momentum.1h +1; buy at score ≥ +0.5, sell below -0.5`.
+    /// `fast: talk.6h +0, stance.6h +1, momentum.1h +1; buy at score ≥ +0.5, sell below -0.5`
+    /// (weights to 3 decimals: edge weights are measured, not typed).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let weights: Vec<String> = self
             .weights
             .iter()
-            .map(|(name, w)| format!("{name} {w:+}"))
+            .map(|(name, w)| format!("{name} {:+}", (w * 1000.0).round() / 1000.0))
             .collect();
         write!(
             f,
@@ -100,6 +136,9 @@ impl fmt::Display for Sleeve {
 pub struct Rule {
     pub rules_version: String,
     pub style: Style,
+    /// Style `edge` only.
+    #[serde(flatten)]
+    pub edge: Option<Edge>,
     pub sleeves: Vec<Sleeve>,
 }
 
@@ -108,7 +147,60 @@ pub struct Rule {
 struct RawRule {
     rules_version: String,
     style: Style,
+    edge_scoreboard: Option<PathBuf>,
+    edge_scale: Option<f64>,
+    edge_cap: Option<f64>,
+    edge_refresh_hours: Option<f64>,
+    edge_min_t: Option<f64>,
     sleeves: Vec<RawSleeve>,
+}
+
+impl RawRule {
+    /// The edge settings: required with style `edge`, refused with `fixed`.
+    fn edge(&self) -> Result<Option<Edge>, String> {
+        let fields = [
+            ("edge_scale", self.edge_scale),
+            ("edge_cap", self.edge_cap),
+            ("edge_refresh_hours", self.edge_refresh_hours),
+            ("edge_min_t", self.edge_min_t),
+        ];
+        if self.style == Style::Fixed {
+            if let Some((name, _)) = fields.iter().find(|(_, v)| v.is_some()) {
+                return Err(format!("{name} is set but style is fixed"));
+            }
+            if self.edge_scoreboard.is_some() {
+                return Err("edge_scoreboard is set but style is fixed".into());
+            }
+            return Ok(None);
+        }
+        let [scale, cap, refresh_hours, min_t] = fields.map(|(name, v)| match v {
+            Some(v) if v.is_finite() => Ok(v),
+            Some(v) => Err(format!("{name} {v} is not a number")),
+            None => Err(format!("style edge needs {name}")),
+        });
+        let (scale, cap, refresh_hours, min_t) = (scale?, cap?, refresh_hours?, min_t?);
+        if cap <= 0.0 {
+            return Err(format!("edge_cap {cap} must be positive"));
+        }
+        if refresh_hours <= 0.0 {
+            return Err(format!(
+                "edge_refresh_hours {refresh_hours} must be positive"
+            ));
+        }
+        if min_t < 0.0 {
+            return Err(format!("edge_min_t {min_t} must not be negative"));
+        }
+        Ok(Some(Edge {
+            scoreboard: self
+                .edge_scoreboard
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_EDGE_SCOREBOARD)),
+            scale,
+            cap,
+            refresh_hours,
+            min_t,
+        }))
+    }
 }
 
 #[derive(Deserialize)]
@@ -123,10 +215,11 @@ struct RawSleeve {
     sell_below: f64,
     min_posters: u64,
     weights: BTreeMap<String, f64>,
+    edge_horizon: Option<String>,
 }
 
 impl RawSleeve {
-    fn check(self) -> Result<Sleeve, String> {
+    fn check(self, style: Style) -> Result<Sleeve, String> {
         let name = self.name.trim().to_owned();
         if name.is_empty() {
             return Err("a sleeve has a blank name".into());
@@ -162,6 +255,24 @@ impl RawSleeve {
                 return Err(at(format!("{signal} weighted twice")));
             }
         }
+        let edge_horizon = match (style, self.edge_horizon) {
+            (Style::Fixed, None) => None,
+            (Style::Fixed, Some(_)) => {
+                return Err(at("edge_horizon is set but style is fixed".into()));
+            }
+            (Style::Edge, None) => return Err(at("style edge needs edge_horizon".into())),
+            (Style::Edge, Some(h)) => {
+                if !HORIZONS.iter().any(|span| span.as_str() == h) {
+                    return Err(at(format!("edge_horizon {h:?} is not 1h, 24h or 7d")));
+                }
+                Some(h)
+            }
+        };
+        if style == Style::Edge && !weights.is_empty() {
+            return Err(at(
+                "style edge takes its weights from the scoreboard: weights must be {}".into(),
+            ));
+        }
         Ok(Sleeve {
             name,
             share: self.share,
@@ -172,6 +283,7 @@ impl RawSleeve {
             sell_below: self.sell_below,
             min_posters: self.min_posters,
             weights,
+            edge_horizon,
         })
     }
 }
@@ -180,6 +292,7 @@ impl Rule {
     /// Parse and check a rule file's text (see the module docs for what is refused).
     pub fn parse(text: &str) -> Result<Self, String> {
         let raw: RawRule = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let edge = raw.edge()?;
         let rules_version = raw.rules_version.trim().to_owned();
         if rules_version.is_empty() {
             return Err("rules_version must not be blank".into());
@@ -189,8 +302,8 @@ impl Rule {
         }
         let mut names = BTreeSet::new();
         let mut sleeves = Vec::new();
-        for raw in raw.sleeves {
-            let sleeve = raw.check()?;
+        for sleeve in raw.sleeves {
+            let sleeve = sleeve.check(raw.style)?;
             if !names.insert(sleeve.name.clone()) {
                 return Err(format!("sleeve {} listed twice", sleeve.name));
             }
@@ -203,6 +316,7 @@ impl Rule {
         let rule = Self {
             rules_version,
             style: raw.style,
+            edge,
             sleeves,
         };
         rule.check_supported()?;
@@ -379,8 +493,20 @@ pub(crate) mod tests {
                 Box::new(|v| v["rules_version"] = " ".into()),
             ),
             (
-                "unknown variant `edge`",
+                "unknown variant `vibes`",
+                Box::new(|v| v["style"] = "vibes".into()),
+            ),
+            (
+                "style edge needs edge_scale",
                 Box::new(|v| v["style"] = "edge".into()),
+            ),
+            (
+                "edge_cap is set but style is fixed",
+                Box::new(|v| v["edge_cap"] = 2.0.into()),
+            ),
+            (
+                "edge_horizon is set but style is fixed",
+                Box::new(|v| v["sleeves"][0]["edge_horizon"] = "24h".into()),
             ),
             (
                 "unknown field `weight`",
@@ -444,5 +570,86 @@ pub(crate) mod tests {
         assert_eq!(ok.trading_sleeve().name, "fast");
         let err = Rule::load(Path::new("/nonexistent/rule.json")).unwrap_err();
         assert!(err.contains("/nonexistent/rule.json"), "{err}");
+    }
+
+    #[test]
+    fn an_edge_rule_needs_its_settings_and_takes_no_weights() {
+        let text = crate::edge::tests::edge_rule_text("board.json", "24h");
+        let rule = Rule::parse(&text).unwrap();
+        let edge = rule.edge.as_ref().unwrap();
+        assert_eq!(
+            (
+                rule.style,
+                edge.scale,
+                edge.cap,
+                edge.refresh_hours,
+                edge.min_t
+            ),
+            (Style::Edge, 3.0, 2.0, 6.0, 2.0)
+        );
+        assert_eq!(rule.trading_sleeve().edge_horizon.as_deref(), Some("24h"));
+        // run_config shows the settings flat, as in the file.
+        let shown = serde_json::to_value(&rule).unwrap();
+        assert_eq!(
+            (
+                shown["edge_cap"].as_f64(),
+                shown["edge_scoreboard"].as_str()
+            ),
+            (Some(2.0), Some("board.json"))
+        );
+        let base: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let without_path = {
+            let mut v = base.clone();
+            v.as_object_mut().unwrap().remove("edge_scoreboard");
+            Rule::parse(&v.to_string()).unwrap()
+        };
+        assert_eq!(
+            without_path.edge.unwrap().scoreboard,
+            PathBuf::from(DEFAULT_EDGE_SCOREBOARD)
+        );
+        type Edit<'a> = Box<dyn Fn(&mut serde_json::Value) + 'a>;
+        let cases: Vec<(&str, Edit<'_>)> = vec![
+            (
+                "style edge needs edge_min_t",
+                Box::new(|v| {
+                    v.as_object_mut().unwrap().remove("edge_min_t");
+                }),
+            ),
+            (
+                "edge_cap 0 must be positive",
+                Box::new(|v| v["edge_cap"] = 0.0.into()),
+            ),
+            (
+                "edge_refresh_hours -1 must be positive",
+                Box::new(|v| v["edge_refresh_hours"] = (-1.0).into()),
+            ),
+            (
+                "edge_min_t -0.5 must not be negative",
+                Box::new(|v| v["edge_min_t"] = (-0.5).into()),
+            ),
+            (
+                "style edge needs edge_horizon",
+                Box::new(|v| {
+                    v["sleeves"][0]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("edge_horizon");
+                }),
+            ),
+            (
+                "edge_horizon \"6h\" is not 1h, 24h or 7d",
+                Box::new(|v| v["sleeves"][0]["edge_horizon"] = "6h".into()),
+            ),
+            (
+                "weights must be {}",
+                Box::new(|v| v["sleeves"][0]["weights"]["stance.6h"] = 1.into()),
+            ),
+        ];
+        for (reason, edit) in &cases {
+            let mut v = base.clone();
+            edit(&mut v);
+            let err = Rule::parse(&v.to_string()).unwrap_err();
+            assert!(err.contains(reason), "{reason:?} not in {err:?}");
+        }
     }
 }

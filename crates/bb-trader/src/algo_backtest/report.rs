@@ -208,6 +208,7 @@ impl GridWeights {
         Rule {
             rules_version: "algo-backtest".into(),
             style: Style::Fixed,
+            edge: None,
             sleeves: vec![Sleeve {
                 name: "fast".into(),
                 share: 1.0,
@@ -223,6 +224,7 @@ impl GridWeights {
                     (Name::Momentum(Span::H1), self.momentum),
                 ]
                 .into(),
+                edge_horizon: None,
             }],
         }
     }

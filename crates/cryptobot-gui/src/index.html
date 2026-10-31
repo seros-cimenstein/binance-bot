@@ -1005,7 +1005,7 @@ function signedNum(v, dp = 2) { const n = num(v); return n === null ? "—" : (n
 // The rule's inputs for every coin it scored: each weighted signal (named as in the rule file), score; the 1h, 24h and 7d moves for reference.
 function coinsTable(algo) {
   const coins = (algo && algo.coins) || [];
-  if (!coins.length) return el("div", { class: "small muted" }, algo ? "No coin scored: no fresh feed coin and nothing held." : "Recorded before Phase 52: no scores.");
+  if (!coins.length) return el("div", { class: "small muted" }, algo && algo.blocked ? "Nothing scored: " + algo.blocked + "." : algo ? "No coin scored: no fresh feed coin and nothing held." : "Recorded before Phase 52: no scores.");
   const buy = num(algo.buy_above), sell = num(algo.sell_below);
   // Rows written before the rule file (Phase 53 D1) carry talk, stance and momentum fields.
   const signalsOf = (c) => c.signals || (c.talk === undefined ? {} : { "talk.6h": c.talk, "stance.6h": c.stance, "momentum.1h": c.momentum });
@@ -1030,6 +1030,9 @@ function cycleDetail(c) {
       fact("Decided by", algo ? "Algorithm" : "Old trader (before Phase 52)"),
       fact("Rules", c.rules_version || "—"),
       algo ? fact("Rule", algo.rule || "—") : null,
+      algo && algo.edge ? fact("Scoreboard", algo.edge.status === "valid"
+        ? `${algo.edge.horizon} edge, ${algo.edge.weighted} weighted signals, available ${stamp(algo.edge.available_at)}`
+        : "no valid scoreboard: " + (algo.edge.reason || "")) : null,
       algo && algo.error ? fact("Could not decide", algo.error) : null),
     algo ? el("div", { style: "margin:0 -12px" }, coinsTable(algo)) : null,
     c.cycle_id ? el("div", { class: "small faint code" }, c.cycle_id) : null);

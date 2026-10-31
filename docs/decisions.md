@@ -224,3 +224,23 @@ operator:
 
 Manager note (iteration 17): the catalog's legacy names are `talk.6h` and
 `stance.6h` (renamed from `talk` and `stance`, no aliases).
+
+## 2026-10-31 Phase 53 loop: edge-style rule (`LOOP_TAGS.md` D2)
+
+Three answers through the ask tool, given by the loop manager for the
+operator:
+
+- Settings, "Rule-level, all required": `edge_scoreboard` (default
+  `data/scoreboard/latest.json`), `edge_scale`, `edge_cap`,
+  `edge_refresh_hours`, `edge_min_t` at the rule level with no code default;
+  per sleeve `edge_horizon` (1h/24h/7d) and empty `weights`.
+- Formula, "Excess, t-gated, decay off": weight = clamp(edge_scale ×
+  all.excess_pct, ±edge_cap) for rows with |all.t| ≥ edge_min_t that are not
+  decayed; per-asset names from the `assets` row, market-wide names from the
+  `basket` row.
+- Valid evidence, "Point-in-time + same gate": schema `tag-scoreboard-v1`,
+  usable at the decision time (`available_at`, manager note iteration 18),
+  the sleeve's `min_posters`, rows for the horizon; no maximum age. Otherwise
+  hold with no orders and the reason on the row.
+
+No edge rule ships enabled; `algo-2026-10-29` stays the rule in force.

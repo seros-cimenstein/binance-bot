@@ -195,13 +195,14 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
 
 ### Trader
 
-- [ ] Rule file `BOT_SPOT_ALGO_RULE` replaces `BOT_SPOT_ALGO_WEIGHTS` and
-  `BOT_SPOT_ALGO_MIN_POSTERS`: per sleeve its share, horizon filter,
+- [x] Rule file `BOT_SPOT_ALGO_RULE` replaces the env rule (weights and
+  poster minimum): per sleeve its share, horizon filter,
   defensive assets, risk-off level, buy and sell levels, poster minimum,
   and either fixed weights (selected by kind, signal, window) or the
   meta-rule (weights from the newest scoreboard, capped, refreshed at a
   set interval). `algo-2026-10-29` as a rule file; a test shows it gives
-  the old formula's scores and actions.
+  the old formula's scores and actions (LOOP_TAGS D1, D2; horizon filter and
+  risk-off are refused until the two-sleeve box below).
 - [ ] Two sleeves: each holds one asset (coin, gold proxy or USDT), buys
   with its share of the portfolio value, sells only its own quantity, moves
   to its defensive asset when market-wide signals fall below its risk-off

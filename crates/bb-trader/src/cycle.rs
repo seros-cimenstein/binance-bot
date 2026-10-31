@@ -202,13 +202,15 @@ impl Runtime {
 
     /// Run the verdict's orders through `execute_route` (the only order path, every hard
     /// safety check included), stopping at the first failure, and close the decision's
-    /// statement. `coins` (every scored coin with its terms) is recorded with the verdict.
+    /// statement. `coins` (every scored coin with its terms) is recorded with the verdict,
+    /// and `edge` (an edge rule's scoreboard evidence) as `algo.edge`.
     /// Returns the turn report the decision row is written from.
     pub(crate) async fn run_algo_turn(
         &self,
         verdict: crate::decider::Verdict,
         sleeve: &crate::rules::Sleeve,
         coins: Vec<Value>,
+        edge: Option<Value>,
         shutdown: &CancellationToken,
     ) -> TurnReport {
         use crate::decider::Action;
@@ -256,7 +258,9 @@ impl Runtime {
                 Action::Sell { reason, .. } | Action::Buy { reason, .. } => reason.as_str(),
             })
             .collect();
-        let summary = if said.is_empty() {
+        let summary = if let Some(reason) = &verdict.blocked {
+            format!("rule-based decider: hold, no orders ({reason})")
+        } else if said.is_empty() {
             let best = verdict.best.as_ref().map_or_else(
                 || "nothing scored".to_owned(),
                 |(asset, score)| format!("best {asset} score {score:+.3} < buy level {:+}", sleeve.buy_above),
@@ -284,6 +288,8 @@ impl Runtime {
             "held": verdict.held.iter().map(pair).collect::<Vec<_>>(),
             "orders": orders,
             "coins": coins,
+            "blocked": verdict.blocked,
+            "edge": edge,
         });
         report.error = failure;
         let mut guard = self.cycle.lock().await;
@@ -901,9 +907,10 @@ mod tests {
             }],
             best: Some(("SOL".into(), 0.6)),
             held: Vec::new(),
+            blocked: None,
         };
         let report = first
-            .run_algo_turn(buy, &sleeve, Vec::new(), &CancellationToken::new())
+            .run_algo_turn(buy, &sleeve, Vec::new(), None, &CancellationToken::new())
             .await;
         assert_eq!(report.error.as_deref(), None);
         let (summary, _) = first.finish_cycle(&report).await.unwrap();
@@ -934,9 +941,10 @@ mod tests {
             ],
             best: Some(("SOL".into(), 0.6)),
             held: vec![("BTC".into(), -0.5)],
+            blocked: None,
         };
         let report = second
-            .run_algo_turn(rotate, &sleeve, Vec::new(), &CancellationToken::new())
+            .run_algo_turn(rotate, &sleeve, Vec::new(), None, &CancellationToken::new())
             .await;
         assert!(report.error.as_deref().unwrap().contains("no free BTC balance"), "{report:?}");
         assert_eq!(order_calls(&server).await, 0);
