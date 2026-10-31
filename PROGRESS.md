@@ -15,7 +15,8 @@ operator's go.
 
 ## On the Pi (`ssh pi-wired`, `~/binance-bot`)
 
-- Image `binance-bot:latest` = e9efbd3c98dc (Phase 52, 2026-10-30). Rollback
+- Image `binance-bot:latest` = e9efbd3c98dc (Phase 52, 2026-10-30), also
+  tagged `binance-bot:pre-tags-20261031` (the Phase 53 rollback tag). Rollback
   tag `binance-bot:pre-algo-20261030` = 428220df4d0f (the old LLM trader).
 - Running: `bot-spot-paper` (the nonstop trader, `--plan-only`, rule
   `algo-2026-10-29`, audit `docker-data/bot-spot-paper-decisions.jsonl`,
@@ -35,7 +36,11 @@ operator's go.
   which the trader ignores with one warning.
   Backups: `.env.docker.bak-20261030T082713Z-phase52`,
   `docker-data/backup-20261030T065538Z-phase52/` (the trader files before
-  the rollout).
+  the rollout). Phase 53 F1 (before its rollout):
+  `.env.docker.bak-20261031T144929Z-phase53`,
+  `docker-data/backup-20261031T144929Z-phase53/`,
+  `~/biz-app-backup-20261031T144929Z-phase53.tgz` and the archive DB before
+  the `posts_time` index, `~/biz-app-backup-20261031T144929Z-phase53-biz.sqlite3`.
 
 ## Feed pipeline (on the Pi)
 
