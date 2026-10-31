@@ -90,6 +90,9 @@ Answers the operator gave through the ask tool on 2026-10-29:
 
 ## 2026-10-29 algorithm rules (`docs/archive/loops/LOOP_ALGO.md` D6)
 
+Superseded for live trading on 2026-10-31 ("2026-10-31 snap-back rule live");
+the rule keeps running plan-only in `bot-spot-paper` for its tuning.
+
 Shown to the operator: `reports/algo_backtest_2026-10-25.md`, the 2026-10-01
 to 2026-10-25 /biz/ feed history and 1m candles, tuned on the older half
 (2026-10-01T14:00Z to 2026-10-13T14:00Z, 72 weight sets) and judged on the
@@ -348,3 +351,35 @@ scoreboard written; 8 planned buys alternating STX and DOGE), answered by the
 loop manager for the operator: "(a) Keep practising plan-only" ("the two-hour
 checks passed, while live bot-spot remains stopped and the trading rule stays
 unchanged"). `bot-spot-paper` keeps running; nothing was changed on the Pi.
+
+## 2026-10-31 snap-back rule live
+
+Shown to the operator: the Pi's tag scoreboard of 2026-10-31 (736 hourly
+feeds; no tag signal with |t| ≥ 2 and a positive net; `stance.6h` slightly
+contrarian at +1h, t −2.02; `momentum.1h` about zero; `momentum.24h` at +24h
+−1.36% excess, t −2.48, the same sign in both halves) and agent backtests of
+candidate rule files on the tags history 2026-10-01T14:00Z..10-25T14:00Z (25
+bps per round trip): shipped −21.05% (15 round trips); `momentum.24h` −1 with
+buy 0.8 / sell −0.3 +0.21% older half, +7.81% newer half, +8.18% whole window
+(6 round trips); the same weight at ±0.5 −5.96%. Risks named: 6 round trips,
+in-sample (the scoreboard that suggested it covers the window), sensitive to
+the levels.
+
+- Operator, 2026-10-31: "I want that snapback winning algorithm to be on live
+  and for the tagging enabled one I want to tune up its way of operation ...
+  let's get the snapback live first then we will look into how to make it
+  tuned".
+- Rule: `config/rules/snapback-2026-10-31.json`, rule set
+  `snapback-2026-10-31`, style fixed: sleeve `fast` share 1, score = −1
+  `momentum.24h` (the coin's 24h move capped at ±10%, divided by 10%); buy the
+  best candidate with all USDT at score ≥ +0.8 (it fell 8% or more in 24h);
+  sell below −0.3 (it rose more than 3% in 24h). Sleeve `core` share 0, no
+  weights. Candidates as before: the coins the fresh tags feed's live asset
+  tags reach; no fresh feed, no buys.
+- Rollout, through the ask tool: "Live now, skip plan-only": the `CODEX.md`
+  plan-only step is waived for this rule set only; the rest of the rollout
+  rule (rollback image tag, `PROGRESS.md` entry) stands.
+- Practice run, through the ask tool: "Keep the tag rule (p0)":
+  `bot-spot-paper` keeps running `algo-2026-10-29` plan-only (its own
+  `BOT_SPOT_ALGO_RULE` in `docker-compose.yml`) as the base for tuning the
+  tag rule; the dashboard reads the live files again.

@@ -1,0 +1,28 @@
+{
+  "rules_version": "snapback-2026-10-31",
+  "style": "fixed",
+  "sleeves": [
+    {
+      "name": "fast",
+      "share": 1.0,
+      "horizon": "any",
+      "defensive": ["USDT"],
+      "risk_off_below": null,
+      "buy_above": 0.8,
+      "sell_below": -0.3,
+      "min_posters": 2,
+      "weights": {"momentum.24h": -1}
+    },
+    {
+      "name": "core",
+      "share": 0.0,
+      "horizon": "any",
+      "defensive": ["USDT"],
+      "risk_off_below": null,
+      "buy_above": 0.8,
+      "sell_below": -0.3,
+      "min_posters": 2,
+      "weights": {}
+    }
+  ]
+}

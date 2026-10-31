@@ -123,10 +123,8 @@ asset tags marked Binance market / through a proxy / scored only, baskets,
 links with 7d posters, events by date, claims with target, deadline and status
 `open` or `deadline passed`, no price check), stop-file and
 failed-route-halt state at `http://localhost:8787` on the Docker host. It is
-published on `127.0.0.1` only and mounts the data dir read-only. On the Pi,
-while the live `bot-spot` is stopped, `docker-compose.yml` points it at the
-practice run (`bot-spot-paper-decisions.jsonl`, `bot-spot-paper-state.json`;
-operator 2026-10-31). From another
+published on `127.0.0.1` only and mounts the data dir read-only, and shows the
+live trader's audit and state (the env file's paths). From another
 machine: `ssh -L 8787:localhost:8787 <host>`. On a systemd host,
 `scripts/setup_user_deploy.sh` installs it next to `bb`; run
 `cd ~/.local/share/binance-bot && bin/cryptobot-gui`.
@@ -354,7 +352,7 @@ start.
 ### The rule file
 
 `BOT_SPOT_ALGO_RULE` (required) is the path of the operator's rule file
-(`crate::rules`; shipped `config/rules/algo-2026-10-29.json`, in the image
+(`crate::rules`; shipped in `config/rules/`, in the image
 `/app/config/rules/`). It replaces the env rule (the five weights, the poster
 minimum and `BOT_SPOT_RULES_VERSION`, listed in `REMOVED_VARS`, now ignored with one
 warning). Fields: `rules_version` (recorded on every audit row and in
@@ -425,11 +423,22 @@ the first failed order ends that decision's orders. Without a fresh feed
 nothing is a buy candidate, so it can only hold or sell; a coin without a
 price is left out of that tick.
 
-The rule in force (operator, 2026-10-29, `docs/decisions.md`):
-`BOT_SPOT_ALGO_RULE=config/rules/algo-2026-10-29.json`, rule set
-`algo-2026-10-29`: fast sleeve share 1, score = `stance.6h` + `momentum.1h`
+The rule in force live (operator, 2026-10-31, `docs/decisions.md`, "2026-10-31
+snap-back rule live"): `BOT_SPOT_ALGO_RULE=config/rules/snapback-2026-10-31.json`,
+rule set `snapback-2026-10-31`: fast sleeve share 1, score = −1 `momentum.24h`
+(the coin's 24h move capped at ±10%, divided by 10%); buy at +0.8 (it fell 8%
+or more in 24h), sell below -0.3 (it rose more than 3%); core sleeve share 0,
+no weights. Live, the 24h move is the USDT market's 24h ticker change (see
+"Deployment"); a coin whose ticker is stale scores 0 and is not bought. Its
+backtest on the tags history 2026-10-01T14:00Z..10-25T14:00Z (agent runs shown
+to the operator, not in `reports/`): +0.21% older half, +7.81% newer half,
++8.18% whole window, 6 round trips; in-sample (the scoreboard that suggested
+`momentum.24h` covers the window).
+
+The tag rule `algo-2026-10-29` (`config/rules/algo-2026-10-29.json`, operator
+2026-10-29): fast sleeve share 1, score = `stance.6h` + `momentum.1h`
 (`talk.6h` weight 0, 2 posters); buy at +0.5, sell below -0.5; core sleeve
-share 0, no weights. Its backtest:
+share 0. It runs plan-only in `bot-spot-paper` for its tuning. Its backtest:
 `reports/algo_backtest_2026-10-25.md` (`bb algo-backtest` on the old /biz/
 coin feed history, `--end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
 tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%). On the tags
@@ -461,14 +470,16 @@ backtest").
   full feed (462 tags) writes about 17 KB with nothing trimmed.
 - **Practice run.** `docker compose --profile paper up -d bot-spot-paper`
   runs the nonstop trader plan-only with its own files
-  (`bot-spot-paper-{decisions.jsonl,state.json}`, lock `bot-spot-paper.lock`) and the shared stop file. Plan-only rows do not
+  (`bot-spot-paper-{decisions.jsonl,state.json}`, lock `bot-spot-paper.lock`)
+  and the shared stop file, on its own rule: `docker-compose.yml` sets its
+  `BOT_SPOT_ALGO_RULE` to the tag rule `algo-2026-10-29` (operator
+  2026-10-31), whatever the env file's live rule is. Plan-only rows do not
   move the wallet, so it keeps deciding on the real balances.
-- **Going live** (after the practice run and the operator's go):
-  `docker tag binance-bot:latest binance-bot:pre-algo-<date>`, set the
-  operator's `BOT_SPOT_ALGO_RULE` in `~/binance-bot/.env.docker`, remove the
-  dashboard's two practice-run paths (`BOT_SPOT_AUDIT_PATH`,
-  `BOT_SPOT_STATE_PATH` under `cryptobot-gui` in `docker-compose.yml`), `docker
-  compose up -d bot-spot cryptobot-gui`, watch the first decisions. Back: retag
+- **Going live with a new rule** (after its practice run, unless the operator
+  waives it for that rule set, and the operator's go): `docker tag
+  binance-bot:latest binance-bot:pre-algo-<date>`, back up `.env.docker`, set
+  the operator's `BOT_SPOT_ALGO_RULE` in `~/binance-bot/.env.docker`, `docker
+  compose up -d --no-deps bot-spot`, watch the first decisions. Back: retag
   the rollback image and recreate. `touch docker-data/bot-spot.stop` stops it.
 
 ### Failed-route halt

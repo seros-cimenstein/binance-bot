@@ -86,8 +86,8 @@ for name in "${!paths[@]}"; do
     export "$name=$MIRROR_DIR/${paths[$name]}"
 done
 export BOT_SPOT_PROXIES="${BOT_SPOT_PROXIES:-$REPO_DIR/config/proxies.json}"
-# The paths the Pi's dashboard reads: the compose file may override the env file's
-# (while the live trader is stopped it shows the practice run's audit and state).
+# The paths the Pi's dashboard reads: the compose file may override the env file's,
+# so read the running container's settings first.
 settings_pattern='^BOT_SPOT_(AUDIT_PATH|STOP_PATH|STATE_PATH|TAGS_FEED_PATH)='
 remote_read="docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cryptobot-gui 2>/dev/null | grep -E '$settings_pattern' || grep -E '$settings_pattern' $PI_ENV_FILE"
 if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "$remote_read" 2>/dev/null)"; then

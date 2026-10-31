@@ -54,21 +54,24 @@ when the task needs them.
   change them, and a loop manager may not answer for the operator on them.
   Do not add trading limits (caps, cooldowns, stop-loss or take-profit
   levels) unless the operator chooses them as part of the rules.
-- The rules in force (operator, 2026-10-29, `docs/decisions.md` "2026-10-29
-  algorithm rules"), in the rule file `config/rules/algo-2026-10-29.json`
-  (`BOT_SPOT_ALGO_RULE`, style `fixed`): sleeve `fast`, share 1: score = 0
-  `talk.6h` + 1 `stance.6h` + 1 `momentum.1h` (stances need 2 posters); buy
-  the best-scoring candidate for the sleeve's share of the portfolio (so all
-  USDT) when its score is +0.5 or more, one coin at a time; sell exactly the
-  sleeve's quantity into USDT when it scores below -0.5. Sleeve `core`: share
-  0, no weights, never active while it holds nothing. Candidates: the coins
-  the tags feed's live asset tags reach with an eligible USDT market,
-  directly or through the operator's proxy file (`BOT_SPOT_PROXIES`, gold
-  through PAXG and XAUT). Without a fresh tags feed nothing is bought and a
-  held coin is scored on momentum alone. Rule set name `algo-2026-10-29`. The
-  edge style (weights from the tag scoreboard), horizon filters, risk-off and
-  other sleeve splits exist but are not in force; choosing them is the
-  operator's (the tuning phase).
+- The rules in force live (operator, 2026-10-31, `docs/decisions.md`
+  "2026-10-31 snap-back rule live"), in the rule file
+  `config/rules/snapback-2026-10-31.json` (`BOT_SPOT_ALGO_RULE`, style
+  `fixed`): sleeve `fast`, share 1: score = −1 `momentum.24h` (24h move capped
+  at ±10%, divided by 10%); buy the best-scoring candidate for the sleeve's
+  share of the portfolio (so all USDT) when its score is +0.8 or more, one
+  coin at a time; sell exactly the sleeve's quantity into USDT when it scores
+  below -0.3. Sleeve `core`: share 0, no weights, never active while it holds
+  nothing. Candidates: the coins the tags feed's live asset tags reach with an
+  eligible USDT market, directly or through the operator's proxy file
+  (`BOT_SPOT_PROXIES`, gold through PAXG and XAUT). Without a fresh tags feed
+  nothing is bought. Rule set name `snapback-2026-10-31`. The tag rule
+  `algo-2026-10-29` (`config/rules/algo-2026-10-29.json`: 0 `talk.6h` + 1
+  `stance.6h` + 1 `momentum.1h`, buy +0.5, sell below -0.5, stances need 2
+  posters) runs plan-only in `bot-spot-paper` for its tuning. The edge style
+  (weights from the tag scoreboard), horizon filters, risk-off and other
+  sleeve splits exist but are not in force; choosing them is the operator's
+  (the tuning phase).
 - AI only reads supplied content. biz-app
   (`~/projects/automation/imageboards/biz-app`, outside this repo; its live
   copy runs on the Pi in `~/biz-app`) reads /biz/ threads and writes the
@@ -107,8 +110,10 @@ when the task needs them.
   anything else reports it, preserving submitted-leg truth after any partial
   route failure. Signed Binance request details stay out of logs.
 - Rollout: a new rule set runs plan-only (decides and records orders, places
-  none) before it trades live. Going live needs the operator's go, a rollback
-  image tag (`binance-bot:pre-algo-<date>`) and an entry in `PROGRESS.md`.
+  none) before it trades live; only the operator may waive that step, per rule
+  set (waived once: `snapback-2026-10-31`, 2026-10-31). Going live needs the
+  operator's go, a rollback image tag (`binance-bot:pre-algo-<date>`) and an
+  entry in `PROGRESS.md`.
 - Binance does not safely expose the API-key symbol whitelist. Live-capable
   features use the operator-owned scope and fail closed when a symbol or
   asset is outside `API_SYMBOL_WHITELIST` or `API_ASSET_WHITELIST`.

@@ -371,6 +371,12 @@ pub(crate) mod tests {
         "/../../config/rules/algo-2026-10-29.json"
     );
 
+    /// The live `snapback-2026-10-31` rule file (operator, 2026-10-31).
+    const LIVE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../config/rules/snapback-2026-10-31.json"
+    );
+
     /// A one-sleeve rule file's text: `weights` by name, the levels, 2 posters.
     pub(crate) fn one_sleeve(weights: &[(&str, f64)], buy_above: f64, sell_below: f64) -> String {
         let weights: serde_json::Map<String, serde_json::Value> = weights
@@ -434,6 +440,30 @@ pub(crate) mod tests {
         assert_eq!(
             fast.to_string(),
             "fast: talk.6h +0, stance.6h +1, momentum.1h +1; buy at score ≥ +0.5, sell below -0.5"
+        );
+    }
+
+    #[test]
+    fn the_live_rule_is_snapback_2026_10_31() {
+        let rule = Rule::load(Path::new(LIVE)).unwrap();
+        assert_eq!(
+            (rule.rules_version.as_str(), rule.style),
+            ("snapback-2026-10-31", Style::Fixed)
+        );
+        let fast = rule.trading_sleeve();
+        assert_eq!((fast.name.as_str(), fast.share), ("fast", 1.0));
+        assert_eq!(
+            (fast.horizon, fast.risk_off_below, fast.defensive.as_slice()),
+            (Horizon::Any, None, ["USDT".to_owned()].as_slice())
+        );
+        assert_eq!(
+            fast.to_string(),
+            "fast: momentum.24h -1; buy at score ≥ +0.8, sell below -0.3"
+        );
+        let core = &rule.sleeves[1];
+        assert_eq!(
+            (core.name.as_str(), core.share, core.weights.len()),
+            ("core", 0.0, 0)
         );
     }
 
