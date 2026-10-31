@@ -212,7 +212,10 @@ Bot Spot runs nonstop (operator decisions 2026-10-29), not on a timer:
   Each coin's minute closes come from those polls (seeded once from 1m
   klines), so its 1h move is the trader's own; its 24h move is the USDT
   market's 24h ticker change from the catalog (no extra request; unknown
-  when that ticker is over 10 minutes old). The catalog, fees and
+  when that ticker is over 10 minutes old); its 7d move compares the newest
+  price with the hourly close 7 days back, from 200 1h klines read at most
+  once per clock hour per coin (weight 2 each: about 60 weight an hour for
+  30 coins; unknown when no close lies within the hour before). The catalog, fees and
   balances reload every 5 minutes and on the tick after every executed
   route. A decision row is written only when the decided action changes
   (its orders, or the coins it keeps) and once an hour as a heartbeat; an
@@ -320,7 +323,7 @@ tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
 
 - **Records.** Decision rows carry `algo` (rule, best candidate and score,
   held coins and scores, orders, and per scored coin `talk`, `stance`,
-  `momentum`, `ret_1h_pct`, `ret_24h_pct`, `score`), `rules_version`
+  `momentum`, `ret_1h_pct`, `ret_24h_pct`, `ret_7d_pct`, `score`), `rules_version`
   (`BOT_SPOT_RULES_VERSION`, required) and `session_id` `algo`. The
   dashboard's Algorithm tab shows every scored coin.
 - **Practice run.** `docker compose --profile paper up -d bot-spot-paper`
@@ -389,8 +392,9 @@ bb entry-study --audit docker-data/bot-spot-decisions.jsonl \
 `biz_algo`) on the same 1m cache. It is offline and research only: it reads
 only `--cache-dir` (and `--tags-history`), never fetches or calls Binance, has
 no order path, and leaves the live `bot-spot` untouched. If the cache is
-missing a liquid coin, ends before `--end`, or lacks 48h of history before
-the window start, it exits 1 with `missing cache`.
+missing a liquid coin, ends before `--end`, or lacks 7 days of history before
+the window start (the first step's 7d move), it exits 1 with `missing cache`.
+Each step's 1h, 24h and 7d moves come from the cached 1m closes.
 
 ```bash
 cargo run --release -p bb-cli --bin bb -- algo-backtest \

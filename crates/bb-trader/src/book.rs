@@ -9,16 +9,18 @@ use rust_decimal::prelude::ToPrimitive;
 
 use crate::universe::Balances;
 
-/// One coin at a step: returns (percent) of the close at `T` over 15m/1h/4h/24h and its
+/// One coin at a step: returns (percent) of the close at `T` over 15m/1h/4h/24h/7d and its
 /// trailing 24h quote volume. Only coins with a bar closing at `T` are present. Live, the
-/// 24h return is the market's 24h ticker change (refreshed with the catalog); in the
-/// backtest it comes from the 1m closes.
+/// 24h return is the market's 24h ticker change (refreshed with the catalog) and the 7d
+/// return compares the newest price with the hourly close 7 days back (1h klines read at
+/// most hourly); in the backtest both come from the 1m closes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoinView {
     pub ret_15m: Option<f64>,
     pub ret_1h: Option<f64>,
     pub ret_4h: Option<f64>,
     pub ret_24h: Option<f64>,
+    pub ret_7d: Option<f64>,
     pub quote_volume_24h: f64,
 }
 
@@ -75,7 +77,7 @@ const MINUTE_MS: i64 = 60_000;
 
 /// A coin's view from its closed 1m bars `(open time ms, close)`, oldest first: the 15m and
 /// 1h returns of the newest close, `None` when the bar 15 or 60 minutes back is missing
-/// (the live trader adds the 24h return from the ticker). `None` without bars.
+/// (the live trader adds the 24h and 7d returns). `None` without bars.
 pub fn coin_view_from_minutes(bars: &[(i64, f64)]) -> Option<CoinView> {
     let &(newest_open, newest_close) = bars.last()?;
     let ret = |minutes: i64| {
@@ -90,6 +92,7 @@ pub fn coin_view_from_minutes(bars: &[(i64, f64)]) -> Option<CoinView> {
         ret_1h: ret(60),
         ret_4h: None,
         ret_24h: None,
+        ret_7d: None,
         quote_volume_24h: 0.0,
     })
 }
@@ -159,6 +162,7 @@ pub mod tests {
                         ret_1h: Some(r1),
                         ret_4h: Some(r4),
                         ret_24h: None,
+                        ret_7d: None,
                         quote_volume_24h: qv,
                     };
                     (a.to_string(), view)

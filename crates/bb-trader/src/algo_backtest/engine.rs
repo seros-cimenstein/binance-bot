@@ -86,6 +86,7 @@ impl Snapshot {
                     ret_1h: s.return_pct(t, 60),
                     ret_4h: s.return_pct(t, 240),
                     ret_24h: s.return_pct(t, DAY_MINUTES),
+                    ret_7d: s.return_pct(t, 7 * DAY_MINUTES),
                     quote_volume_24h: s.quote_volume(t, DAY_MINUTES),
                 };
                 (s.asset().to_string(), view)
@@ -877,14 +878,20 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn snapshot_returns_cover_24h_from_the_1m_closes() {
-        let market = Market::from_series([coin("BTC", 1600, |m| 100.0 + m as f64)]);
+    fn snapshot_returns_cover_24h_and_7d_from_the_1m_closes() {
+        let market = Market::from_series([coin("BTC", 10_200, |m| 100.0 + m as f64)]);
         // At minute 1500 the close is bar 1499's (1599); 24h earlier it is bar 59's (159).
         let snap = Snapshot::at(&market, T0 + 1500 * MINUTE_MS);
         let btc = snap.coin("BTC").unwrap();
         assert!((btc.ret_24h.unwrap() - (1599.0 / 159.0 - 1.0) * 100.0).abs() < 1e-9);
         assert!((btc.ret_1h.unwrap() - (1599.0 / 1539.0 - 1.0) * 100.0).abs() < 1e-9);
-        // Less than a day of bars: the 24h return is unknown, not 0.
+        // Less than a week of bars: the 7d return is unknown, not 0.
+        assert_eq!(btc.ret_7d, None);
+        // At minute 10 100 the close is 10 199; 7 days (10 080 minutes) earlier, bar 19's 119.
+        let week = Snapshot::at(&market, T0 + 10_100 * MINUTE_MS);
+        let btc = week.coin("BTC").unwrap();
+        assert!((btc.ret_7d.unwrap() - (10_199.0 / 119.0 - 1.0) * 100.0).abs() < 1e-9);
+        // Less than a day of bars: the 24h return is unknown too.
         let early = Snapshot::at(&market, T0 + 1000 * MINUTE_MS);
         assert_eq!(early.coin("BTC").unwrap().ret_24h, None);
     }

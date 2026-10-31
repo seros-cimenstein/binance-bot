@@ -177,9 +177,9 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
 - [ ] Proxies: operator file `BOT_SPOT_PROXIES` (e.g. `GOLD` -> `PAXG`,
   `XAUT`); a tag reaches a tradable asset directly, through a proxy, a
   basket membership or a link; others are scored, never bought.
-- [ ] Price horizons: 1h from the trader's polls, 24h from the all-symbol
+- [x] Price horizons: 1h from the trader's polls, 24h from the all-symbol
   24h ticker (one request), 7d from cached 1h klines per candidate; the
-  backtest derives the same from cached 1m candles.
+  backtest derives the same from cached 1m candles (LOOP_TAGS C2, C3).
 - [ ] Signal catalog, each −1..1, per tag and window: direction, level,
   surge, novelty, breadth, persistence, agreement, horizon mix,
   price-confirmed; per asset the sum through direct tags, baskets, links

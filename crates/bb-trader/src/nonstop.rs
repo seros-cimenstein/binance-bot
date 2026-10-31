@@ -46,6 +46,11 @@ const SEED_MINUTES: u32 = 62;
 const MINUTE_MS: i64 = 60_000;
 /// Minute closes kept per coin (the 1h move needs the minute 60 minutes back).
 const KEEP_MINUTES: i64 = 70;
+/// 1h klines read and kept per coin: the 7d move needs the close 168 hours back.
+pub const HOUR_BARS: u32 = 200;
+const HOUR_MS: i64 = 3_600_000;
+/// The 7d move compares the newest price with the hourly close this long before it.
+const WEEK_MS: i64 = 7 * 24 * HOUR_MS;
 /// The decision key of a tick that could not read the market at all.
 const NO_MARKET_KEY: &str = "market data unavailable";
 
@@ -92,6 +97,79 @@ impl PriceBook {
             .collect();
         coin_view_from_minutes(&bars)
     }
+
+    /// The newest minute close of `asset`.
+    pub fn last_close(&self, asset: &str) -> Option<f64> {
+        self.minutes.get(asset)?.values().next_back().copied()
+    }
+}
+
+/// Each coin's closed 1h bars (newest [`HOUR_BARS`]), read from 1h klines at most once per
+/// clock hour per coin, for the 7d move. A failed read keeps the bars it had and is tried
+/// again the next hour; coins not read for two hours are forgotten.
+#[derive(Debug, Default)]
+pub struct HourBook {
+    coins: HashMap<String, HourBars>,
+}
+
+#[derive(Debug, Default)]
+struct HourBars {
+    /// When the last read (successful or not) was attempted.
+    read_ms: i64,
+    /// Close by bar close time (open + 1h).
+    closes: BTreeMap<i64, f64>,
+}
+
+impl HourBook {
+    /// Whether `asset` is due a read: never read, or last read in an earlier clock hour.
+    pub fn due(&self, asset: &str, now_ms: i64) -> bool {
+        self.coins
+            .get(asset)
+            .is_none_or(|bars| floor_hour(bars.read_ms) < floor_hour(now_ms))
+    }
+
+    /// Record a read at `now_ms`: `bars` are `(open ms, close)` of closed 1h bars (`None`
+    /// when the read failed). Keeps the newest [`HOUR_BARS`] bars.
+    pub fn store(
+        &mut self,
+        asset: &str,
+        bars: Option<impl IntoIterator<Item = (i64, f64)>>,
+        now_ms: i64,
+    ) {
+        let entry = self.coins.entry(asset.to_owned()).or_default();
+        entry.read_ms = now_ms;
+        if let Some(bars) = bars {
+            entry.closes.extend(
+                bars.into_iter()
+                    .filter(|(open, close)| *close > 0.0 && open + HOUR_MS <= now_ms)
+                    .map(|(open, close)| (open + HOUR_MS, close)),
+            );
+            while entry.closes.len() > HOUR_BARS as usize {
+                entry.closes.pop_first();
+            }
+        }
+    }
+
+    /// Drop coins not read for two hours (no longer candidates or held).
+    pub fn forget_unread(&mut self, now_ms: i64) {
+        self.coins.retain(|_, bars| now_ms - bars.read_ms < 2 * HOUR_MS);
+    }
+
+    /// Percent move from the newest hourly close at or before `now_ms` − 7d to `price`;
+    /// `None` when that close is missing or more than an hour older than 7d.
+    pub fn ret_7d(&self, asset: &str, now_ms: i64, price: f64) -> Option<f64> {
+        let target = now_ms - WEEK_MS;
+        let (&closed, &then) = self.coins.get(asset)?.closes.range(..=target).next_back()?;
+        (target - closed < HOUR_MS && then > 0.0).then(|| (price / then - 1.0) * 100.0)
+    }
+
+    pub fn bars(&self, asset: &str) -> usize {
+        self.coins.get(asset).map_or(0, |b| b.closes.len())
+    }
+}
+
+fn floor_hour(ms: i64) -> i64 {
+    ms - ms.rem_euclid(HOUR_MS)
 }
 
 fn floor_minute(ms: i64) -> i64 {
@@ -139,6 +217,7 @@ pub struct Nonstop {
     slow: Option<Slow>,
     refresh_slow: bool,
     prices: PriceBook,
+    hours: HourBook,
     /// The last recorded decision key and when it was recorded.
     last: Option<(String, i64)>,
     stopped: bool,
@@ -151,6 +230,7 @@ impl Nonstop {
             slow: None,
             refresh_slow: false,
             prices: PriceBook::default(),
+            hours: HourBook::default(),
             last: None,
             stopped: false,
         }
@@ -455,7 +535,7 @@ impl Nonstop {
             used_weight_1m = ?self.runtime.client.used_weight_1m(),
             "price poll"
         );
-        for asset in assets {
+        for asset in &assets {
             if !self.prices.needs_seed(asset, now_ms) {
                 continue;
             }
@@ -477,6 +557,32 @@ impl Nonstop {
                     tracing::warn!(%error, %symbol, "price history read failed; coin left out this tick");
                 }
             }
+        }
+        // 1h klines for the 7d move: at most one read per coin per clock hour (weight 2).
+        self.hours.forget_unread(now_ms);
+        for asset in &assets {
+            if !self.hours.due(asset, now_ms) {
+                continue;
+            }
+            let symbol = format!("{asset}/USDT");
+            let bars = match self
+                .runtime
+                .client
+                .klines(&symbol, "1h", None, None, Some(HOUR_BARS))
+                .await
+            {
+                Ok(klines) => Some(
+                    klines
+                        .iter()
+                        .filter_map(|k| Some((k.open_time, k.close.to_f64()?)))
+                        .collect::<Vec<_>>(),
+                ),
+                Err(error) => {
+                    tracing::warn!(%error, %symbol, "1h history read failed; 7d move kept or unknown until the next hour");
+                    None
+                }
+            };
+            self.hours.store(asset, bars, now_ms);
         }
         polled
     }
@@ -504,6 +610,10 @@ impl Nonstop {
             .filter_map(|asset| {
                 let mut view = self.prices.coin_view(asset)?;
                 view.ret_24h = ret_24h(asset);
+                view.ret_7d = self
+                    .prices
+                    .last_close(asset)
+                    .and_then(|price| self.hours.ret_7d(asset, now_ms, price));
                 Some((asset.clone(), view))
             })
             .collect();
@@ -537,6 +647,7 @@ impl Nonstop {
                     "momentum": terms.momentum,
                     "ret_1h_pct": step.coin(asset).and_then(|c| c.ret_1h),
                     "ret_24h_pct": step.coin(asset).and_then(|c| c.ret_24h),
+                    "ret_7d_pct": step.coin(asset).and_then(|c| c.ret_7d),
                     "score": score,
                 });
                 (score, coin)
@@ -615,7 +726,7 @@ mod tests {
 
     use rust_decimal_macros::dec;
     use serde_json::{Value, json};
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -638,7 +749,8 @@ mod tests {
         ])
     }
 
-    /// The feed names ETH; prices: ETH 3000 now, 2800 an hour ago (+7%, momentum 1).
+    /// The feed names ETH; prices: ETH 3000 now, 2800 an hour ago (+7%, momentum 1), and
+    /// every hourly close of the last 200 hours 2000 (7d move +50%).
     async fn market(server: &MockServer, dir: &Path, now_ms: i64, eth_held: bool) {
         let as_of = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now_ms)
             .unwrap()
@@ -694,6 +806,20 @@ mod tests {
                 .mount(server)
                 .await;
         }
+        let hour = now_ms - now_ms.rem_euclid(HOUR_MS);
+        let hours: Vec<Value> = (1..=i64::from(HOUR_BARS))
+            .map(|back| {
+                let open = hour - back * HOUR_MS;
+                json!([open, "1", "1", "1", "2000", "1", open + HOUR_MS - 1, "1", 1, "1", "1", "0"])
+            })
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("interval", "1h"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(hours)))
+            .with_priority(1)
+            .mount(server)
+            .await;
     }
 
     fn nonstop(server: &MockServer, config: TraderConfig, now_ms: i64) -> Nonstop {
@@ -738,6 +864,19 @@ mod tests {
             .count()
     }
 
+    async fn kline_reads(server: &MockServer, interval: &str) -> usize {
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| {
+                r.url.path() == "/api/v3/klines"
+                    && r.url.query_pairs().any(|(k, v)| k == "interval" && v == interval)
+            })
+            .count()
+    }
+
     #[tokio::test]
     async fn an_unchanged_decision_writes_no_row_until_the_hourly_heartbeat() {
         let server = MockServer::start().await;
@@ -772,9 +911,15 @@ mod tests {
             Tick::Recorded(_)
         ));
         assert_eq!(rows(dir.path()).len(), 2);
-        // One price poll per tick and the klines seed once (the hour gap re-seeds it).
+        // One price poll per tick and the 1m klines seed once (the hour gap re-seeds it); the
+        // 1h klines are read once per clock hour the ticks fall in.
         assert_eq!(requests(&server, "/api/v3/ticker/price").await, 6);
-        assert_eq!(requests(&server, "/api/v3/klines").await, 2);
+        assert_eq!(kline_reads(&server, "1m").await, 2);
+        let clock_hours: BTreeSet<i64> = [0, 15_000, 30_000, 45_000, 60_000, HEARTBEAT_MS]
+            .iter()
+            .map(|d| floor_hour(now + d))
+            .collect();
+        assert_eq!(kline_reads(&server, "1h").await, clock_hours.len());
     }
 
     #[tokio::test]
@@ -848,6 +993,8 @@ mod tests {
         assert!((eth["ret_1h_pct"].as_f64().unwrap() - (3000.0 / 2800.0 - 1.0) * 100.0).abs() < 1e-9);
         // The 24h return is ETH/USDT's 24h ticker change from the catalog.
         assert_eq!(eth["ret_24h_pct"].as_f64(), Some(-4.2));
+        // The 7d return: the price now (3000) against the hourly close 7 days back (2000).
+        assert!((eth["ret_7d_pct"].as_f64().unwrap() - 50.0).abs() < 1e-9);
         let accounts = requests(&server, "/api/v3/account").await;
 
         // The next tick reloads the balances (the catalog reload fails here and is kept) and
@@ -869,6 +1016,48 @@ mod tests {
             Tick::Unchanged
         ));
         assert_eq!(requests(&server, "/api/v3/account").await, accounts);
+    }
+
+    #[test]
+    fn hourly_bars_are_read_once_per_clock_hour_and_bounded() {
+        let h0 = 1_792_933_200_000; // 2026-10-25T13:00Z, an hour boundary
+        let bars = |newest_open: i64, n: i64, close: f64| {
+            (0..n).map(move |back| (newest_open - back * HOUR_MS, close)).collect::<Vec<_>>()
+        };
+        let mut hours = HourBook::default();
+        assert!(hours.due("ETH", h0 + 5 * 60_000));
+        // 250 closed bars plus the forming one: the forming bar is dropped, 200 are kept.
+        let mut read = bars(h0 - HOUR_MS, 250, 2000.0);
+        read.push((h0, 9999.0));
+        hours.store("ETH", Some(read), h0 + 5 * 60_000);
+        assert_eq!(hours.bars("ETH"), HOUR_BARS as usize);
+        // Not again within the same clock hour, again in the next one.
+        assert!(!hours.due("ETH", h0 + 59 * 60_000));
+        assert!(hours.due("ETH", h0 + HOUR_MS));
+        // A failed read keeps the bars and still waits for the next hour.
+        hours.store("ETH", None::<Vec<(i64, f64)>>, h0 + HOUR_MS + 60_000);
+        assert_eq!(hours.bars("ETH"), HOUR_BARS as usize);
+        assert!(!hours.due("ETH", h0 + HOUR_MS + 30 * 60_000));
+        // Coins no longer read are forgotten after two hours.
+        hours.store("SOL", Some(bars(h0 - HOUR_MS, 3, 1.0)), h0 + 60_000);
+        hours.forget_unread(h0 + 2 * HOUR_MS + 60_000);
+        assert_eq!((hours.bars("ETH"), hours.bars("SOL")), (HOUR_BARS as usize, 0));
+    }
+
+    #[test]
+    fn the_7d_move_uses_the_hourly_close_a_week_back() {
+        let h0 = 1_792_933_200_000;
+        let mut hours = HourBook::default();
+        // Hourly closes 1000 + i for the bar opened i hours after h0 - 200h.
+        let start = h0 - 200 * HOUR_MS;
+        hours.store("ETH", Some((0..200).map(|i| (start + i * HOUR_MS, 1000.0 + i as f64))), h0 + 60_000);
+        // At h0 + 30 min the week-old close is the bar closing at h0 - 168h (opened at
+        // h0 - 169h, i = 31): 1031.
+        let now = h0 + 30 * 60_000;
+        assert!((hours.ret_7d("ETH", now, 2062.0).unwrap() - 100.0).abs() < 1e-9);
+        // Without a close within the hour before now - 7d the move is unknown.
+        assert_eq!(hours.ret_7d("ETH", h0 - 40 * HOUR_MS, 2000.0), None);
+        assert_eq!(hours.ret_7d("SOL", now, 1.0), None);
     }
 
     #[test]

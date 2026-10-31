@@ -21,8 +21,8 @@ use crate::error::{Result, TraderError};
 /// `biz_algo` grid rows listed in the report.
 const GRID_ROWS_SHOWN: usize = 5;
 const DAY_MS: i64 = 86_400_000;
-/// History needed before the window start (24h of bars, with margin).
-const WARM_UP_MS: i64 = 48 * 3_600_000;
+/// History needed before the window start: the 7d return of the first step.
+const WARM_UP_MS: i64 = 7 * DAY_MS;
 /// Binance minimum order value the engine enforces on buys.
 const MIN_NOTIONAL_USDT: f64 = 5.0;
 /// Measured live cost per round trip (40 trips, `docs/archive/loops/LOOP_MONEY.md`).
@@ -115,7 +115,7 @@ pub fn check_coverage(market: &Market, start_ms: i64, end_ms: i64) -> Result<()>
         .min();
     if earliest.is_none_or(|first| first > start_ms - WARM_UP_MS) {
         return Err(TraderError::config(format!(
-            "missing cache: no liquid coin has bars from {} (48h before the window start)",
+            "missing cache: no liquid coin has bars from {} (7 days before the window start)",
             iso(start_ms - WARM_UP_MS)
         )));
     }
@@ -658,16 +658,16 @@ mod tests {
 
     const T_END: i64 = 1_784_448_000_000 + 4 * DAY_MS; // 2026-07-23T08:00Z
 
-    /// Writes 4 days of 1m bars for every liquid coin (plus INJ), each with its own drift
-    /// and wiggle, ending at `T_END`.
+    /// Writes 9 days of 1m bars for every liquid coin (plus INJ), each with its own drift
+    /// and wiggle, ending at `T_END` (a 1-day window needs 7 days of warm-up).
     fn cache_dir() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let start = T_END - 4 * DAY_MS;
+        let start = T_END - 9 * DAY_MS;
         let mut coins: Vec<&str> = LIQUID.to_vec();
         coins.push("INJ");
         for (i, coin) in coins.iter().enumerate() {
             let k = i as f64;
-            let rows: Vec<String> = (0..4 * 1440)
+            let rows: Vec<String> = (0..9 * 1440)
                 .map(|m| {
                     let x = m as f64;
                     let p = 10.0
@@ -815,7 +815,7 @@ mod tests {
 
         let cache = cache_dir();
         let mut long = args(cache.path(), out.path());
-        long.days = 3; // needs bars from 2026-07-18T08:00Z, the cache starts 07-19
+        long.days = 3; // needs bars from 2026-07-13T08:00Z, the cache starts 07-14
         let err = run_backtest(&long).unwrap_err().to_string();
         assert!(
             err.contains("missing cache: no liquid coin has bars from"),
