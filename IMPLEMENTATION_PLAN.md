@@ -140,13 +140,13 @@ trader, the backtest, the scoreboard and the dashboard read it):
   `threads`, `up`, `down` (score-weighted: bullish/bearish for assets and
   baskets, rising/easing for macro, events, entities and mood), `horizon`
   (score-weighted `short`, `swing`, `long`, `unstated`) and `posts` (24h and
-  shorter only). Binance spot coins count AI-free mentions (as
-  `biz-feed-v1`) and stay listed while named in the last 24 hours.
+  shorter only). Live Binance spot coins count AI-free mentions (as
+  `biz-feed-v1`).
 - `members.<narrative>`: its assets with weights (from the AI's tags and
   co-mentions).
 - `links.<tag>.<asset>.<window>`: `posters`, `up`, `down`: posts that tie a
   tag to an asset.
-- Only live tags appear (plus the named coins above). The registry
+- Only tags live at `as_of` appear. The registry
   `tags-registry.json` lists every tag: `id`, `kind`, `aliases`,
   `merged_from`, `first_seen`, `live_since`.
 
