@@ -435,6 +435,7 @@ mod tests {
             last: bid,
             quote_volume: dec!(1000000),
             quote_volume_usdt: Some(dec!(1000000)),
+            price_change_pct_24h: None,
             min_amount: dec!(0.00001),
             min_notional: dec!(5),
             amount_precision: Some(dec!(0.00001)),

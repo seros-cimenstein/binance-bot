@@ -85,6 +85,7 @@ impl Snapshot {
                     ret_15m: s.return_pct(t, 15),
                     ret_1h: s.return_pct(t, 60),
                     ret_4h: s.return_pct(t, 240),
+                    ret_24h: s.return_pct(t, DAY_MINUTES),
                     quote_volume_24h: s.quote_volume(t, DAY_MINUTES),
                 };
                 (s.asset().to_string(), view)
@@ -873,5 +874,18 @@ pub(crate) mod tests {
         assert_eq!(snap.liquid_top, vec!["ETH", "BTC"]);
         assert!(snap.coin("INJ").is_some());
         assert!(snap.coin("SOL").is_none());
+    }
+
+    #[test]
+    fn snapshot_returns_cover_24h_from_the_1m_closes() {
+        let market = Market::from_series([coin("BTC", 1600, |m| 100.0 + m as f64)]);
+        // At minute 1500 the close is bar 1499's (1599); 24h earlier it is bar 59's (159).
+        let snap = Snapshot::at(&market, T0 + 1500 * MINUTE_MS);
+        let btc = snap.coin("BTC").unwrap();
+        assert!((btc.ret_24h.unwrap() - (1599.0 / 159.0 - 1.0) * 100.0).abs() < 1e-9);
+        assert!((btc.ret_1h.unwrap() - (1599.0 / 1539.0 - 1.0) * 100.0).abs() < 1e-9);
+        // Less than a day of bars: the 24h return is unknown, not 0.
+        let early = Snapshot::at(&market, T0 + 1000 * MINUTE_MS);
+        assert_eq!(early.coin("BTC").unwrap().ret_24h, None);
     }
 }

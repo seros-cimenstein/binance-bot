@@ -208,9 +208,11 @@ bb bot-spot --mark-failed-route-reviewed --review-reason "reconciled by hand"
 Bot Spot runs nonstop (operator decisions 2026-10-29), not on a timer:
 
 - Every 15 s a tick checks the stop file, polls every price with one
-  `ticker/price` request (weight 4), reads the /biz/ feed file and decides.
+  `ticker/price` request (weight 4), reads the tags feed file and decides.
   Each coin's minute closes come from those polls (seeded once from 1m
-  klines), so its 1h move is the trader's own. The catalog, fees and
+  klines), so its 1h move is the trader's own; its 24h move is the USDT
+  market's 24h ticker change from the catalog (no extra request; unknown
+  when that ticker is over 10 minutes old). The catalog, fees and
   balances reload every 5 minutes and on the tick after every executed
   route. A decision row is written only when the decided action changes
   (its orders, or the coins it keeps) and once an hour as a heartbeat; an
@@ -317,9 +319,10 @@ coin feed history, `--end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
 tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
 
 - **Records.** Decision rows carry `algo` (rule, best candidate and score,
-  held coins and scores, orders), `rules_version` (`BOT_SPOT_RULES_VERSION`,
-  required) and `session_id` `algo`. The dashboard's Algorithm tab shows
-  every scored coin.
+  held coins and scores, orders, and per scored coin `talk`, `stance`,
+  `momentum`, `ret_1h_pct`, `ret_24h_pct`, `score`), `rules_version`
+  (`BOT_SPOT_RULES_VERSION`, required) and `session_id` `algo`. The
+  dashboard's Algorithm tab shows every scored coin.
 - **Practice run.** `docker compose --profile paper up -d bot-spot-paper`
   runs the nonstop trader plan-only with its own files
   (`bot-spot-paper-{decisions.jsonl,state.json}`, lock `bot-spot-paper.lock`) and the shared stop file. Plan-only rows do not

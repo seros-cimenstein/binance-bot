@@ -73,6 +73,9 @@ pub struct TickerQuote {
     pub ask: Option<Decimal>,
     pub last: Option<Decimal>,
     pub quote_volume: Option<Decimal>,
+    /// 24h price change in percent (Binance `priceChangePercent`, last against the open
+    /// 24 hours earlier); `None` without a positive 24h open.
+    pub price_change_pct: Option<Decimal>,
     /// Ticker time (ms); Binance `closeTime`.
     pub timestamp_ms: Option<i64>,
 }
@@ -84,6 +87,8 @@ impl From<&Ticker24h> for TickerQuote {
             ask: ticker.ask_price,
             last: Some(ticker.last_price),
             quote_volume: Some(ticker.quote_volume),
+            price_change_pct: (ticker.open_price > Decimal::ZERO)
+                .then_some(ticker.price_change_percent),
             timestamp_ms: (ticker.close_time > 0).then_some(ticker.close_time),
         }
     }
@@ -155,5 +160,32 @@ impl BalanceSource for BinanceClient {
             .filter(|balance| balance.total() > Decimal::ZERO)
             .map(|balance| (balance.asset.to_uppercase(), balance.total()))
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rust_decimal_macros::dec;
+
+    use super::*;
+
+    #[test]
+    fn a_ticker_keeps_its_24h_change_only_with_a_24h_open() {
+        let ticker = Ticker24h {
+            symbol: "ETHUSDT".into(),
+            price_change_percent: dec!(-3.25),
+            open_price: dec!(3100),
+            last_price: dec!(3000),
+            close_time: 1,
+            ..Default::default()
+        };
+        assert_eq!(TickerQuote::from(&ticker).price_change_pct, Some(dec!(-3.25)));
+        // Without a 24h open price the change is unknown, not 0%.
+        let new = Ticker24h {
+            open_price: Decimal::ZERO,
+            price_change_percent: Decimal::ZERO,
+            ..ticker
+        };
+        assert_eq!(TickerQuote::from(&new).price_change_pct, None);
     }
 }

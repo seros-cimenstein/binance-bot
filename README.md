@@ -126,7 +126,7 @@ A read-only web page for the trader, in five tabs that refresh every 30 s:
   API-key safety check (withdrawals, IP restriction, extra permissions).
 - **Algorithm:** the trader's status (running while it writes a decision row at
   least hourly, stopped by the stop file, halted), the newest decision with
-  every scored coin's /biz/ talk and stance, own 1h move, momentum and score,
+  every scored coin's /biz/ talk and stance, own 1h move, 24h move, momentum and score,
   and the decision rows newest first (click one for its scores); rows from
   before Phase 52 show their decision only.
 - **Tags:** the tags feed summary the trader recorded at its newest decision

@@ -39,6 +39,8 @@ pub const TICK: Duration = Duration::from_secs(15);
 pub const SLOW_REFRESH_MS: i64 = 5 * 60_000;
 /// An unchanged decision is still recorded this often (operator decision 2026-10-29).
 pub const HEARTBEAT_MS: i64 = 60 * 60_000;
+/// A 24h ticker change older than this (catalog reloads failing) is unknown, not reused.
+pub const TICKER_24H_MAX_AGE_MS: i64 = 2 * SLOW_REFRESH_MS;
 /// 1m klines read to seed a coin: 61 closed minutes plus the forming one.
 const SEED_MINUTES: u32 = 62;
 const MINUTE_MS: i64 = 60_000;
@@ -488,10 +490,22 @@ impl Nonstop {
         held: &BTreeSet<String>,
     ) -> Result<Decision> {
         let slow = self.slow_state()?;
+        // The 24h return is the USDT market's 24h ticker change from the catalog (reloaded
+        // every SLOW_REFRESH_MS): enough for a 24h horizon, no extra request.
+        let ret_24h = |asset: &str| {
+            slow.view
+                .markets
+                .get(&format!("{asset}/USDT"))
+                .and_then(|market| ticker_change_pct(market, now_ms))
+        };
         let coins: BTreeMap<String, CoinView> = candidates
             .iter()
             .chain(held)
-            .filter_map(|asset| Some((asset.clone(), self.prices.coin_view(asset)?)))
+            .filter_map(|asset| {
+                let mut view = self.prices.coin_view(asset)?;
+                view.ret_24h = ret_24h(asset);
+                Some((asset.clone(), view))
+            })
             .collect();
         let step = crate::book::Snapshot::live(now_ms, coins, candidates);
         let book = self.book(slow, now_ms);
@@ -522,6 +536,7 @@ impl Nonstop {
                     "stance": terms.stance,
                     "momentum": terms.momentum,
                     "ret_1h_pct": step.coin(asset).and_then(|c| c.ret_1h),
+                    "ret_24h_pct": step.coin(asset).and_then(|c| c.ret_24h),
                     "score": score,
                 });
                 (score, coin)
@@ -556,6 +571,16 @@ impl Nonstop {
             tags: Some(decision.tags.clone()),
         }
     }
+}
+
+/// The market's 24h ticker change in percent at `now_ms`; `None` without one or when its
+/// ticker is older than [`TICKER_24H_MAX_AGE_MS`].
+pub fn ticker_change_pct(market: &bb_pool::MarketSnapshot, now_ms: i64) -> Option<f64> {
+    let ticker_ms = market.timestamp_ms?;
+    if now_ms - ticker_ms > TICKER_24H_MAX_AGE_MS {
+        return None;
+    }
+    market.price_change_pct_24h?.to_f64()
 }
 
 /// What the rule decided, without scores: its orders, or the coins it keeps (cash when
@@ -821,6 +846,8 @@ mod tests {
         assert_eq!((eth["asset"].as_str(), eth["held"].as_bool()), (Some("ETH"), Some(false)));
         assert_eq!((eth["momentum"].as_f64(), eth["stance"].as_f64(), eth["score"].as_f64()), (Some(1.0), Some(0.0), Some(1.0)));
         assert!((eth["ret_1h_pct"].as_f64().unwrap() - (3000.0 / 2800.0 - 1.0) * 100.0).abs() < 1e-9);
+        // The 24h return is ETH/USDT's 24h ticker change from the catalog.
+        assert_eq!(eth["ret_24h_pct"].as_f64(), Some(-4.2));
         let accounts = requests(&server, "/api/v3/account").await;
 
         // The next tick reloads the balances (the catalog reload fails here and is kept) and
@@ -842,6 +869,20 @@ mod tests {
             Tick::Unchanged
         ));
         assert_eq!(requests(&server, "/api/v3/account").await, accounts);
+    }
+
+    #[test]
+    fn the_24h_change_comes_from_a_fresh_ticker_only() {
+        let config = config(&[]);
+        let view = view(&config);
+        let eth = &view.markets["ETH/USDT"];
+        let t = eth.timestamp_ms.unwrap();
+        assert_eq!(ticker_change_pct(eth, t), Some(-4.2));
+        assert_eq!(ticker_change_pct(eth, t + TICKER_24H_MAX_AGE_MS), Some(-4.2));
+        // A catalog kept after failed reloads does not pass an old change off as current.
+        assert_eq!(ticker_change_pct(eth, t + TICKER_24H_MAX_AGE_MS + 1), None);
+        // A market whose ticker had no 24h open has no change.
+        assert_eq!(ticker_change_pct(&view.markets["BTC/USDT"], t), None);
     }
 
     #[test]

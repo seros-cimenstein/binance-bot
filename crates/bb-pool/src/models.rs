@@ -56,6 +56,9 @@ pub struct MarketSnapshot {
     pub quote_volume: Decimal,
     /// 24h quote volume valued in USDT (`None` when no USDT path exists).
     pub quote_volume_usdt: Option<Decimal>,
+    /// 24h price change in percent from the ticker (`None` without a 24h open).
+    #[serde(default)]
+    pub price_change_pct_24h: Option<Decimal>,
     /// LOT_SIZE `minQty` (zero when missing).
     pub min_amount: Decimal,
     /// NOTIONAL / MIN_NOTIONAL `minNotional` (zero when missing).

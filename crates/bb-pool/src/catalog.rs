@@ -240,6 +240,7 @@ fn snapshot(
         last: positive(ticker.last).unwrap_or_default(),
         quote_volume: non_negative(ticker.quote_volume).unwrap_or_default(),
         quote_volume_usdt,
+        price_change_pct_24h: ticker.price_change_pct,
         min_amount: positive(market.min_amount).unwrap_or_default(),
         min_notional: positive(market.min_notional).unwrap_or_default(),
         amount_precision: non_negative(market.amount_precision),
@@ -392,6 +393,7 @@ mod tests {
             ask: Some(ask),
             last: Some(bid),
             quote_volume: Some(volume),
+            price_change_pct: Some(dec!(-2.5)),
             timestamp_ms: Some(now),
         }
     }
@@ -447,6 +449,7 @@ mod tests {
         let bnb = catalog.get("BNB/USDT").unwrap();
         assert!(bnb.eligible);
         assert_eq!(bnb.amount_step, Some(dec!(0.00001)));
+        assert_eq!(bnb.price_change_pct_24h, Some(dec!(-2.5)));
         let coin = catalog.get("COIN/BNB").unwrap();
         assert_eq!(coin.quote_volume_usdt, Some(dec!(600)));
         assert!(coin.eligible);
@@ -513,6 +516,7 @@ mod tests {
             ]
         );
         assert_eq!(catalog.get("NOTICK/USDT").unwrap().spread_bps, None);
+        assert_eq!(catalog.get("NOTICK/USDT").unwrap().price_change_pct_24h, None);
     }
 
     #[test]

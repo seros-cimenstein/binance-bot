@@ -1002,7 +1002,7 @@ function cycleAction(c) { return ((c.decision && c.decision.action) || "").toLow
 function cycleFailed(c) { return !!c.error; }
 function cycleKey(c) { return "cycle:" + (c.cycle_id || c.timestamp); }
 function signedNum(v, dp = 2) { const n = num(v); return n === null ? "—" : (n > 0 ? "+" : n < 0 ? "−" : "") + nf(dp, dp).format(Math.abs(n)); }
-// The rule's inputs for every coin it scored: /biz/ talk and stance, own 1h momentum, score.
+// The rule's inputs for every coin it scored: /biz/ talk and stance, own 1h momentum, score; the 24h move for reference.
 function coinsTable(algo) {
   const coins = (algo && algo.coins) || [];
   if (!coins.length) return el("div", { class: "small muted" }, algo ? "No coin scored: no fresh feed coin and nothing held." : "Recorded before Phase 52: no scores.");
@@ -1010,12 +1010,13 @@ function coinsTable(algo) {
   const verdict = (c) => c.held
     ? (sell !== null && num(c.score) < sell ? chip("Sell", "neg") : chip("Keep", "accent"))
     : (!c.priced ? chip("No price", "") : buy !== null && num(c.score) >= buy ? chip("Buy level", "pos") : null);
-  return table([["Coin"], ["Talk", "r"], ["Stance", "r"], ["1h move", "r"], ["Momentum", "r"], ["Score", "r"], [""]],
+  return table([["Coin"], ["Talk", "r"], ["Stance", "r"], ["1h move", "r"], ["24h move", "r"], ["Momentum", "r"], ["Score", "r"], [""]],
     coins.map((c) => el("tr", null,
       el("td", null, assetLabel(c.asset, c.held ? chip("Held", "accent") : null)),
       el("td", { class: "r num" }, signedNum(c.talk)),
       el("td", { class: "r num" }, signedNum(c.stance)),
       el("td", { class: "r" }, el("span", { class: tone(c.ret_1h_pct) + " num" }, pct(c.ret_1h_pct))),
+      el("td", { class: "r" }, el("span", { class: tone(c.ret_24h_pct) + " num" }, pct(c.ret_24h_pct))),
       el("td", { class: "r num" }, signedNum(c.momentum)),
       el("td", { class: "r" }, el("b", { class: "num" }, signedNum(c.score, 3))),
       el("td", { class: "r" }, verdict(c)))));

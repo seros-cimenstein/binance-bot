@@ -611,6 +611,7 @@ pub(crate) mod tests {
             last: (bid + ask) / dec!(2),
             quote_volume: volume_usdt,
             quote_volume_usdt: Some(volume_usdt),
+            price_change_pct_24h: None,
             min_amount: dec!(0.0001),
             min_notional: dec!(0.0001),
             amount_precision: None,
@@ -634,15 +635,17 @@ pub(crate) mod tests {
         TraderConfig::from_lookup(lookup(pairs)).unwrap()
     }
 
-    /// BTC/USDT, ETH/USDT, ETH/BTC, SOL/ETH (SOL only reachable through ETH), EUR/USDT.
+    /// BTC/USDT, ETH/USDT (24h change −4.2%), ETH/BTC, SOL/ETH (SOL only reachable through
+    /// ETH), EUR/USDT.
     pub(crate) fn view(config: &TraderConfig) -> MarketView {
-        let markets = vec![
+        let mut markets = vec![
             market("BTC/USDT", dec!(60000), dec!(60010), dec!(5000000)),
             market("ETH/USDT", dec!(3000), dec!(3001), dec!(3000000)),
             market("ETH/BTC", dec!(0.05), dec!(0.05001), dec!(2000000)),
             market("SOL/ETH", dec!(0.05), dec!(0.05002), dec!(40000)),
             market("EUR/USDT", dec!(1.08), dec!(1.081), dec!(9000000)),
         ];
+        markets[1].price_change_pct_24h = Some(dec!(-4.2));
         MarketView::from_snapshots(
             markets,
             fees(&["BTC/USDT", "ETH/USDT", "ETH/BTC", "SOL/ETH", "EUR/USDT"]),
