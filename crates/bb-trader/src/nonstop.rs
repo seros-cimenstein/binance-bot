@@ -455,8 +455,9 @@ impl Nonstop {
         Ok(())
     }
 
-    /// This tick's tags feed, the coins the rule may buy (the fresh feed's asset tags with an
-    /// eligible USDT market, cash-like coins left out) and the coins it holds.
+    /// This tick's tags feed, the coins the rule may buy (the tradable assets the fresh feed's
+    /// live asset tags reach, directly or through the operator's proxies, with an eligible
+    /// USDT market, cash-like coins left out) and the coins it holds.
     fn inputs(&self) -> Result<(TagsNow, Vec<String>, BTreeSet<String>)> {
         let slow = self.slow_state()?;
         let tags = self.runtime.tags_feed(&slow.view);
@@ -468,8 +469,8 @@ impl Nonstop {
         };
         let candidates = match &tags {
             TagsNow::Fresh(feed) => feed
-                .assets
-                .keys()
+                .candidates()
+                .iter()
                 .filter(|asset| {
                     asset.as_str() != "USDT"
                         && !crate::assets::is_low_upside(asset)

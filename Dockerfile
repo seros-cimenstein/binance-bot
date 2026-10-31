@@ -46,6 +46,7 @@ COPY --from=build /usr/local/bin/bb /usr/local/bin/cryptobot-gui /usr/local/bin/
 WORKDIR /app
 COPY docker ./docker
 COPY scripts ./scripts
+COPY config ./config
 
 RUN useradd --create-home --uid 1000 --shell /bin/bash bot \
  && mkdir -p /app/data /app/backups /app/logs \

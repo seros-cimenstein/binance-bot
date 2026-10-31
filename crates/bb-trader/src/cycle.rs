@@ -151,7 +151,8 @@ impl Runtime {
         )
     }
 
-    /// The tags feed now, keeping the asset tags with an eligible market in the view.
+    /// The tags feed now: asset tags with an eligible market in the view, and the paths to
+    /// them through the operator's proxies, baskets and links.
     pub(crate) fn tags_feed(&self, view: &MarketView) -> crate::tags::TagsNow {
         let listed: std::collections::BTreeSet<&str> = view
             .markets
@@ -164,6 +165,7 @@ impl Runtime {
             bb_core::time::now_ms(),
             self.config.tags_max_age_minutes,
             |coin| listed.contains(coin),
+            &self.config.proxies,
         )
     }
 

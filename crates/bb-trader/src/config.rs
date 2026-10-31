@@ -165,6 +165,10 @@ pub struct TraderConfig {
     pub tags_feed_path: PathBuf,
     /// A feed whose `as_of` is older than this is recorded as unavailable.
     pub tags_max_age_minutes: u64,
+    /// The operator's proxy file (`BOT_SPOT_PROXIES`, e.g. `config/proxies.json`): asset tags
+    /// without a Spot market reach these markets ([`crate::reach`]). Unset: no proxies.
+    pub proxies_path: Option<PathBuf>,
+    pub proxies: crate::reach::Proxies,
     /// The operator's rule (`BOT_SPOT_ALGO_WEIGHTS`, `BOT_SPOT_ALGO_MIN_POSTERS`); required:
     /// the trader never runs on rules the code picked.
     pub algo_rule: crate::decider::Rule,
@@ -220,6 +224,12 @@ impl TraderConfig {
             weights: crate::decider::Weights::parse(&spec).map_err(TraderError::config)?,
             min_posters: env.integer("BOT_SPOT_ALGO_MIN_POSTERS", 2)?,
         };
+        let proxies_path = env.raw("BOT_SPOT_PROXIES").map(PathBuf::from);
+        let proxies = match &proxies_path {
+            Some(path) => crate::reach::Proxies::load(path)
+                .map_err(|e| TraderError::config(format!("BOT_SPOT_PROXIES: {e}")))?,
+            None => crate::reach::Proxies::default(),
+        };
         let rules_version = env.raw("BOT_SPOT_RULES_VERSION").ok_or_else(|| {
             TraderError::config(
                 "BOT_SPOT_RULES_VERSION is required: the operator's name for the rule set",
@@ -274,6 +284,8 @@ impl TraderConfig {
                 "BOT_SPOT_TAGS_MAX_AGE_MINUTES",
                 crate::tags::DEFAULT_MAX_AGE_MINUTES,
             )?,
+            proxies_path,
+            proxies,
             algo_rule,
             scope,
         };
@@ -379,6 +391,8 @@ impl TraderConfig {
             "tags": {
                 "feed_path": self.tags_feed_path,
                 "max_age_minutes": self.tags_max_age_minutes,
+                "proxies_path": self.proxies_path,
+                "proxies": self.proxies,
             },
             "rule": {
                 "weights": self.algo_rule.weights.to_string(),
@@ -722,5 +736,23 @@ pub(crate) mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("need 5 numbers"), "{err}");
+    }
+
+    #[test]
+    fn the_proxy_file_is_optional_but_a_named_bad_one_refuses_to_start() {
+        let none = TraderConfig::from_lookup(lookup(&[])).unwrap();
+        assert!(none.proxies.is_empty() && none.proxies_path.is_none());
+        let shipped = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/proxies.json");
+        let gold = TraderConfig::from_lookup(lookup(&[("BOT_SPOT_PROXIES", shipped)])).unwrap();
+        assert_eq!(gold.proxies.of("GOLD"), ["PAXG", "XAUT"]);
+        assert_eq!(gold.run_config(true)["tags"]["proxies"]["GOLD"], serde_json::json!(["PAXG", "XAUT"]));
+        let missing = TraderConfig::from_lookup(lookup(&[("BOT_SPOT_PROXIES", "/nonexistent/proxies.json")]))
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("BOT_SPOT_PROXIES") && missing.contains("/nonexistent/proxies.json"), "{missing}");
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("proxies.json");
+        std::fs::write(&bad, r#"{"GOLD": []}"#).unwrap();
+        assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_PROXIES", bad.to_str().unwrap())])).is_err());
     }
 }

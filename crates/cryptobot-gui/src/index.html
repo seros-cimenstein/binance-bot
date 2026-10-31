@@ -1091,11 +1091,14 @@ function tagsPage() {
   const kinds = Object.entries(f.kinds || {}).sort((a, z) => z[1] - a[1] || a[0].localeCompare(z[0]));
   const total = kinds.reduce((s, [, n]) => s + n, 0);
   const tradable = f.tradable || [], scored = f.scored_only || [], sources = f.sources || [];
+  const proxied = Object.entries(f.proxied || {});
+  const paths = Object.entries(f.reach_paths || {}).map(([via, n]) => n + " " + via).join(" · ");
   const readers = sources.map((s) => s.model + (s.prompt_version ? " · " + s.prompt_version : "")).join(", ");
   const kpis = el("div", { class: "grid kpis" },
     kpi("Feed", "Fresh", "as of " + stamp(f.as_of) + " · " + f.age_minutes + " min old at the decision", "pos"),
     kpi("Live tags", String(total), kinds.length + " kinds"),
-    kpi("Tradable assets", String(tradable.length), scored.length + " scored only (no Binance market)"),
+    kpi("Tradable assets", String(new Set([...tradable, ...proxied.flatMap(([, p]) => p)]).size),
+      proxied.length + " through proxies · " + scored.length + " scored only" + (paths ? " · paths: " + paths : "")),
     kpi("Reader", readers || "—", "decision " + ago(t.cycle_at)));
   const kindsCard = card("Live tags by kind", kinds.length
     ? table([["Kind"], ["Tags", "r"]], kinds.map(([k, n]) => el("tr", null, el("td", null, k), el("td", { class: "r num" }, String(n)))))
@@ -1107,11 +1110,14 @@ function tagsPage() {
         el("td", null, s.registry_version || "—"))))
     : empty("No source listed", ""), { flush: sources.length > 0 });
   return el("div", { class: "grid" }, head, kpis, kindsCard,
-    card("Tradable assets", namesBox(tradable, "No asset tag with an eligible Binance market."), { hint: "the rule may buy these" }),
-    card("Scored only", namesBox(scored, "None."), { hint: "no eligible Binance market: never bought" }),
+    card("Tradable assets", namesBox(tradable, "No asset tag with an eligible Binance market."), { hint: "own Binance market: the rule may buy these" }),
+    card("Through proxies", proxied.length
+      ? el("div", { class: "small" }, proxied.map(([name, list]) => name + " → " + list.join(", ")).join(" · "))
+      : el("div", { class: "small muted" }, "No live asset tag reaches a proxy (operator file BOT_SPOT_PROXIES)."), { hint: "the operator's proxy file: these stand-ins may be bought" }),
+    card("Scored only", namesBox(scored, "None."), { hint: "no eligible Binance market and no proxy: never bought" }),
     sourcesCard,
     el("details", { class: "footnote" }, el("summary", null, "What this shows"),
-      el("p", null, "biz-app's AI tags every /biz/ post (assets, narratives, macro, events, entities, claims, mood) and lists the tags live at the feed's time (5 or more distinct posters in 7 days), rewriting the feed every 15 minutes. Asset tags of Binance coins count their mentions over every post without AI. The trader records a summary on each decision row (audit field tags): the feed's time and digest, the sources, the live tags per kind and which asset tags have an eligible Binance market. A missing, foreign or stale feed is recorded as unavailable with the reason; then the algorithm buys nothing.")));
+      el("p", null, "biz-app's AI tags every /biz/ post (assets, narratives, macro, events, entities, claims, mood) and lists the tags live at the feed's time (5 or more distinct posters in 7 days), rewriting the feed every 15 minutes. Asset tags of Binance coins count their mentions over every post without AI. The trader records a summary on each decision row (audit field tags): the feed's time and digest, the sources, the live tags per kind, which asset tags have an eligible Binance market, which reach one through the operator's proxy file (gold through PAXG and XAUT), and how many paths (own tag, proxy, basket membership, link) reach tradable assets. A missing, foreign or stale feed is recorded as unavailable with the reason; then the algorithm buys nothing.")));
 }
 
 // ---------- data loading ----------

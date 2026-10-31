@@ -17,11 +17,13 @@
 //! Asset tags without an eligible Binance market (gold, stocks, unlisted tokens) are listed
 //! as `scored_only`: recorded, never bought.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize, Serializer};
 use sha2::{Digest, Sha256};
+
+use crate::reach::{Proxies, Reach};
 
 /// The only feed format the trader accepts.
 pub const FEED_SCHEMA: &str = "tags-feed-v1";
@@ -183,7 +185,8 @@ impl Feed {
     }
 }
 
-/// A fresh feed as the tick records it: a summary on the row, the assets for the rule.
+/// A fresh feed as the tick records it: a summary on the row, the assets and the reach for
+/// the rule.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TagsFeed {
     pub as_of: String,
@@ -194,12 +197,24 @@ pub struct TagsFeed {
     pub sources: Vec<Source>,
     /// Live tags per kind.
     pub kinds: BTreeMap<String, usize>,
-    /// Asset tags with an eligible Binance market, by name, with their windows (the rule's
-    /// input); recorded as the list of names.
+    /// Asset tags with an eligible Binance market of their own, by name, with their windows
+    /// (the `algo-2026-10-29` rule's input); recorded as the list of names.
     #[serde(rename = "tradable", serialize_with = "names")]
     pub assets: BTreeMap<String, Windows>,
-    /// Asset tags without an eligible Binance market: scored, never bought.
-    pub scored_only: Vec<String>,
+    /// Every path from a tag to a tradable asset ([`crate::reach`]); recorded as the proxied
+    /// asset tags, the scored-only names and the path counts per kind.
+    #[serde(flatten)]
+    pub reach: Reach,
+    /// The whole feed (tags, baskets, links), not recorded.
+    #[serde(skip)]
+    pub feed: Feed,
+}
+
+impl TagsFeed {
+    /// Tradable assets a live asset tag reaches, directly or through a proxy.
+    pub fn candidates(&self) -> &BTreeSet<String> {
+        &self.reach.candidates
+    }
 }
 
 fn names<S: Serializer>(assets: &BTreeMap<String, Windows>, s: S) -> Result<S::Ok, S::Error> {
@@ -261,12 +276,14 @@ pub fn parse_raw(text: &str) -> Result<Feed, String> {
 }
 
 /// Parse a feed read at `now_ms`; `Err` holds the reason it cannot be used. `tradable`
-/// says whether a base asset has an eligible Binance market.
+/// says whether a base asset has an eligible Binance market; `proxies` is the operator's
+/// proxy file.
 pub fn parse(
     text: &str,
     now_ms: i64,
     max_age_minutes: u64,
     tradable: impl Fn(&str) -> bool,
+    proxies: &Proxies,
 ) -> Result<TagsFeed, String> {
     let feed = parse_raw(text)?;
     let age_ms = now_ms - feed.as_of_ms;
@@ -284,24 +301,21 @@ pub fn parse(
     for tag in feed.tags.values() {
         *kinds.entry(tag.kind.clone()).or_insert(0) += 1;
     }
-    let mut assets = BTreeMap::new();
-    let mut scored_only = Vec::new();
-    for (name, windows) in feed.assets() {
-        if tradable(name) {
-            assets.insert(name.to_owned(), *windows);
-        } else {
-            scored_only.push(name.to_owned());
-        }
-    }
-    scored_only.sort();
+    let assets = feed
+        .assets()
+        .filter(|(name, _)| tradable(name))
+        .map(|(name, windows)| (name.to_owned(), *windows))
+        .collect();
+    let reach = crate::reach::build(&feed, proxies, &tradable);
     Ok(TagsFeed {
-        as_of: feed.as_of,
+        as_of: feed.as_of.clone(),
         age_minutes,
         digest: hex::encode(Sha256::digest(text.as_bytes())),
-        sources: feed.sources,
+        sources: feed.sources.clone(),
         kinds,
         assets,
-        scored_only,
+        reach,
+        feed,
     })
 }
 
@@ -311,10 +325,11 @@ pub fn read(
     now_ms: i64,
     max_age_minutes: u64,
     tradable: impl Fn(&str) -> bool,
+    proxies: &Proxies,
 ) -> TagsNow {
     let parsed = std::fs::read_to_string(path)
         .map_err(|e| format!("{}: {e}", path.display()))
-        .and_then(|text| parse(&text, now_ms, max_age_minutes, tradable));
+        .and_then(|text| parse(&text, now_ms, max_age_minutes, tradable, proxies));
     match parsed {
         Ok(feed) => TagsNow::Fresh(Box::new(feed)),
         Err(reason) => {
@@ -349,6 +364,16 @@ mod tests {
         matches!(coin, "BTC" | "XMR")
     }
 
+    /// [`super::parse`] without proxies.
+    fn parse(
+        text: &str,
+        now_ms: i64,
+        max_age_minutes: u64,
+        tradable: impl Fn(&str) -> bool,
+    ) -> Result<TagsFeed, String> {
+        super::parse(text, now_ms, max_age_minutes, tradable, &Proxies::default())
+    }
+
     #[test]
     fn a_fresh_feed_keeps_assets_with_a_binance_market_and_lists_the_rest_as_scored_only() {
         let feed = parse(FEED, AS_OF_MS + 20 * 60_000, 45, listed).unwrap();
@@ -359,7 +384,8 @@ mod tests {
             (feed.assets["XMR"].h6.up, feed.assets["XMR"].h6.down),
             (3.0, 1.0)
         );
-        assert_eq!(feed.scored_only, ["NVDA"]);
+        assert_eq!(feed.reach.scored_only, ["NVDA"]);
+        assert_eq!(feed.candidates().iter().collect::<Vec<_>>(), ["BTC", "XMR"]);
         assert_eq!(
             feed.kinds,
             BTreeMap::from([("asset".to_owned(), 3), ("macro".to_owned(), 1)])
@@ -374,7 +400,10 @@ mod tests {
         assert_eq!(row["tradable"], serde_json::json!(["BTC", "XMR"]));
         assert_eq!(row["scored_only"], serde_json::json!(["NVDA"]));
         assert_eq!(row["digest"].as_str().unwrap().len(), 64);
+        assert_eq!(row["reach_paths"], serde_json::json!({"direct": 2}));
+        assert_eq!(row["proxied"], serde_json::json!({}));
         assert!(row.get("assets").is_none() && row.get("tags").is_none());
+        assert!(row.get("paths").is_none() && row.get("candidates").is_none());
     }
 
     #[test]
@@ -412,6 +441,7 @@ mod tests {
             AS_OF_MS,
             45,
             listed,
+            &Proxies::default(),
         );
         let value = serde_json::to_value(&missing).unwrap();
         assert_eq!(value["status"], "unavailable");
@@ -490,16 +520,19 @@ mod tests {
                 .flat_map(BTreeMap::values)
                 .any(|l| l.d30.posters > 0)
         );
-        // Read ten minutes after its as_of (fresh), and an hour after (stale).
-        let fresh = parse(REAL, REAL_AS_OF_MS + 10 * 60_000, 45, |c| {
-            matches!(c, "BTC" | "ETH" | "PAXG")
-        })
-        .unwrap();
+        // Read ten minutes after its as_of (fresh), and an hour after (stale). With the
+        // shipped proxy file GOLD reaches PAXG; SILVER has no proxy and stays scored only.
+        let gold = Proxies::parse(r#"{"GOLD": ["PAXG", "XAUT"]}"#).unwrap();
+        let listed = |c: &str| matches!(c, "BTC" | "ETH" | "PAXG");
+        let fresh = super::parse(REAL, REAL_AS_OF_MS + 10 * 60_000, 45, listed, &gold).unwrap();
         assert_eq!(fresh.assets.keys().collect::<Vec<_>>(), ["BTC", "ETH"]);
-        assert!(
-            fresh.scored_only.iter().any(|n| n == "GOLD")
-                && fresh.scored_only.iter().any(|n| n == "SILVER")
-        );
+        assert_eq!(fresh.candidates().iter().collect::<Vec<_>>(), ["BTC", "ETH", "PAXG"]);
+        assert_eq!(fresh.reach.proxied["GOLD"], ["PAXG"]);
+        let scored = &fresh.reach.scored_only;
+        assert!(!scored.iter().any(|n| n == "GOLD") && scored.iter().any(|n| n == "SILVER"));
+        // Baskets and links add paths to the reached assets.
+        let counts = fresh.reach.counts();
+        assert!(counts[&crate::reach::Via::Member] > 0 && counts[&crate::reach::Via::Link] > 0);
         assert_eq!(fresh.kinds.values().sum::<usize>(), feed.tags.len());
         assert!(
             parse(REAL, REAL_AS_OF_MS + 60 * 60_000, 45, |_| true)

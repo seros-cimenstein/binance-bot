@@ -174,9 +174,10 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
 
 - [x] `crate::tags` (replaces `crate::biz`) reads `tags-feed-v1` only; test
   fixture from a real file (`tests/fixtures/tags-feed-v1.json`, LOOP_TAGS C1).
-- [ ] Proxies: operator file `BOT_SPOT_PROXIES` (e.g. `GOLD` -> `PAXG`,
+- [x] Proxies: operator file `BOT_SPOT_PROXIES` (e.g. `GOLD` -> `PAXG`,
   `XAUT`); a tag reaches a tradable asset directly, through a proxy, a
-  basket membership or a link; others are scored, never bought.
+  basket membership or a link; others are scored, never bought
+  (`crate::reach`, `config/proxies.json`, LOOP_TAGS C4).
 - [x] Price horizons: 1h from the trader's polls, 24h from the all-symbol
   24h ticker (one request), 7d from cached 1h klines per candidate; the
   backtest derives the same from cached 1m candles (LOOP_TAGS C2, C3).

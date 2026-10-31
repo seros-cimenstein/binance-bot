@@ -325,7 +325,7 @@ mod tests {
             "windows": ["1h", "6h", "24h", "7d", "30d"], "sources": [], "tags": tags, "members": {}, "links": {}})
         .to_string();
         let as_of_ms = 1_792_933_200_000; // 2026-10-25T13:00:00Z
-        let feed = crate::tags::parse(&text, as_of_ms + 5 * 60_000, 45, |_| true).unwrap();
+        let feed = crate::tags::parse(&text, as_of_ms + 5 * 60_000, 45, |_| true, &Default::default()).unwrap();
         let snap = snap(&[("BTC", 0.0, 1.0, 1.0, 9e9)]);
         let book = flat_book();
         let inputs = Inputs { snap: &snap, book: &book, tags: Some(&feed.assets) };

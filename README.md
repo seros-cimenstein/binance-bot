@@ -54,8 +54,9 @@ The trader is an algorithm (operator decision 2026-10-29, Phase 52): no LLM, no
 chat, no host tools. With `--nonstop` it ticks every 15 s: it polls every
 price with one request, reads the tags feed (`tags-feed-v1` from biz-app,
 `BOT_SPOT_TAGS_FEED_PATH`), and runs the operator's rule (`crate::decider`,
-`BOT_SPOT_ALGO_WEIGHTS`, required) on the feed's asset tags with an eligible
-USDT market and the coins it holds. A decision row is written when
+`BOT_SPOT_ALGO_WEIGHTS`, required) on the coins the feed's live asset tags reach
+with an eligible USDT market (directly, or through the operator's proxy file
+`BOT_SPOT_PROXIES`, e.g. gold through PAXG and XAUT) and the coins it holds. A decision row is written when
 the decided action changes and once an hour; an unchanged tick writes nothing:
 
 - **Score.** `w_talk·talk + w_stance·stance + w_momentum·momentum` per coin:
@@ -130,8 +131,8 @@ A read-only web page for the trader, in five tabs that refresh every 30 s:
   and the decision rows newest first (click one for its scores); rows from
   before Phase 52 show their decision only.
 - **Tags:** the tags feed summary the trader recorded at its newest decision
-  (as of, sources, live tags per kind, the asset tags it may buy and those
-  without a Binance market, which are scored only).
+  (as of, sources, live tags per kind, the asset tags it may buy, those reaching
+  a market through a proxy, those without either, which are scored only).
 
 Trade results come from the route quotes the trader logs: each submitted route
 opens a trade in the coin it bought, which closes when the bot later sells that

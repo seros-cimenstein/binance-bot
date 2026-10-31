@@ -285,7 +285,10 @@ while `biz-watch` runs. The trader reads `BOT_SPOT_TAGS_FEED_PATH` (default
 as `tags`: `status` `fresh` with `as_of`, `age_minutes`, the file's sha256
 `digest`, `sources` (model, prompt and registry version, posts, untagged),
 live tags per kind (`kinds`), the asset tags with an eligible Binance market
-(`tradable`) and those without one (`scored_only`, never bought), or
+(`tradable`), those reaching one through the operator's proxy file
+(`proxied`, e.g. `{"GOLD": ["PAXG", "XAUT"]}`), those with neither
+(`scored_only`, never bought) and the paths from tags to tradable assets per
+kind (`reach_paths`), or
 `unavailable` with the reason (missing or unreadable file, another schema, a
 tag id that is not `<kind>:<name>`, `as_of` older than
 `BOT_SPOT_TAGS_MAX_AGE_MINUTES` (45) or more than 5 minutes ahead of the
@@ -295,12 +298,25 @@ newest recorded summary. Until the Phase 53 rollout the Pi's `biz-feed` unit
 still writes the old `biz-feed.json`, so this trader would record the feed as
 unavailable there.
 
+Reach (`crate::reach`): a tradable asset collects signal from its own asset
+tag, from an asset tag without a Spot market through the operator's proxy file
+`BOT_SPOT_PROXIES` (shipped `config/proxies.json`: gold through PAXG and XAUT,
+operator 2026-10-30; unset means no proxies, a named missing or invalid file
+stops the trader at start), from narrative baskets listing it (weighted by its
+share) and from links tying any tag to it. Baskets and links landing on GOLD
+follow its proxies. Only live asset tags, directly or through a proxy, make buy
+candidates; the `algo-2026-10-29` rule still scores talk and stance on a coin's
+own asset tag only, so a proxy such as PAXG is scored on its momentum until a
+rule gives the new signals weight. The Pi's `.env.docker` needs
+`BOT_SPOT_PROXIES=config/proxies.json` at the Phase 53 rollout.
+
 ### The algorithm
 
 `crate::decider` decides on every tick with the operator's rule
 (`BOT_SPOT_ALGO_WEIGHTS`, required; the trader refuses to start without it).
 It reads the wallet and the tags feed, and the prices of
-the coins it may buy (the feed's asset tags with an eligible USDT market,
+the coins it may buy (the tradable assets the feed's live asset tags reach,
+directly or through a proxy, with an eligible USDT market,
 stablecoins left out) and for the coins it holds (operator decision
 2026-10-29: no market breadth read). It scores those coins with
 `talk,stance,momentum,buy_above,sell_below` (momentum is the coin's own

@@ -254,7 +254,8 @@ mod tests {
                     "asset:GOLD":{"kind":"asset","name":"GOLD","windows":{"6h":{"mentions":9}}}}}"#;
         let as_of_ms = 1_792_490_400_000; // 2026-10-20T10:00:00Z
         let read = |text: &str, minutes: i64| {
-            let feed = crate::tags::parse(text, as_of_ms + minutes * 60_000, 45, |c| c == "ETH").unwrap();
+            let feed = crate::tags::parse(text, as_of_ms + minutes * 60_000, 45, |c| c == "ETH", &Default::default())
+                .unwrap();
             DecisionContext {
                 timestamp: "2026-10-20T10:30:00+00:00".into(),
                 rules_version: "r".into(),

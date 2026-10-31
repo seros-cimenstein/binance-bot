@@ -17,7 +17,8 @@
 //! - [`algo_backtest`]: offline backtest of the algorithm on cached 1m candles, tuned on
 //!   the older half and judged on the newer (research only, no network, no order path).
 //! - [`tags`]: the tags feed (`tags-feed-v1`) from biz-app, read every tick and summarised
-//!   on each decision row.
+//!   on each decision row. [`reach`]: how tags reach tradable assets (own tag, the
+//!   operator's proxies, baskets, links).
 //! - [`decider`]: the operator's rule (no LLM); backtested as `biz_algo`.
 //! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
 //! - [`nonstop`]: the trader loop (a tick every 15 s, rows on change plus an hourly
@@ -39,6 +40,7 @@ pub mod error;
 pub mod executor;
 pub mod memory;
 pub mod nonstop;
+pub mod reach;
 pub mod scope;
 pub mod state;
 pub mod tags;
