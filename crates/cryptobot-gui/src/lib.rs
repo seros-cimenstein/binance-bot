@@ -267,6 +267,8 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
                 "decision": row.get("decision"),
                 // The rule's verdict (absent on rows from before Phase 52).
                 "algo": row.get("algo"),
+                // What was left out to keep the row under its size budget (Phase 53 D6).
+                "trimmed": row.get("trimmed"),
             })
         })
         .collect();

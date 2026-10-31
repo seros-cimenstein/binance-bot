@@ -43,6 +43,21 @@ pub enum Fill {
     Sold { asset: String },
 }
 
+/// What a sleeve's decision row records besides the verdict (Phase 53 D6).
+#[derive(Debug, Clone, Default)]
+pub struct RowDetail {
+    /// The held coins and the top buy candidates with their score terms, highest score
+    /// first (`algo.coins`).
+    pub coins: Vec<Value>,
+    /// How many coins were scored (`algo.coins_scored`; the row lists at most
+    /// [`crate::nonstop::ROW_CANDIDATES`] candidates plus the held coins).
+    pub coins_scored: usize,
+    /// Every market-wide signal with the sleeve's poster minimum (`algo.market_signals`).
+    pub market_signals: BTreeMap<String, f64>,
+    /// Edge style: the scoreboard evidence (`algo.edge`).
+    pub edge: Option<Value>,
+}
+
 /// How a sleeve's orders are sized (Phase 53 D4): what it owns (its sells spend exactly
 /// that), its share of the portfolio and the portfolio value (USDT plus what the sleeves
 /// own, unowned balances left out) at the decision.
@@ -237,8 +252,8 @@ impl Runtime {
 
     /// Run the verdict's orders through `execute_route` (the only order path, every hard
     /// safety check included), stopping at the first failure, and close the decision's
-    /// statement. `coins` (every scored coin with its terms) is recorded with the verdict,
-    /// and `edge` (an edge rule's scoreboard evidence) as `algo.edge`.
+    /// statement. `detail` (the top candidates with their terms, the market-wide signals,
+    /// an edge rule's scoreboard evidence) is recorded with the verdict.
     /// Returns the turn report the decision row is written from (with the live fills).
     /// Order sizes come from `sizing` ([`Sizing`]): a sell spends exactly the sleeve's
     /// quantity (capped at the free balance), so an unowned remainder of the same asset is
@@ -251,8 +266,7 @@ impl Runtime {
         verdict: crate::decider::Verdict,
         sleeve: &crate::rules::Sleeve,
         sizing: &Sizing,
-        coins: Vec<Value>,
-        edge: Option<Value>,
+        detail: RowDetail,
         shutdown: &CancellationToken,
     ) -> TurnReport {
         use crate::decider::Action;
@@ -438,9 +452,11 @@ impl Runtime {
             "best": verdict.best.as_ref().map(pair),
             "held": verdict.held.iter().map(pair).collect::<Vec<_>>(),
             "orders": orders,
-            "coins": coins,
+            "coins": detail.coins,
+            "coins_scored": detail.coins_scored,
+            "market_signals": detail.market_signals,
             "blocked": verdict.blocked,
-            "edge": edge,
+            "edge": detail.edge,
             "owned": owned.iter().map(|(a, q)| (a.clone(), q.normalize().to_string())).collect::<BTreeMap<_, _>>(),
             "sizing": {
                 "share": sizing.share.normalize().to_string(),
@@ -537,6 +553,7 @@ impl Runtime {
         };
         row.algo = state.algo.clone();
         row.sleeve = state.sleeve.clone();
+        crate::audit::fit_budget(&mut row, crate::audit::ROW_BUDGET_BYTES);
         self.audit.append(&row)?;
         Ok((row, state.executions))
     }
@@ -1136,7 +1153,7 @@ mod tests {
         let sleeve = config.algo_rule.trading_sleeve().clone();
         let first = runtime(&server, config, CycleMode::PlanOnly).await;
         let report = first
-            .run_algo_turn(buy_sol(), &sleeve, &sizing(dec!(0.4), dec!(100)), Vec::new(), None, &token)
+            .run_algo_turn(buy_sol(), &sleeve, &sizing(dec!(0.4), dec!(100)), RowDetail::default(), &token)
             .await;
         assert_eq!(report.error.as_deref(), None);
         let (summary, _) = first.finish_cycle(&report).await.unwrap();
@@ -1162,7 +1179,7 @@ mod tests {
             ..buy_sol()
         };
         let report = tiny
-            .run_algo_turn(buy_eth, &sleeve, &sizing(dec!(0.0000001), dec!(100)), Vec::new(), None, &token)
+            .run_algo_turn(buy_eth, &sleeve, &sizing(dec!(0.0000001), dec!(100)), RowDetail::default(), &token)
             .await;
         assert_eq!(report.error, None);
         let (summary, _) = tiny.finish_cycle(&report).await.unwrap();
@@ -1197,7 +1214,7 @@ mod tests {
             ..sizing(dec!(1), dec!(100))
         };
         let report = second
-            .run_algo_turn(rotate, &sleeve, &owns_btc, Vec::new(), None, &token)
+            .run_algo_turn(rotate, &sleeve, &owns_btc, RowDetail::default(), &token)
             .await;
         assert!(report.error.as_deref().unwrap().contains("no free BTC balance"), "{report:?}");
         assert_eq!(order_calls(&server).await, 0);

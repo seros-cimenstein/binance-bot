@@ -390,7 +390,9 @@ impl TraderConfig {
             },
             "rule": {
                 "path": self.algo_rule_path,
+                "rules_version": self.algo_rule.rules_version,
                 "style": self.algo_rule.style,
+                "sha256": self.algo_rule.sha256,
                 "sleeves": self.algo_rule.sleeves,
             },
             "scope": self.scope,
@@ -597,7 +599,15 @@ pub(crate) mod tests {
         assert!(!text.contains("must-not-leak"), "{text}");
         assert_eq!(snapshot["rules_version"], "algo-2026-10-29");
         assert_eq!(snapshot["rule"]["style"], "fixed");
+        assert_eq!(snapshot["rule"]["rules_version"], "algo-2026-10-29");
         assert_eq!(snapshot["rule"]["sleeves"][0]["weights"]["stance.6h"], 1.0);
+        // The hash of the exact file read: one changed byte is another rule.
+        use sha2::Digest;
+        let file = std::fs::read(crate::rules::tests::SHIPPED).unwrap();
+        assert_eq!(snapshot["rule"]["sha256"], hex::encode(sha2::Sha256::digest(&file)));
+        let mut edited = String::from_utf8(file).unwrap();
+        edited.push('\n');
+        assert_ne!(crate::rules::Rule::parse(&edited).unwrap().sha256, config.algo_rule.sha256);
         assert_eq!(snapshot["tick_seconds"], 15);
     }
 

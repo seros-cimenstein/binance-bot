@@ -106,7 +106,9 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
 - **Audit.** Each route and each recorded decision is one fsync'd row in
   `BOT_SPOT_AUDIT_PATH`. It uses the Python schema plus `rules_version`
   (the rule file's) and, on decision rows, the rule's
-  verdict (`algo`).
+  verdict (`algo`), the market-wide signals, a live-tags summary and the rule
+  file's `sha256` (`run_config.rule`); a row is kept under 32 KB by dropping
+  detail, never the decision (`trimmed` lists what went).
   There are no Telegram or phone alerts (operator decision 2026-10-29); watch
   the dashboard and the audit log.
 
@@ -144,7 +146,7 @@ A read-only web page for the trader, in five tabs that refresh every 30 s:
   API-key safety check (withdrawals, IP restriction, extra permissions).
 - **Algorithm:** the trader's status (running while it writes a decision row at
   least hourly, stopped by the stop file, halted), the newest decision with
-  every scored coin's weighted signals (one column per name in the rule file), own 1h, 24h and 7d moves and score,
+  its listed coins' weighted signals (held coins and the 20 best candidates) (one column per name in the rule file), own 1h, 24h and 7d moves and score,
   and the decision rows newest first (click one for its scores); rows from
   before Phase 52 show their decision only.
 - **Tags:** the tags feed summary the trader recorded at its newest decision

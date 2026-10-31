@@ -105,7 +105,7 @@ Docker: `docker compose ps` and `docker compose logs -f <service>`.
 
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
 profiles `gui`/`live`/`all`) serves the Bot Spot trades, the Algorithm tab
-(each decision row with every scored coin's weighted signals, own 1h move
+(each decision row with its listed coins' weighted signals, own 1h move
 and score; "Running" while a row is at most an hour old, the heartbeat), the
 tags feed summary the trader recorded (Tags tab), stop-file and
 failed-route-halt state at `http://localhost:8787` on the Docker host. It is
@@ -287,8 +287,9 @@ as `tags`: `status` `fresh` with `as_of`, `age_minutes`, the file's sha256
 live tags per kind (`kinds`), the asset tags with an eligible Binance market
 (`tradable`), those reaching one through the operator's proxy file
 (`proxied`, e.g. `{"GOLD": ["PAXG", "XAUT"]}`), those with neither
-(`scored_only`, never bought) and the paths from tags to tradable assets per
-kind (`reach_paths`), or
+(`scored_only`, never bought), the paths from tags to tradable assets per
+kind (`reach_paths`) and per kind the 10 loudest tags (`top`: name,
+`posters_24h`, `posters_7d`, `up_24h`, `down_24h`; most 24h posters first), or
 `unavailable` with the reason (missing or unreadable file, another schema, a
 tag id that is not `<kind>:<name>`, `as_of` older than
 `BOT_SPOT_TAGS_MAX_AGE_MINUTES` (45) or more than 5 minutes ahead of the
@@ -407,10 +408,26 @@ coin feed history, `--end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
 tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
 
 - **Records.** Decision rows carry `algo` (sleeve, rule, levels, best candidate
-  and score, held coins and scores, orders, and per scored coin `signals` (each
-  weighted name and its value), `ret_1h_pct`, `ret_24h_pct`, `ret_7d_pct`,
-  `score`), `rules_version` (from the rule file) and `session_id` `algo`. The
-  dashboard's Algorithm tab shows every scored coin.
+  and score, held coins and scores, orders, `coins_scored`, and per listed coin
+  `signals` (each weighted name and its value), `ret_1h_pct`, `ret_24h_pct`,
+  `ret_7d_pct`, `score`; the held coins and the 20 best candidates are listed,
+  best first; `market_signals`: every `market.*` name's value),
+  `rules_version` (from the rule file), `run_config.rule` (`path`,
+  `rules_version`, `style`, `sha256` of the file's text, `sleeves`) and
+  `session_id` `algo`. An order's reason names at most 8 terms (the largest
+  `|weight × value|`, then "N more"); the shipped rule's 3 all show.
+- **Row budget** (Phase 53 D6). A decision row is at most 32 KB serialized
+  (`audit::ROW_BUDGET_BYTES`; the dashboard reads up to 120 rows per poll).
+  Over it, `audit::fit_budget` drops detail step by step until it fits,
+  recording each step in `trimmed`: `algo.rule`, the weights in
+  `run_config.rule` (as counts; `sha256` names the file), signals worth 0,
+  `tags.top` down to 3 per kind, `tags.tradable`/`scored_only`/`proxied` as
+  `*_count`, candidates one by one down to 5, `tags.top`, candidates down to 1,
+  the coins' signals, `algo.market_signals`, `algo.edge`, `algo.coins`, the
+  feed summary beyond status, `as_of`, age, digest and kinds, then `run_config`
+  beyond the mode and the rule's identity. The decision (action, reason), the
+  verdict, orders, sizing and sleeve are never cut. The shipped rule on the
+  full feed (462 tags) writes about 17 KB with nothing trimmed.
 - **Practice run.** `docker compose --profile paper up -d bot-spot-paper`
   runs the nonstop trader plan-only with its own files
   (`bot-spot-paper-{decisions.jsonl,state.json}`, lock `bot-spot-paper.lock`) and the shared stop file. Plan-only rows do not

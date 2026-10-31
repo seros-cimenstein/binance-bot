@@ -212,18 +212,20 @@ pub enum Tick {
     Recorded(Box<AuditRow>),
 }
 
+/// Buy candidates a decision row lists with their score terms (the best first; held coins
+/// are listed besides them).
+pub const ROW_CANDIDATES: usize = 20;
+
 /// The rule's verdict on one tick's inputs.
 struct Decision {
     verdict: Verdict,
     key: String,
     equity: Decimal,
-    /// Every held coin and buy candidate with its score terms, highest score first
-    /// (recorded on the decision row as `algo.coins`).
-    coins: Vec<serde_json::Value>,
+    /// What the row records besides the verdict: the top candidates, the market-wide
+    /// signals, an edge rule's evidence.
+    detail: crate::cycle::RowDetail,
     /// The sleeve as decided (edge style: with the scoreboard's weights).
     sleeve: crate::rules::Sleeve,
-    /// Edge style: the scoreboard evidence (`algo.edge`).
-    edge: Option<serde_json::Value>,
     /// The sleeve's sizing: its sells spend exactly what it owns, its buys its share.
     sizing: Sizing,
 }
@@ -441,8 +443,7 @@ impl Nonstop {
                     decision.verdict,
                     &decision.sleeve,
                     &decision.sizing,
-                    decision.coins,
-                    decision.edge,
+                    decision.detail,
                     shutdown,
                 )
                 .await;
@@ -894,10 +895,12 @@ impl Nonstop {
                 key: decision_key(&verdict),
                 verdict,
                 equity: slow.balances.free_value_usdt(&slow.view),
-                coins: Vec::new(),
+                detail: crate::cycle::RowDetail {
+                    edge,
+                    ..Default::default()
+                },
                 sleeve,
                 sizing,
-                edge,
             });
         }
         let sleeve_ref = &sleeve;
@@ -929,14 +932,32 @@ impl Nonstop {
             })
             .collect();
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let coins_scored = scored.len();
+        // The row lists the held coins and the top candidates only.
+        let mut candidates_listed = 0;
+        let coins = scored
+            .into_iter()
+            .map(|(_, coin)| coin)
+            .filter(|coin| {
+                coin["held"] == serde_json::Value::Bool(true) || {
+                    candidates_listed += 1;
+                    candidates_listed <= ROW_CANDIDATES
+                }
+            })
+            .collect();
+        let market_signals = scorer.market_signals();
         Ok(Decision {
             key: decision_key(&verdict),
             verdict,
             equity: slow.balances.free_value_usdt(&slow.view),
-            coins: scored.into_iter().map(|(_, coin)| coin).collect(),
+            detail: crate::cycle::RowDetail {
+                coins,
+                coins_scored,
+                market_signals,
+                edge,
+            },
             sleeve,
             sizing,
-            edge,
         })
     }
 
@@ -1366,6 +1387,139 @@ mod tests {
         let third = rows(dir.path());
         let beat = &third[second.len()..];
         assert_eq!((summary("fast", beat), summary("core", beat)), (1, 1), "{beat:?}");
+    }
+
+    /// The full B5 feed (`tests/fixtures/tags-feed-v1.json`, 462 tags, read as fresh) with
+    /// every fixture asset given a priced USDT market; `rule` is the rule file's text.
+    /// Returns the rows of one tick.
+    async fn full_feed_tick(rule: &str) -> Vec<String> {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let now = bb_core::time::now_ms();
+        let mut feed: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/tags-feed-v1.json")).unwrap();
+        feed["as_of"] = json!(chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now).unwrap().to_rfc3339());
+        std::fs::write(dir.path().join("feed.json"), feed.to_string()).unwrap();
+        let assets: Vec<String> = feed["tags"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|t| t["kind"] == "asset")
+            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .filter(|n| n.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) && n != "USDT")
+            .collect();
+        // Prices 2800 ± up to 5% against 1m closes of 2800: momentum differs per coin.
+        let price = |i: usize| Decimal::from(2800) * (Decimal::ONE + Decimal::new(i as i64 % 11 - 5, 2));
+        let tickers: Vec<Value> = assets
+            .iter()
+            .enumerate()
+            .map(|(i, a)| json!({"symbol": format!("{a}USDT"), "price": price(i).to_string()}))
+            .collect();
+        let minute = now - now.rem_euclid(60_000);
+        let bars = |step: i64, n: i64| -> Vec<Value> {
+            (1..=n).map(|back| {
+                let open = minute - minute.rem_euclid(step) - back * step;
+                json!([open, "1", "1", "1", "2800", "1", open + step - 1, "1", 1, "1", "1", "0"])
+            }).collect()
+        };
+        for (route, body) in [
+            ("/api/v3/time", json!({"serverTime": now})),
+            ("/api/v3/ticker/price", json!(tickers)),
+            ("/api/v3/klines", json!(bars(60_000, 61))),
+            ("/api/v3/account", json!({"canTrade": true, "balances": [{"asset": "USDT", "free": "100", "locked": "0"}]})),
+        ] {
+            Mock::given(method("GET")).and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body)).mount(&server).await;
+        }
+        Mock::given(method("GET")).and(path("/api/v3/klines")).and(query_param("interval", "1h"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(bars(HOUR_MS, i64::from(HOUR_BARS)))))
+            .with_priority(1).mount(&server).await;
+        let mut config = trader_config(dir.path(), HOLD);
+        config.algo_rule = crate::rules::Rule::parse(rule).unwrap();
+        let mut trader = nonstop(&server, config, now);
+        // As the CLI records it on every cycle summary.
+        trader.runtime.run_config.set(trader.runtime.config.run_config(true)).unwrap();
+        let markets: Vec<_> = assets
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let mut m = crate::universe::tests::market(&format!("{a}/USDT"), price(i), price(i) + dec!(0.1), dec!(9000000));
+                m.price_change_pct_24h = Some(Decimal::new(i as i64 % 7 - 3, 0));
+                m
+            })
+            .collect();
+        let symbols: Vec<String> = assets.iter().map(|a| format!("{a}/USDT")).collect();
+        let symbols: Vec<&str> = symbols.iter().map(String::as_str).collect();
+        let runtime_config = Arc::clone(&trader.runtime.config);
+        trader.slow.as_mut().unwrap().view = Arc::new(MarketView::from_snapshots(
+            markets,
+            crate::universe::tests::fees(&symbols),
+            &runtime_config,
+        ));
+        let token = CancellationToken::new();
+        assert!(matches!(trader.tick(now, false, &token).await.unwrap(), Tick::Recorded(_)));
+        std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap().lines().map(str::to_owned).collect()
+    }
+
+    #[tokio::test]
+    async fn decision_rows_on_the_full_feed_stay_under_their_size_budget() {
+        use crate::audit::ROW_BUDGET_BYTES;
+        let summaries = |lines: &[String]| -> Vec<Value> {
+            for line in lines {
+                assert!(line.len() <= ROW_BUDGET_BYTES, "{} bytes over the budget", line.len());
+            }
+            lines.iter().map(|l| serde_json::from_str::<Value>(l).unwrap()).filter(|r| r["row_type"] == "cycle_summary").collect()
+        };
+
+        // The shipped rule: everything fits, nothing is trimmed.
+        let shipped = std::fs::read_to_string(crate::rules::tests::SHIPPED).unwrap();
+        let rows = summaries(&full_feed_tick(&shipped).await);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert!(row.get("trimmed").is_none(), "{}", row["trimmed"]);
+        let algo = &row["algo"];
+        assert!(algo["coins_scored"].as_u64().unwrap() > ROW_CANDIDATES as u64);
+        assert_eq!(algo["coins"].as_array().unwrap().len(), ROW_CANDIDATES);
+        let scores: Vec<f64> = algo["coins"].as_array().unwrap().iter().map(|c| c["score"].as_f64().unwrap()).collect();
+        assert!(scores.windows(2).all(|w| w[0] >= w[1]), "best first: {scores:?}");
+        assert_eq!(algo["coins"][0]["asset"], algo["best"]["asset"]);
+        // Every market-wide signal (2 kinds × 31), the live tags per kind and their loudest.
+        assert_eq!(algo["market_signals"].as_object().unwrap().len(), 62);
+        assert_eq!(row["tags"]["kinds"]["asset"], 230);
+        assert_eq!(row["tags"]["top"]["asset"].as_array().unwrap().len(), crate::tags::TOP_TAGS_PER_KIND);
+        assert_eq!(row["run_config"]["rule"]["rules_version"], "algo-2026-10-29");
+        assert_eq!(row["run_config"]["rule"]["sha256"].as_str().unwrap().len(), 64);
+
+        // Two funded sleeves weighting every signal name (305 per sleeve, in run_config and
+        // on every listed coin): the rows are trimmed to the budget, keeping each sleeve's
+        // decision, orders and the rule's identity.
+        let weights: serde_json::Map<String, Value> =
+            crate::signals::Name::all().iter().map(|n| (n.to_string(), json!(0.001))).collect();
+        let sleeve = |name: &str, buy: f64| json!({"name": name, "share": 0.5, "horizon": "any",
+            "defensive": ["USDT"], "risk_off_below": null, "buy_above": buy, "sell_below": buy - 1.0,
+            "min_posters": 2, "weights": weights});
+        let rule = json!({"rules_version": "every-signal", "style": "fixed",
+            "sleeves": [sleeve("fast", 1000.0), sleeve("core", -1000.0)]}).to_string();
+        let rows = summaries(&full_feed_tick(&rule).await);
+        assert_eq!(rows.iter().map(|r| r["sleeve"].as_str().unwrap()).collect::<Vec<_>>(), ["fast", "core"]);
+        for row in &rows {
+            let trimmed = row["trimmed"].as_array().unwrap();
+            assert!(!trimmed.is_empty());
+            assert!(row["decision"]["reason"].as_str().unwrap().starts_with("rule-based decider: "));
+            assert_eq!(row["run_config"]["rule"]["rules_version"], "every-signal");
+            assert_eq!(row["run_config"]["rule"]["sha256"].as_str().unwrap().len(), 64);
+            assert!(row["algo"]["best"]["asset"].is_string() && row["algo"]["sizing"]["share"] == "0.5");
+            // The best candidates stay listed, best first, with the market-wide signals.
+            assert_eq!(row["algo"]["coins"][0]["asset"], row["algo"]["best"]["asset"]);
+            assert_eq!(row["algo"]["market_signals"].as_object().unwrap().len(), 62);
+        }
+        let (fast, core) = (&rows[0], &rows[1]);
+        let best = fast["algo"]["best"]["asset"].as_str().unwrap();
+        assert!(fast["decision"]["reason"].as_str().unwrap().contains(&format!("hold in cash (best {best} score")));
+        // core buys the best coin: the order and its reason survive the trim.
+        let order = &core["algo"]["orders"][0];
+        assert_eq!((order["side"].as_str(), order["asset"].as_str()), (Some("buy"), Some(best)));
+        assert!(core["decision"]["reason"].as_str().unwrap().contains(order["reason"].as_str().unwrap()));
     }
 
     #[tokio::test]

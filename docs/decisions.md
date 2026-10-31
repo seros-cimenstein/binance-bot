@@ -290,3 +290,13 @@ Manager note (iteration 21): sleeve identity on decisions, orders, fill
 booking, trades and memory; the shipped fast=1/core=0 rule unchanged;
 alternate splits, horizon filters and defensive assets only in tests or
 isolated smoke fixtures.
+
+## 2026-10-31 Phase 53 loop: decision-row budget (`LOOP_TAGS.md` D6)
+
+Manager note (iteration 22): the budget applies to the whole serialized row,
+`run_config` and every summary included, not only the candidate list; tested
+on the full B5 feed with enough weighted signals to force trimming; the
+sleeve's action and reason survive every trim; `run_config.rule` records the
+rule file's `rules_version`, style and content hash; the shipped rule file is
+unchanged. Defaults from the ledger: 32 KB, top 20 candidates, top 10 tags per
+kind by posters.

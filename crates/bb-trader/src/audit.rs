@@ -174,6 +174,10 @@ pub struct AuditRow {
     /// (`sleeve_mismatch` or `sleeves_reviewed`), the reason and the holdings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sleeve_check: Option<Value>,
+    /// Detail left out to keep the row under [`ROW_BUDGET_BYTES`] ([`fit_budget`]), one
+    /// note per step; absent when nothing was.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub trimmed: Vec<String>,
 }
 
 impl AuditRow {
@@ -208,8 +212,177 @@ impl AuditRow {
             tags: None,
             algo: None,
             sleeve_check: None,
+            trimmed: Vec::new(),
         }
     }
+}
+
+/// The most a decision row may take in the decisions file, serialized (Phase 53 D6: the
+/// dashboard reads up to 120 rows per poll).
+pub const ROW_BUDGET_BYTES: usize = 32 * 1024;
+
+/// One way to shorten a row toward a budget; the note it records, or `None` when it
+/// changed nothing.
+type Trim = fn(&mut AuditRow, usize) -> Option<String>;
+
+fn row_size(row: &AuditRow) -> usize {
+    serde_json::to_vec(row).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+/// Shorten `row` until it serializes to at most `budget` bytes, least useful detail first:
+/// the copies of the rule (`algo.rule`, the weights in `run_config.rule`; its `sha256`
+/// names the file), the candidates' signals worth 0, the loudest tags down to 3 per kind,
+/// the feed's name lists as counts, the listed candidates one by one down to 5 (held coins
+/// stay), the loudest tags, the candidates down to 1, the candidates' signal terms, the
+/// market-wide signals, the edge evidence, the candidates, the feed summary beyond its
+/// fingerprint and kinds, `run_config` beyond the rule's identity. Each step's note goes
+/// to `trimmed`. The decision (action, reason), `algo`'s verdict, orders, sizing and
+/// sleeve are never cut; a row still over budget is written whole with a warning.
+pub fn fit_budget(row: &mut AuditRow, budget: usize) {
+    const STEPS: [Trim; 14] = [
+        |r, _| drop_key(r.algo.as_mut(), "rule", "algo.rule"),
+        |r, _| weights_as_counts(r),
+        |r, _| drop_zero_signals(r),
+        |r, _| keep_top_tags(r, 3),
+        |r, _| names_as_counts(r),
+        |r, budget| fewer_candidates(r, budget, 5),
+        |r, _| keep_top_tags(r, 0),
+        |r, budget| fewer_candidates(r, budget, 1),
+        |r, _| drop_coin_signals(r),
+        |r, _| drop_key(r.algo.as_mut(), "market_signals", "algo.market_signals"),
+        |r, _| drop_key(r.algo.as_mut(), "edge", "algo.edge"),
+        |r, _| drop_key(r.algo.as_mut(), "coins", "algo.coins"),
+        |r, _| tags_fingerprint_only(r),
+        |r, _| run_config_rule_only(r),
+    ];
+    for step in STEPS {
+        if row_size(row) <= budget {
+            return;
+        }
+        if let Some(note) = step(row, budget) {
+            row.trimmed.push(note);
+        }
+    }
+    let bytes = row_size(row);
+    if bytes > budget {
+        tracing::warn!(bytes, budget, "decision row over its size budget after every trim");
+    }
+}
+
+/// Unlist the lowest candidates (held coins stay) one by one until the row fits or `min`
+/// remain.
+fn fewer_candidates(row: &mut AuditRow, budget: usize, min: usize) -> Option<String> {
+    let mut cut = false;
+    while row_size(row) > budget {
+        let coins = coins(row)?;
+        let listed = coins.iter().filter(|c| c["held"] != Value::Bool(true)).count();
+        if listed <= min {
+            break;
+        }
+        let last = coins.iter().rposition(|c| c["held"] != Value::Bool(true))?;
+        coins.remove(last);
+        cut = true;
+    }
+    let listed = coins(row)?.iter().filter(|c| c["held"] != Value::Bool(true)).count();
+    cut.then(|| format!("algo.coins: {listed} candidate(s) listed"))
+}
+
+fn coins(row: &mut AuditRow) -> Option<&mut Vec<Value>> {
+    row.algo.as_mut()?.get_mut("coins")?.as_array_mut()
+}
+
+fn keep_top_tags(row: &mut AuditRow, n: usize) -> Option<String> {
+    let top = row.tags.as_mut()?.get_mut("top")?.as_object_mut()?;
+    let mut cut = false;
+    for tags in top.values_mut().filter_map(Value::as_array_mut) {
+        cut |= tags.len() > n;
+        tags.truncate(n);
+    }
+    cut.then(|| format!("tags.top: {n} per kind"))
+}
+
+/// The feed's name lists (`tradable`, `scored_only`, `proxied`) replaced by their lengths
+/// (`tradable_count`, ...).
+fn names_as_counts(row: &mut AuditRow) -> Option<String> {
+    let tags = row.tags.as_mut()?.as_object_mut()?;
+    let mut cut = false;
+    for key in ["tradable", "scored_only", "proxied"] {
+        if let Some(list) = tags.remove(key) {
+            let count = match &list {
+                Value::Array(items) => items.len(),
+                Value::Object(items) => items.len(),
+                _ => 0,
+            };
+            tags.insert(format!("{key}_count"), json!(count));
+            cut = true;
+        }
+    }
+    cut.then(|| "tags: tradable, scored_only, proxied as counts".to_owned())
+}
+
+/// Each sleeve's weights in `run_config.rule` as their number.
+fn weights_as_counts(row: &mut AuditRow) -> Option<String> {
+    let sleeves = row
+        .run_config
+        .as_mut()?
+        .get_mut("rule")?
+        .get_mut("sleeves")?
+        .as_array_mut()?;
+    let mut cut = false;
+    for sleeve in sleeves.iter_mut().filter_map(Value::as_object_mut) {
+        if let Some(weights) = sleeve.get("weights").and_then(Value::as_object) {
+            let count = weights.len();
+            sleeve.insert("weights".to_owned(), json!(count));
+            cut = true;
+        }
+    }
+    cut.then(|| "run_config.rule.sleeves: weights as counts (see rule.sha256)".to_owned())
+}
+
+fn drop_zero_signals(row: &mut AuditRow) -> Option<String> {
+    let mut cut = false;
+    for coin in coins(row)?.iter_mut() {
+        if let Some(signals) = coin.get_mut("signals").and_then(Value::as_object_mut) {
+            let before = signals.len();
+            signals.retain(|_, v| v.as_f64() != Some(0.0));
+            cut |= signals.len() < before;
+        }
+    }
+    cut.then(|| "algo.coins: signals worth 0 left out".to_owned())
+}
+
+fn drop_coin_signals(row: &mut AuditRow) -> Option<String> {
+    let mut cut = false;
+    for coin in coins(row)?.iter_mut().filter_map(Value::as_object_mut) {
+        cut |= coin.remove("signals").is_some();
+    }
+    cut.then(|| "algo.coins: signal terms left out".to_owned())
+}
+
+fn drop_key(value: Option<&mut Value>, key: &str, note: &str) -> Option<String> {
+    let value = value?.as_object_mut()?.remove(key)?;
+    (!value.is_null()).then(|| format!("{note} left out"))
+}
+
+/// Keep of the feed summary its status, `as_of`, age, digest and tags per kind.
+fn tags_fingerprint_only(row: &mut AuditRow) -> Option<String> {
+    let tags = row.tags.as_mut()?.as_object_mut()?;
+    let before = tags.len();
+    tags.retain(|key, _| matches!(key.as_str(), "status" | "reason" | "as_of" | "age_minutes" | "digest" | "kinds"));
+    (tags.len() < before).then(|| "tags: only status, as_of, age, digest and kinds".to_owned())
+}
+
+/// Keep of `run_config` its mode, `rules_version` and the rule's path, version, style and
+/// hash.
+fn run_config_rule_only(row: &mut AuditRow) -> Option<String> {
+    let config = row.run_config.as_mut()?.as_object_mut()?;
+    let before = serde_json::to_vec(&*config).map_or(0, |b| b.len());
+    config.retain(|key, _| matches!(key.as_str(), "mode" | "rules_version" | "rule"));
+    if let Some(rule) = config.get_mut("rule").and_then(Value::as_object_mut) {
+        rule.retain(|key, _| matches!(key.as_str(), "path" | "rules_version" | "style" | "sha256"));
+    }
+    let after = serde_json::to_vec(&*config).map_or(0, |b| b.len());
+    (after < before).then(|| "run_config: only mode and the rule's identity".to_owned())
 }
 
 /// Python `datetime.now(timezone.utc).isoformat()`.

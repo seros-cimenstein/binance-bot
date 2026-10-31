@@ -226,6 +226,8 @@ impl GridWeights {
                 .into(),
                 edge_horizon: None,
             }],
+            // A backtest grid point, not a file.
+            sha256: String::new(),
         }
     }
 }

@@ -208,8 +208,10 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
   level; sleeve holdings in the state file, checked against balances every
   tick (a mismatch halts, fail closed); orders only through
   `execute_route` with every hard-safety item (LOOP_TAGS D3-D5).
-- [ ] Audit: a decision row when a sleeve's action changes plus hourly, with
-  each candidate's signals, the market-wide signals and the live tags.
+- [x] Audit: a decision row when a sleeve's action changes plus hourly, with
+  each candidate's signals, the market-wide signals and the live tags
+  (LOOP_TAGS D5, D6: top 20 candidates, 10 loudest tags per kind, 32 KB row
+  budget, rule file hash).
 
 ### Backtest and dashboard
 

@@ -82,8 +82,10 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
    spend share × portfolio value capped at free USDT, below-min-notional
    orders hold), and per-sleeve decisions (D5: horizon filter, risk-off to a
    defensive asset, per-sleeve rows and heartbeats; the shipped rule's `core`
-   has share 0 and writes nothing). Next: the decision-row budget (D6),
-   backtest, dashboard, plan-only rollout. The pre-change binary
+   has share 0 and writes nothing), and bounded decision rows (D6: top 20
+   candidates, market-wide signals, 10 loudest tags per kind, rule file
+   sha256 in `run_config.rule`, 32 KB budget trimming detail, never the
+   decision). Next: backtest, dashboard, plan-only rollout. The pre-change binary
    for E1's comparison is kept in `~/binance-bot-prechange/` (README there).
    Then a tuning phase where the operator picks weights, rule style and the
    sleeve split.

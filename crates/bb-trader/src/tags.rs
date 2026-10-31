@@ -185,6 +185,49 @@ impl Feed {
     }
 }
 
+/// Tags per kind in a row's live-tags summary ([`TagsFeed::top`]).
+pub const TOP_TAGS_PER_KIND: usize = 10;
+
+/// One of a kind's loudest tags, as recorded.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TopTag {
+    pub name: String,
+    pub posters_24h: u64,
+    pub posters_7d: u64,
+    pub up_24h: f64,
+    pub down_24h: f64,
+}
+
+/// Per kind the loudest tags ([`TOP_TAGS_PER_KIND`]).
+fn loudest(feed: &Feed) -> BTreeMap<String, Vec<TopTag>> {
+    let mut by_kind: BTreeMap<String, Vec<&Tag>> = BTreeMap::new();
+    for tag in feed.tags.values() {
+        by_kind.entry(tag.kind.clone()).or_default().push(tag);
+    }
+    by_kind
+        .into_iter()
+        .map(|(kind, mut tags)| {
+            tags.sort_by(|a, b| {
+                (b.windows.h24.posters, b.windows.d7.posters)
+                    .cmp(&(a.windows.h24.posters, a.windows.d7.posters))
+                    .then_with(|| a.name.cmp(&b.name))
+            });
+            let top = tags
+                .into_iter()
+                .take(TOP_TAGS_PER_KIND)
+                .map(|tag| TopTag {
+                    name: tag.name.clone(),
+                    posters_24h: tag.windows.h24.posters,
+                    posters_7d: tag.windows.d7.posters,
+                    up_24h: tag.windows.h24.up,
+                    down_24h: tag.windows.h24.down,
+                })
+                .collect();
+            (kind, top)
+        })
+        .collect()
+}
+
 /// A fresh feed as the tick records it: a summary on the row, the assets and the reach for
 /// the rule.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -197,6 +240,9 @@ pub struct TagsFeed {
     pub sources: Vec<Source>,
     /// Live tags per kind.
     pub kinds: BTreeMap<String, usize>,
+    /// Per kind the [`TOP_TAGS_PER_KIND`] loudest tags: most 24h posters, then most 7d
+    /// posters, then by name.
+    pub top: BTreeMap<String, Vec<TopTag>>,
     /// Asset tags with an eligible Binance market of their own, by name, with their windows
     /// (the `algo-2026-10-29` rule's input); recorded as the list of names.
     #[serde(rename = "tradable", serialize_with = "names")]
@@ -313,6 +359,7 @@ pub fn parse(
         digest: hex::encode(Sha256::digest(text.as_bytes())),
         sources: feed.sources.clone(),
         kinds,
+        top: loudest(&feed),
         assets,
         reach,
         feed,
@@ -539,5 +586,31 @@ mod tests {
                 .unwrap_err()
                 .contains("stale")
         );
+    }
+
+    #[test]
+    fn the_live_tags_summary_lists_each_kinds_loudest_tags() {
+        let fresh = parse(REAL, REAL_AS_OF_MS + 10 * 60_000, 45, |_| true).unwrap();
+        let raw = parse_raw(REAL).unwrap();
+        assert_eq!(fresh.top.keys().collect::<Vec<_>>(), fresh.kinds.keys().collect::<Vec<_>>());
+        for (kind, top) in &fresh.top {
+            assert_eq!(top.len(), fresh.kinds[kind].min(TOP_TAGS_PER_KIND), "{kind}");
+            let keys: Vec<(u64, u64)> = top.iter().map(|t| (t.posters_24h, t.posters_7d)).collect();
+            assert!(keys.windows(2).all(|w| w[0] >= w[1]), "{kind}: {keys:?}");
+            // Nothing left out is louder than the last one listed.
+            let last = *keys.last().unwrap();
+            let listed: BTreeSet<&str> = top.iter().map(|t| t.name.as_str()).collect();
+            assert!(
+                raw.tags
+                    .values()
+                    .filter(|t| &t.kind == kind && !listed.contains(t.name.as_str()))
+                    .all(|t| (t.windows.h24.posters, t.windows.d7.posters) <= last),
+                "{kind}"
+            );
+        }
+        // The fixture's loudest asset over 24h leads the asset list.
+        let loudest = raw.tags.values().filter(|t| t.kind == "asset").map(|t| t.windows.h24.posters).max();
+        assert_eq!(Some(fresh.top["asset"][0].posters_24h), loudest);
+        assert!(fresh.top["asset"].len() == TOP_TAGS_PER_KIND && fresh.top["mood"].len() <= TOP_TAGS_PER_KIND);
     }
 }

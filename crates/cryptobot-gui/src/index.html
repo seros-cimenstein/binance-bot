@@ -1002,7 +1002,7 @@ function cycleAction(c) { return ((c.decision && c.decision.action) || "").toLow
 function cycleFailed(c) { return !!c.error; }
 function cycleKey(c) { return "cycle:" + (c.cycle_id || c.timestamp); }
 function signedNum(v, dp = 2) { const n = num(v); return n === null ? "—" : (n > 0 ? "+" : n < 0 ? "−" : "") + nf(dp, dp).format(Math.abs(n)); }
-// The rule's inputs for every coin it scored: each weighted signal (named as in the rule file), score; the 1h, 24h and 7d moves for reference.
+// The rule's inputs for the coins the row lists (held coins and the best candidates): each weighted signal (named as in the rule file), score; the 1h, 24h and 7d moves for reference.
 function coinsTable(algo) {
   const coins = (algo && algo.coins) || [];
   if (!coins.length) return el("div", { class: "small muted" }, algo && algo.blocked ? "Nothing scored: " + algo.blocked + "." : algo ? "No coin scored: no fresh feed coin and nothing held." : "Recorded before Phase 52: no scores.");
@@ -1029,7 +1029,9 @@ function cycleDetail(c) {
     el("div", { class: "facts" },
       fact("Decided by", algo ? "Algorithm" : "Old trader (before Phase 52)"),
       fact("Rules", c.rules_version || "—"),
-      algo ? fact("Rule", algo.rule || "—") : null,
+      algo ? fact("Rule", algo.rule || (c.trimmed ? "left out to fit the row's size budget" : "—")) : null,
+      algo && algo.coins_scored !== undefined ? fact("Coins listed", (algo.coins || []).length + " of " + algo.coins_scored + " scored (held coins and the best candidates)") : null,
+      c.trimmed ? fact("Trimmed to fit 32 KB", c.trimmed.join("; ")) : null,
       algo && algo.edge ? fact("Scoreboard", algo.edge.status === "valid"
         ? `${algo.edge.horizon} edge, ${algo.edge.weighted} weighted signals, available ${stamp(algo.edge.available_at)}`
         : "no valid scoreboard: " + (algo.edge.reason || "")) : null,
@@ -1094,15 +1096,20 @@ function tagsPage() {
   }
   const kinds = Object.entries(f.kinds || {}).sort((a, z) => z[1] - a[1] || a[0].localeCompare(z[0]));
   const total = kinds.reduce((s, [, n]) => s + n, 0);
+  // A row trimmed to its size budget keeps only the lengths of these lists (Phase 53 D6).
+  const trimmedNames = f.tradable === undefined && f.tradable_count !== undefined;
   const tradable = f.tradable || [], scored = f.scored_only || [], sources = f.sources || [];
   const proxied = Object.entries(f.proxied || {});
+  const leftOut = (n) => el("div", { class: "small muted" }, n + " name(s), left out of the decision row to fit its size budget.");
   const paths = Object.entries(f.reach_paths || {}).map(([via, n]) => n + " " + via).join(" · ");
   const readers = sources.map((s) => s.model + (s.prompt_version ? " · " + s.prompt_version : "")).join(", ");
   const kpis = el("div", { class: "grid kpis" },
     kpi("Feed", "Fresh", "as of " + stamp(f.as_of) + " · " + f.age_minutes + " min old at the decision", "pos"),
     kpi("Live tags", String(total), kinds.length + " kinds"),
-    kpi("Tradable assets", String(new Set([...tradable, ...proxied.flatMap(([, p]) => p)]).size),
-      proxied.length + " through proxies · " + scored.length + " scored only" + (paths ? " · paths: " + paths : "")),
+    trimmedNames
+      ? kpi("Tradable assets", String(f.tradable_count), f.proxied_count + " through proxies · " + f.scored_only_count + " scored only" + (paths ? " · paths: " + paths : ""))
+      : kpi("Tradable assets", String(new Set([...tradable, ...proxied.flatMap(([, p]) => p)]).size),
+        proxied.length + " through proxies · " + scored.length + " scored only" + (paths ? " · paths: " + paths : "")),
     kpi("Reader", readers || "—", "decision " + ago(t.cycle_at)));
   const kindsCard = card("Live tags by kind", kinds.length
     ? table([["Kind"], ["Tags", "r"]], kinds.map(([k, n]) => el("tr", null, el("td", null, k), el("td", { class: "r num" }, String(n)))))
@@ -1114,11 +1121,11 @@ function tagsPage() {
         el("td", null, s.registry_version || "—"))))
     : empty("No source listed", ""), { flush: sources.length > 0 });
   return el("div", { class: "grid" }, head, kpis, kindsCard,
-    card("Tradable assets", namesBox(tradable, "No asset tag with an eligible Binance market."), { hint: "own Binance market: the rule may buy these" }),
-    card("Through proxies", proxied.length
+    card("Tradable assets", trimmedNames ? leftOut(f.tradable_count) : namesBox(tradable, "No asset tag with an eligible Binance market."), { hint: "own Binance market: the rule may buy these" }),
+    card("Through proxies", trimmedNames ? leftOut(f.proxied_count) : proxied.length
       ? el("div", { class: "small" }, proxied.map(([name, list]) => name + " → " + list.join(", ")).join(" · "))
       : el("div", { class: "small muted" }, "No live asset tag reaches a proxy (operator file BOT_SPOT_PROXIES)."), { hint: "the operator's proxy file: these stand-ins may be bought" }),
-    card("Scored only", namesBox(scored, "None."), { hint: "no eligible Binance market and no proxy: never bought" }),
+    card("Scored only", trimmedNames ? leftOut(f.scored_only_count) : namesBox(scored, "None."), { hint: "no eligible Binance market and no proxy: never bought" }),
     sourcesCard,
     el("details", { class: "footnote" }, el("summary", null, "What this shows"),
       el("p", null, "biz-app's AI tags every /biz/ post (assets, narratives, macro, events, entities, claims, mood) and lists the tags live at the feed's time (5 or more distinct posters in 7 days), rewriting the feed every 15 minutes. Asset tags of Binance coins count their mentions over every post without AI. The trader records a summary on each decision row (audit field tags): the feed's time and digest, the sources, the live tags per kind, which asset tags have an eligible Binance market, which reach one through the operator's proxy file (gold through PAXG and XAUT), and how many paths (own tag, proxy, basket membership, link) reach tradable assets. A missing, foreign or stale feed is recorded as unavailable with the reason; then the algorithm buys nothing.")));

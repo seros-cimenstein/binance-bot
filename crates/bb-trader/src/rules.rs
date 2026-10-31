@@ -41,6 +41,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::scoreboard::HORIZONS;
 use crate::signals::Name;
@@ -141,6 +142,10 @@ pub struct Rule {
     #[serde(flatten)]
     pub edge: Option<Edge>,
     pub sleeves: Vec<Sleeve>,
+    /// sha256 (hex) of the rule file's text, recorded in `run_config.rule` so a row names
+    /// the exact file that decided it.
+    #[serde(skip)]
+    pub sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -325,6 +330,7 @@ impl Rule {
             style: raw.style,
             edge,
             sleeves,
+            sha256: hex::encode(Sha256::digest(text.as_bytes())),
         };
         Ok(rule)
     }

@@ -56,15 +56,33 @@ pub struct Scored {
     pub score: f64,
     /// The value of each weighted name, in the sleeve's order.
     pub values: Vec<(Name, f64)>,
+    /// `weight × value` of each, in the same order.
+    pub terms: Vec<f64>,
 }
 
+/// Terms an order's reason names (Phase 53 D6: the reason is never trimmed from a row).
+pub const REASON_TERMS: usize = 8;
+
 impl Scored {
+    /// The score and its terms: every term up to [`REASON_TERMS`], else the
+    /// [`REASON_TERMS`] largest `|weight × value|` in the sleeve's order and how many more.
     fn describe(&self) -> String {
-        let values: Vec<String> = self
-            .values
+        let mut shown: Vec<usize> = (0..self.values.len()).collect();
+        if shown.len() > REASON_TERMS {
+            shown.sort_by(|a, b| self.terms[*b].abs().total_cmp(&self.terms[*a].abs()));
+            shown.truncate(REASON_TERMS);
+            shown.sort_unstable();
+        }
+        let mut values: Vec<String> = shown
             .iter()
-            .map(|(name, value)| format!("{name} {value:+.2}"))
+            .map(|i| {
+                let (name, value) = &self.values[*i];
+                format!("{name} {value:+.2}")
+            })
             .collect();
+        if self.values.len() > shown.len() {
+            values.push(format!("{} more", self.values.len() - shown.len()));
+        }
         format!("score {:+.3} ({})", self.score, values.join(", "))
     }
 }
@@ -93,6 +111,7 @@ impl<'a> Scorer<'a> {
         let own = self.inputs.tags.and_then(|assets| assets.get(asset));
         let coin = self.inputs.snap.coin(asset);
         let mut score = 0.0;
+        let mut terms = Vec::with_capacity(self.sleeve.weights.len());
         let values = self
             .sleeve
             .weights
@@ -103,23 +122,27 @@ impl<'a> Scorer<'a> {
                     None => own_value(name, own, coin, self.sleeve.min_posters).unwrap_or(0.0),
                 };
                 score += weight * value;
+                terms.push(weight * value);
                 (name.clone(), value)
             })
             .collect();
-        Scored { score, values }
+        Scored {
+            score,
+            values,
+            terms,
+        }
     }
 
     /// `asset`'s score without the market-wide names (the same for every asset): what
     /// risk-off compares its defensive assets (and USDT's 0) on.
     pub fn asset_score(&self, asset: &str) -> f64 {
         let scored = self.score(asset);
-        let market: f64 = self
-            .sleeve
-            .weights
+        let market: f64 = scored
+            .values
             .iter()
-            .zip(&scored.values)
+            .zip(&scored.terms)
             .filter(|((name, _), _)| matches!(name, Name::Market { .. }))
-            .map(|((_, weight), (_, value))| weight * value)
+            .map(|(_, term)| term)
             .sum();
         scored.score - market
     }
@@ -137,6 +160,19 @@ impl<'a> Scorer<'a> {
             .map(|(name, weight)| weight * signals.value(name, "", None, None))
             .sum::<f64>()
             + 0.0 // an empty sum is −0.0; record 0
+    }
+
+    /// Every market-wide signal (`market.<kind>.<signal>[.<window>]`, weighted or not) with
+    /// the sleeve's poster minimum, as its decision row records them; empty without a feed.
+    pub fn market_signals(&self) -> BTreeMap<String, f64> {
+        let Some(signals) = &self.signals else {
+            return BTreeMap::new();
+        };
+        Name::all()
+            .into_iter()
+            .filter(|name| matches!(name, Name::Market { .. }))
+            .map(|name| (name.to_string(), signals.value(&name, "", None, None) + 0.0))
+            .collect()
     }
 }
 
@@ -327,6 +363,26 @@ fn risk_off(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reason_names_at_most_its_largest_terms() {
+        let names = ["talk.6h", "stance.6h", "momentum.1h", "momentum.24h", "momentum.7d",
+            "asset.direction.24h", "asset.level.24h", "asset.surge.6h", "asset.breadth.7d", "asset.novelty"];
+        let scored = |n: usize| {
+            let values: Vec<(Name, f64)> = names[..n].iter().enumerate()
+                .map(|(i, name)| (name.parse().unwrap(), i as f64 / 10.0)).collect();
+            // Weight 1: each term is its value.
+            let terms: Vec<f64> = values.iter().map(|(_, v)| *v).collect();
+            Scored { score: terms.iter().sum(), values, terms }
+        };
+        // Up to REASON_TERMS terms: all of them, in the rule's order (the shipped rule's 3).
+        assert_eq!(scored(3).describe(), "score +0.300 (talk.6h +0.00, stance.6h +0.10, momentum.1h +0.20)");
+        // More: the largest |weight × value| in the rule's order, and how many are left out.
+        let text = scored(10).describe();
+        assert!(text.starts_with("score +4.500 (momentum.1h +0.20, "), "{text}");
+        assert!(text.ends_with("asset.novelty +0.90, 2 more)"), "{text}");
+        assert!(!text.contains("talk.6h") && !text.contains("stance.6h"), "{text}");
+    }
     use crate::book::tests::{flat_book, holding, snap};
     use crate::rules::Rule;
     use crate::rules::tests::{SHIPPED, one_sleeve};
