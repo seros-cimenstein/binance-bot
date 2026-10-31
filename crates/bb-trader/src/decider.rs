@@ -7,13 +7,17 @@
 //!
 //! `score = w_talk·talk + w_stance·stance + w_momentum·momentum`
 //!
+//! with the legacy signals `talk`, `stance` and `momentum.1h` of [`crate::signals`]:
+//!
 //! - `talk`: the coin's /biz/ mention rate over the last 6h against its 24h rate, minus 1
 //!   (0 = steady, +1 = twice the usual rate), capped to −1..3; 0 under
-//!   [`SURGE_MIN_MENTIONS`] mentions in 24h or without a feed. Mentions of Binance coins
+//!   [`SURGE_MIN_MENTIONS`](crate::signals::SURGE_MIN_MENTIONS) mentions in 24h or without
+//!   a feed. Mentions of Binance coins
 //!   are counted over every post, without AI.
 //! - `stance`: (up − down) / (up + down) of the 6h AI tags (bullish, bearish), −1..1; 0 when
 //!   the 6h window has fewer than `min_posters` distinct posters, no tags, or no feed.
-//! - `momentum`: the coin's 1h return capped to ±[`MOMENTUM_CAP_PCT`] and divided by it,
+//! - `momentum`: the coin's 1h return capped to
+//!   ±[`MOMENTUM_CAP_PCT`](crate::signals::MOMENTUM_CAP_PCT) and divided by it,
 //!   −1..1.
 //!
 //! Weights may be negative (a negative `w_talk` fades /biz/ hype). Rules: a held coin
@@ -27,12 +31,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::book::{Book, Snapshot};
+use crate::signals::{Span, momentum, stance, talk};
 use crate::tags::Windows;
-
-/// 24h mentions a coin needs before its talk surge counts.
-pub const SURGE_MIN_MENTIONS: u64 = 4;
-/// 1h move that saturates the momentum term.
-pub const MOMENTUM_CAP_PCT: f64 = 5.0;
 
 /// Weights and levels of the rule.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -146,45 +146,13 @@ pub struct Verdict {
     pub held: Vec<(String, f64)>,
 }
 
-/// /biz/ talk surge of a coin (see the module docs).
-pub fn talk_surge(windows: &Windows) -> f64 {
-    if windows.h24.mentions < SURGE_MIN_MENTIONS {
-        return 0.0;
-    }
-    (windows.h6.mentions as f64 * 4.0 / windows.h24.mentions as f64 - 1.0).clamp(-1.0, 3.0)
-}
-
-/// /biz/ 6h stance of a coin (see the module docs).
-pub fn stance(windows: &Windows, min_posters: u64) -> f64 {
-    let w = &windows.h6;
-    let tagged = w.up + w.down;
-    if w.posters < min_posters || tagged <= 0.0 {
-        0.0
-    } else {
-        (w.up - w.down) / tagged
-    }
-}
-
-fn momentum(snap: &Snapshot, asset: &str) -> f64 {
-    snap.coin(asset)
-        .and_then(|c| c.ret_1h)
-        .map_or(0.0, |r| r.clamp(-MOMENTUM_CAP_PCT, MOMENTUM_CAP_PCT) / MOMENTUM_CAP_PCT)
-}
-
-fn tag_terms(inputs: &Inputs<'_>, asset: &str, min_posters: u64) -> (f64, f64) {
-    inputs
-        .tags
-        .and_then(|assets| assets.get(asset))
-        .map_or((0.0, 0.0), |w| (talk_surge(w), stance(w, min_posters)))
-}
-
 /// Terms of `asset` (the same whether it is bought or held).
 pub fn terms(inputs: &Inputs<'_>, asset: &str, min_posters: u64) -> Terms {
-    let (talk, stance) = tag_terms(inputs, asset, min_posters);
+    let own = inputs.tags.and_then(|assets| assets.get(asset));
     Terms {
-        talk,
-        stance,
-        momentum: momentum(inputs.snap, asset),
+        talk: own.map_or(0.0, talk),
+        stance: own.map_or(0.0, |w| stance(w, min_posters)),
+        momentum: momentum(inputs.snap.coin(asset), Span::H1),
     }
 }
 
@@ -267,16 +235,6 @@ mod tests {
             h24: window(m24),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn tag_terms_need_enough_talk_and_posters() {
-        // 6 mentions in 6h against 12 in 24h: twice the usual rate.
-        assert!((talk_surge(&windows(6, 12, 3, 0.0, 0.0)) - 1.0).abs() < 1e-12);
-        assert_eq!(talk_surge(&windows(3, 3, 3, 0.0, 0.0)), 0.0);
-        assert!((stance(&windows(4, 8, 3, 3.0, 1.0), 2) - 0.5).abs() < 1e-12);
-        assert_eq!(stance(&windows(4, 8, 1, 3.0, 1.0), 2), 0.0);
-        assert_eq!(stance(&windows(4, 8, 3, 0.0, 0.0), 2), 0.0);
     }
 
     /// Real coin windows of the old /biz/ coin feed (biz-app on the archive at

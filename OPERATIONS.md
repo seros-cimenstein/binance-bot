@@ -310,6 +310,19 @@ own asset tag only, so a proxy such as PAXG is scored on its momentum until a
 rule gives the new signals weight. The Pi's `.env.docker` needs
 `BOT_SPOT_PROXIES=config/proxies.json` at the Phase 53 rollout.
 
+Signals (`crate::signals`): the catalog of names a rule may weight. The
+legacy `talk`, `stance` and `momentum.1h` are the `algo-2026-10-29` terms
+(the decider reads them from there); `momentum.24h` and `momentum.7d` (caps
+10% and 20%); per tradable asset `<kind>.<signal>[.<window>]` (the tag signal
+over every reach path from a tag of that kind, averaged by path weight; link
+paths use the link's own up/down for `direction` and `agreement`); market-wide
+`market.<macro|mood>.<signal>[.<window>]` (averaged by the tags' posters).
+Signals: `direction`, `level`, `surge`, `novelty`, `breadth`, `persistence`,
+`agreement`, `horizon`, `price_confirmed`; each −1..1 or 0..1 except the
+legacy `talk` (−1..3). The module docs list each formula, its windows and
+range; an unknown name is an error. The rule file that weights them comes
+with Phase 53 D1.
+
 ### The algorithm
 
 `crate::decider` decides on every tick with the operator's rule
