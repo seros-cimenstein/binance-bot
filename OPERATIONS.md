@@ -105,8 +105,15 @@ Docker: `docker compose ps` and `docker compose logs -f <service>`.
 
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
 profiles `gui`/`live`/`all`) serves the Bot Spot trades, the Algorithm tab
-(each decision row with its listed coins' weighted signals, own 1h move
-and score; "Running" while a row is at most an hour old, the heartbeat), the
+(one panel per sleeve of the rule: share, levels, risk-off state, holdings
+from `BOT_SPOT_STATE_PATH`, the newest decision's listed coins under the
+sleeve's signal names and weights; every decision row with its sleeve, halt
+rows marked; "Running" while a row is at most an hour old, the heartbeat; its
+`/api/status` with the newest 120 rows is about 1.06 MB at 17-18 KB D6 rows,
+0.56 MB on the Pi's paper log of 2026-10-31), the Scoreboard tab (the newest
+`bb tag-scoreboard` file, `CRYPTOBOT_GUI_SCOREBOARD_PATH`, default
+`data/scoreboard/latest.json`: per horizon and target the signals by `t` with
+excess, net, hit rate, halves and decay), the
 tags feed and tag registry as biz-app wrote them (Tags tab, `/api/tags`, read
 from `BOT_SPOT_TAGS_FEED_PATH` with `tags-registry.json` and
 `binance-spot-assets.json` from the same directory and the proxy file
@@ -126,7 +133,8 @@ Laptop on the Pi's live data: `scripts/cryptobot_gui_pi.sh --open` (the
 `~/.cache/binance-bot/pi-data` every 30 s (old omp logins, the old bot
 session and session files, the candle caches and the tags history are not
 copied; nothing is written on the Pi), maps the trader's file paths (audit,
-stop, tags feed) from the Pi's `.env.docker`, uses this repo's
+stop, state, tags feed) from the Pi's `.env.docker`, points the Scoreboard
+tab at the mirrored `scoreboard/latest.json`, uses this repo's
 `config/proxies.json` for the Tags tab,
 and runs the local release build against the mirror with the laptop's
 read-only keys for the wallet. Started without Pi data, the page says so

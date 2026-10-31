@@ -146,10 +146,18 @@ A read-only web page for the trader, in five tabs that refresh every 30 s:
   and share, Simple Earn positions, Binance wallet totals, account fees and an
   API-key safety check (withdrawals, IP restriction, extra permissions).
 - **Algorithm:** the trader's status (running while it writes a decision row at
-  least hourly, stopped by the stop file, halted), the newest decision with
-  its listed coins' weighted signals (held coins and the 20 best candidates) (one column per name in the rule file), own 1h, 24h and 7d moves and score,
-  and the decision rows newest first (click one for its scores); rows from
-  before Phase 52 show their decision only.
+  least hourly, stopped by the stop file, halted, the `sleeve_mismatch` halt
+  included), the rule file (version, style, sha256) and one panel per sleeve:
+  share, horizon, levels, risk-off level and state (market score), what it
+  holds per the state file, and its newest decision with its listed coins
+  (held coins and the 20 best candidates) under the sleeve's own signal names
+  and weights, own 1h, 24h and 7d moves and score; then every sleeve's
+  decision rows newest first (click one for its scores; halt rows marked);
+  rows from before Phase 52 show their decision only.
+- **Scoreboard:** the newest `bb tag-scoreboard` file (`data/scoreboard/latest.json`,
+  `CRYPTOBOT_GUI_SCOREBOARD_PATH`): per horizon and target each signal's
+  samples, excess, net of the fee, hit rate and `t` (strongest first, `|t| ≥ 2`
+  by default), the older and newer halves' excess and the decay flag.
 - **Tags:** the tags feed and tag registry as biz-app wrote them: every live tag
   by kind (24h and 7d posters and lean, horizon, aliases, new ones marked),
   asset tags marked Binance market / through a proxy / scored only, baskets,
@@ -171,8 +179,11 @@ ssh -L 8787:localhost:8787 <bot-host>          # view a remote box from your lap
 ```
 
 - **Read-only.** GET routes only. It reads the Bot Spot files
-  (`BOT_SPOT_AUDIT_PATH`, `BOT_SPOT_STOP_PATH`, relative to the working
-  directory like the trader) and
+  (`BOT_SPOT_AUDIT_PATH`, `BOT_SPOT_STOP_PATH`, `BOT_SPOT_STATE_PATH`,
+  `BOT_SPOT_TAGS_FEED_PATH` with the registry and asset list beside it,
+  `BOT_SPOT_PROXIES`, relative to the working directory like the trader), the
+  scoreboard (`CRYPTOBOT_GUI_SCOREBOARD_PATH`, default
+  `data/scoreboard/latest.json`) and
   Binance through signed GETs (account, 24h tickers, wallet totals, API-key
   restrictions; one read is reused for 20 s).
   It never writes a file or calls an order endpoint. Stopping the trader is

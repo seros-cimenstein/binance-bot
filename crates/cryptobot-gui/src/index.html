@@ -234,6 +234,7 @@
       <a href="#wallet" data-tab="wallet">Wallet</a>
       <a href="#algorithm" data-tab="algorithm">Algorithm</a>
       <a href="#tags" data-tab="tags">Tags</a>
+      <a href="#scoreboard" data-tab="scoreboard">Scoreboard</a>
     </nav>
     <div class="top-right">
       <span class="status" id="status-pill" title=""><span class="dot"></span><span>…</span></span>
@@ -252,8 +253,8 @@
 // textContent / createTextNode; nothing is parsed as HTML.
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
-const TABS = ["overview", "history", "wallet", "algorithm", "tags"];
-const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", tags: "/api/tags" };
+const TABS = ["overview", "history", "wallet", "algorithm", "tags", "scoreboard"];
+const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", tags: "/api/tags", scoreboard: "/api/scoreboard" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
@@ -699,7 +700,7 @@ function renderHeader() {
 function render() {
   renderHeader();
   const view = document.getElementById("view");
-  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, algorithm: algorithmPage, tags: tagsPage };
+  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, algorithm: algorithmPage, tags: tagsPage, scoreboard: scoreboardPage };
   ui.pendingRender = false;
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
@@ -1003,18 +1004,24 @@ function cycleAction(c) { return ((c.decision && c.decision.action) || "").toLow
 function cycleFailed(c) { return !!c.error; }
 function cycleKey(c) { return "cycle:" + (c.cycle_id || c.timestamp); }
 function signedNum(v, dp = 2) { const n = num(v); return n === null ? "—" : (n > 0 ? "+" : n < 0 ? "−" : "") + nf(dp, dp).format(Math.abs(n)); }
-// The rule's inputs for the coins the row lists (held coins and the best candidates): each weighted signal (named as in the rule file), score; the 1h, 24h and 7d moves for reference.
-function coinsTable(algo) {
+// The rule's inputs for the coins the row lists (held coins and the best candidates): one
+// column per signal the sleeve weights (in the rule's order, with its weight), the score; the
+// 1h, 24h and 7d moves for reference.
+function coinsTable(algo, weights) {
   const coins = (algo && algo.coins) || [];
   if (!coins.length) return el("div", { class: "small muted" }, algo && algo.blocked ? "Nothing scored: " + algo.blocked + "." : algo ? "No coin scored: no fresh feed coin and nothing held." : "Recorded before Phase 52: no scores.");
   const buy = num(algo.buy_above), sell = num(algo.sell_below);
   // Rows written before the rule file (Phase 53 D1) carry talk, stance and momentum fields.
   const signalsOf = (c) => c.signals || (c.talk === undefined ? {} : { "talk.6h": c.talk, "stance.6h": c.stance, "momentum.1h": c.momentum });
-  const names = [...new Set(coins.flatMap((c) => Object.keys(signalsOf(c))))];
+  const listed = [...new Set(coins.flatMap((c) => Object.keys(signalsOf(c))))];
+  const w = weights && typeof weights === "object" ? weights : null;
+  const names = w ? [...Object.keys(w).filter((n) => listed.includes(n)), ...listed.filter((n) => !(n in w))] : listed;
+  const head = (n) => w && n in w ? el("span", { title: "weight " + w[n] }, n, el("div", { class: "faint small" }, "× " + w[n])) : n;
   const verdict = (c) => c.held
     ? (sell !== null && num(c.score) < sell ? chip("Sell", "neg") : chip("Keep", "accent"))
-    : (!c.priced ? chip("No price", "") : buy !== null && num(c.score) >= buy ? chip("Buy level", "pos") : null);
-  return table([["Coin"], ...names.map((n) => [n, "r"]), ["1h move", "r"], ["24h move", "r"], ["7d move", "r"], ["Score", "r"], [""]],
+    // In risk-off the buy level does not apply: the sleeve moves to its defensive asset.
+    : (!c.priced ? chip("No price", "") : !algo.risk_off && buy !== null && num(c.score) >= buy ? chip("Buy level", "pos") : null);
+  return table([["Coin"], ...names.map((n) => [head(n), "r"]), ["1h move", "r"], ["24h move", "r"], ["7d move", "r"], ["Score", "r"], [""]],
     coins.map((c) => el("tr", null,
       el("td", null, assetLabel(c.asset, c.held ? chip("Held", "accent") : null)),
       ...names.map((n) => el("td", { class: "r num" }, signedNum(signalsOf(c)[n]))),
@@ -1024,59 +1031,139 @@ function coinsTable(algo) {
       el("td", { class: "r" }, el("b", { class: "num" }, signedNum(c.score, 3))),
       el("td", { class: "r" }, verdict(c)))));
 }
+function ruleSleeve(name) {
+  const rule = ui.data.status && ui.data.status.rule;
+  return rule && Array.isArray(rule.sleeves) ? rule.sleeves.find((s) => s.name === name) : null;
+}
+function cycleKind(c) { return c.sleeve_check ? "sleeve check" : c.algo ? (c.sleeve ? "sleeve " + c.sleeve : "algorithm") : "before Phase 52"; }
 function cycleDetail(c) {
   const algo = c.algo;
+  const rs = ruleSleeve(c.sleeve);
   return el("div", { class: "cycle-detail", onclick: (e) => e.stopPropagation() },
     el("div", { class: "facts" },
-      fact("Decided by", algo ? "Algorithm" : "Old trader (before Phase 52)"),
+      fact("Decided by", c.sleeve_check ? "Sleeve check (" + c.sleeve_check.kind + ")" : algo ? "Algorithm" + (c.sleeve ? ", sleeve " + c.sleeve : "") : "Old trader (before Phase 52)"),
       fact("Rules", c.rules_version || "—"),
       algo ? fact("Rule", algo.rule || (c.trimmed ? "left out to fit the row's size budget" : "—")) : null,
       algo && algo.coins_scored !== undefined ? fact("Coins listed", (algo.coins || []).length + " of " + algo.coins_scored + " scored (held coins and the best candidates)") : null,
+      algo && algo.risk_off !== undefined ? fact("Market score", signedNum(algo.market_score, 3) + (algo.risk_off ? " · risk-off" : "")) : null,
       c.trimmed ? fact("Trimmed to fit 32 KB", c.trimmed.join("; ")) : null,
+      c.sleeve_check && c.sleeve_check.reason ? fact("Reason", c.sleeve_check.reason) : null,
       algo && algo.edge ? fact("Scoreboard", algo.edge.status === "valid"
         ? `${algo.edge.horizon} edge, ${algo.edge.weighted} weighted signals, available ${stamp(algo.edge.available_at)}`
         : "no valid scoreboard: " + (algo.edge.reason || "")) : null,
       algo && algo.error ? fact("Could not decide", algo.error) : null),
-    algo ? el("div", { style: "margin:0 -12px" }, coinsTable(algo)) : null,
+    algo ? el("div", { style: "margin:0 -12px" }, coinsTable(algo, rs && rs.weights)) : null,
     c.cycle_id ? el("div", { class: "small faint code" }, c.cycle_id) : null);
+}
+// One panel per sleeve of the rule: its settings, what it holds (state file), its newest
+// decision with the risk-off state and its coins by the sleeve's own signal columns.
+function sleevePanel(name, rs, latest, holding, halt) {
+  const algo = latest && latest.algo;
+  const share = rs ? num(rs.share) : null;
+  const riskLevel = rs && rs.risk_off_below !== null && rs.risk_off_below !== undefined ? num(rs.risk_off_below) : null;
+  const riskChip = !algo || algo.risk_off === undefined ? null
+    : algo.risk_off ? chip("Risk-off", "neg") : riskLevel !== null ? chip("Risk-on", "pos") : null;
+  const facts = el("div", { class: "facts" },
+    fact("Share", share === null ? "—" : fixed(share * 100, 0) + "%"),
+    rs ? fact("Horizon", rs.horizon || "any") : null,
+    rs ? fact("Levels", "buy ≥ " + signedNum(rs.buy_above) + " · sell < " + signedNum(rs.sell_below)) : null,
+    rs ? fact("Risk-off", riskLevel === null ? "none" : "market score below " + signedNum(riskLevel) + " → " + (rs.defensive || []).join(" / ")) : null,
+    algo && algo.risk_off !== undefined ? fact("Market score", signedNum(algo.market_score, 3)) : null,
+    fact("Holds", holding ? qty(holding.qty) + " " + holding.asset + " since " + stamp(holding.opened_at) : "USDT (nothing booked to this sleeve)"),
+    latest ? fact("Decided", ago(latest.timestamp)) : null);
+  const body = el("div", { class: "grid", style: "gap:10px" },
+    halt ? errorBox("Sleeve check halt: " + halt) : null,
+    facts,
+    latest ? el("div", { class: "quote" }, cycleSummary(latest) || "No summary.") : null,
+    latest ? el("div", { style: "margin:0 -16px" }, coinsTable(algo, rs && rs.weights))
+      : el("div", { class: "small muted" }, share === 0 && !holding ? "No share and nothing held: this sleeve decides nothing and writes no rows." : "No decision row for this sleeve yet."));
+  return card(el("span", null, "Sleeve ", el("b", null, name), " ", riskChip), body, { hint: rs && typeof rs.weights === "object" ? Object.keys(rs.weights).length + " weighted signals" : "" });
 }
 function algorithmPage() {
   const st = ui.data.status;
-  const head = pageHead("Algorithm", "The operator's rule file: every coin's weighted signals (from the tags feed and its own price moves), scored. A row is written when the decision changes, and at least once an hour.", null);
+  const head = pageHead("Algorithm", "The operator's rule file, one panel per sleeve: each coin's weighted signals (from the tags feed and its own price moves), scored. A sleeve's row is written when its decision changes, and at least once an hour.", null);
   if (!st) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
   if (noBotData()) return el("div", { class: "grid" }, head, card(null, empty(...NO_DATA)));
   const state = botState();
-  const latest = st.cycles[0];
-  const algo = latest && latest.algo;
+  const rule = st.rule;
   const feed = st.tags && st.tags.feed;
-  const traded = latest && cycleAction(latest) === "traded";
+  const decided = st.cycles.filter((c) => c.algo);
+  const holdings = (st.sleeves && st.sleeves.state && st.sleeves.state.holdings) || {};
+  const names = rule && Array.isArray(rule.sleeves) ? rule.sleeves.map((s) => s.name)
+    : [...new Set(decided.map((c) => c.sleeve).filter(Boolean))];
+  const halt = st.halt && st.halt.includes("--mark-sleeves-reviewed") ? st.halt : null;
   const kpis = el("div", { class: "grid kpis" },
     kpi("Status", state.label, state.detail, state.tone || null),
-    kpi("Decision", latest ? (traded ? "Traded" : "Hold") : "—",
-      latest ? el("span", null, ago(latest.timestamp), latest.error ? el("b", { class: "neg" }, " · " + latest.error) : "") : "none yet",
-      traded ? "accent" : null),
-    kpi("Rule", (latest && latest.rules_version) || "—", algo ? algo.rule : ""),
+    kpi("Rule", (rule && rule.rules_version) || (decided[0] && decided[0].rules_version) || "—",
+      rule ? (rule.style || "") + (rule.sha256 ? " · sha256 " + String(rule.sha256).slice(0, 12) : "") + (rule.path ? " · " + rule.path : "") : ""),
+    kpi("Sleeves", String(names.length), names.map((n) => { const rs = ruleSleeve(n); return n + (rs ? " " + fixed(num(rs.share) * 100, 0) + "%" : ""); }).join(" · ")),
     kpi("Tags feed", !feed ? "—" : feed.status === "fresh" ? "Fresh" : "Unavailable",
       !feed ? "no feed recorded" : feed.status === "fresh" ? "as of " + stamp(feed.as_of) : feed.reason || "",
       !feed ? null : feed.status === "fresh" ? "pos" : "neg"));
-  const now = card("Coins at the newest decision", latest && algo ? el("div", { class: "grid", style: "gap:8px" },
-      el("div", { class: "quote" }, cycleSummary(latest) || "No summary."),
-      el("div", { style: "margin:0 -16px" }, coinsTable(algo)))
-    : botEmpty("No algorithm decision yet", "The trader's first decision shows up within a minute of starting."),
-    { hint: latest ? "recorded " + ago(latest.timestamp) : "" });
+  const stateNote = st.sleeves && st.sleeves.error ? card("Sleeve holdings", errorBox(st.sleeves.error)) : null;
+  const panels = names.length
+    ? names.map((n) => sleevePanel(n, ruleSleeve(n), decided.find((c) => c.sleeve === n), holdings[n], halt))
+    : [card("Coins at the newest decision", decided[0] ? el("div", { class: "grid", style: "gap:8px" },
+        el("div", { class: "quote" }, cycleSummary(decided[0]) || "No summary."),
+        el("div", { style: "margin:0 -16px" }, coinsTable(decided[0].algo)))
+      : botEmpty("No algorithm decision yet", "The trader's first decision shows up within a minute of starting."))];
   const sep = () => el("span", { class: "sep" }, "·");
   const decisions = card("Decisions", st.cycles.length ? el("div", { class: "feed" }, st.cycles.slice(0, shownCount("cycles", 30)).map((c) => {
     const key = cycleKey(c), open = ui.expanded.has(key);
     return el("div", { class: "feed-item click", title: open ? "" : "click for the scores",
       onclick: () => { if (String(getSelection())) return; open ? ui.expanded.delete(key) : ui.expanded.add(key); render(); } },
-      el("div", { class: "feed-meta" }, actionChip(c), cycleFailed(c) ? chip("Error", "neg") : null,
-        el("span", { title: stamp(c.timestamp) }, ago(c.timestamp)), sep(), el("span", null, c.algo ? "algorithm" : "before Phase 52"),
+      el("div", { class: "feed-meta" }, actionChip(c), cycleFailed(c) ? chip("Error", "neg") : null, c.sleeve_check ? chip(c.sleeve_check.kind === "sleeve_mismatch" ? "Halt" : "Reviewed", c.sleeve_check.kind === "sleeve_mismatch" ? "neg" : "") : null,
+        el("span", { title: stamp(c.timestamp) }, ago(c.timestamp)), sep(), el("span", null, cycleKind(c)),
         el("span", { class: "faint", style: "margin-left:auto" }, open ? "▴" : "▾")),
       el("div", { class: "feed-text" + (open ? "" : " clamp") }, cycleSummary(c) || "No summary."),
       c.error ? el("div", { class: "small neg" + (open ? "" : " clamp") }, c.error) : null,
       open ? cycleDetail(c) : null);
-  }), olderButton("cycles", 30, st.cycles.length)) : empty("No decisions yet", "The trader's first decision shows up within a minute of starting."), { flush: st.cycles.length > 0, hint: "newest first" });
-  return el("div", { class: "grid" }, head, kpis, now, decisions);
+  }), olderButton("cycles", 30, st.cycles.length)) : empty("No decisions yet", "The trader's first decision shows up within a minute of starting."), { flush: st.cycles.length > 0, hint: "newest first, every sleeve" });
+  return el("div", { class: "grid" }, head, kpis, stateNote, ...panels, decisions);
+}
+
+// ---------- Scoreboard ----------
+// The newest tag scoreboard (/api/scoreboard): which signals moved prices their way, per horizon.
+function scoreboardPage() {
+  const v = ui.data.scoreboard;
+  const head = pageHead("Scoreboard", "Which tags and signals moved prices their way, at which horizon, after fees (bb tag-scoreboard). An edge-style rule weights the signals from here; the shipped rule does not.", null);
+  if (!v) return el("div", { class: "grid" }, head, ui.errors.scoreboard ? card(null, errorBox(ui.errors.scoreboard)) : loadingView());
+  if (v.error) return el("div", { class: "grid" }, head, card(null, empty("No scoreboard", v.error)));
+  const rows = v.rows || [];
+  const horizons = [...new Set(rows.map((r) => r.horizon))];
+  const targets = [...new Set(rows.map((r) => r.target))];
+  if (!horizons.includes(ui.sbHorizon)) ui.sbHorizon = horizons.includes("24h") ? "24h" : horizons[0];
+  if (!targets.includes(ui.sbTarget)) ui.sbTarget = targets.includes("assets") ? "assets" : targets[0];
+  const strong = ui.sbStrong !== false;
+  const shown = rows.filter((r) => r.horizon === ui.sbHorizon && r.target === ui.sbTarget && (!strong || Math.abs(num(r.all.t)) >= 2));
+  const here = rows.filter((r) => r.horizon === ui.sbHorizon && r.target === ui.sbTarget);
+  const decayed = here.filter((r) => r.decayed).length;
+  const h = v.history || {};
+  const kpis = el("div", { class: "grid kpis" },
+    kpi("Available", stamp(v.available_at), "a decision may use it from then (every outcome closed)"),
+    kpi("History", (h.feeds || 0) + " feeds", shortDate(h.from) + " → " + shortDate(h.to) + " · split " + shortDate(h.split)),
+    kpi("Rows", String(rows.length), v.assets + " assets · fee " + v.fee_bps + " bps · " + v.min_posters + " posters"),
+    kpi("Generated", ago(v.generated_at), "as of " + stamp(v.as_of)));
+  const pickers = el("div", { class: "chips" },
+    seg(horizons.map((x) => [x, "+" + x]), ui.sbHorizon, (x) => { ui.sbHorizon = x; render(); }),
+    seg(targets.map((x) => [x, x === "basket" ? "Basket" : x === "assets" ? "Assets" : x]), ui.sbTarget, (x) => { ui.sbTarget = x; render(); }),
+    seg([[true, "|t| ≥ 2"], [false, "All"]], strong, (x) => { ui.sbStrong = x; render(); }));
+  const pctCell = (x) => el("td", { class: "r" }, el("span", { class: tone(x) + " num" }, signedNum(x, 3) + "%"));
+  const list = shown.slice(0, shownCount("sb", 50));
+  const tableCard = card("Signals at +" + ui.sbHorizon + " against " + ui.sbTarget, el("div", { class: "grid", style: "gap:10px" }, pickers,
+    shown.length ? el("div", { style: "margin:0 -16px" },
+      table([["Signal"], ["Samples", "r"], ["Excess", "r"], ["Net of fee", "r"], ["Hit", "r"], ["t", "r"], ["Older → newer excess", "r"], [""]],
+        list.map((r) => el("tr", null, el("td", null, el("b", null, r.name)), el("td", { class: "r num" }, String(r.all.n)),
+          pctCell(r.all.excess_pct), pctCell(r.all.net_pct), el("td", { class: "r num" }, fixed(num(r.all.hit_rate) * 100, 0) + "%"),
+          el("td", { class: "r" }, el("b", { class: tone(r.all.t) + " num" }, signedNum(r.all.t))),
+          el("td", { class: "r num" }, signedNum(r.older_excess_pct, 3) + " → " + signedNum(r.newer_excess_pct, 3)),
+          el("td", { class: "r" }, r.decayed ? chip("Decayed", "warn") : null)))),
+      olderButton("sb", 50, shown.length))
+      : empty("No row", strong ? "No signal reaches |t| ≥ 2 here; pick All." : "")),
+    { hint: shown.length + " shown of " + here.length + " · " + decayed + " decayed · strongest |t| first" });
+  return el("div", { class: "grid" }, head, kpis, tableCard,
+    el("details", { class: "footnote" }, el("summary", null, "What this shows"),
+      el("p", null, "Per signal: every non-zero value at an hourly feed is a sample; its outcome is the forward return over the horizon minus the same target's average over every hour (excess), signed by the signal's direction, so positive means prices moved the signal's way. Net subtracts the round-trip fee. t is over horizon-long blocks (0 under " + v.min_blocks + " blocks). Decayed: the newer half's excess is under half of a positive older half's. Market-wide signals are measured against BTC and the liquid basket; per-asset signals against the assets they reach. File: " + v.path)));
 }
 
 // ---------- Tags ----------

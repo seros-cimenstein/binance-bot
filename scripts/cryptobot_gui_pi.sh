@@ -77,13 +77,15 @@ mirror
 declare -A paths=(
     [BOT_SPOT_AUDIT_PATH]=bot-spot-decisions.jsonl
     [BOT_SPOT_STOP_PATH]=bot-spot.stop
+    [BOT_SPOT_STATE_PATH]=bot-spot-agent-state.json
     [BOT_SPOT_TAGS_FEED_PATH]=tags-feed.json
+    [CRYPTOBOT_GUI_SCOREBOARD_PATH]=scoreboard/latest.json
 )
 for name in "${!paths[@]}"; do
     export "$name=$MIRROR_DIR/${paths[$name]}"
 done
 export BOT_SPOT_PROXIES="${BOT_SPOT_PROXIES:-$REPO_DIR/config/proxies.json}"
-settings_pattern='^BOT_SPOT_(AUDIT_PATH|STOP_PATH|TAGS_FEED_PATH)='
+settings_pattern='^BOT_SPOT_(AUDIT_PATH|STOP_PATH|STATE_PATH|TAGS_FEED_PATH)='
 if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "grep -E '$settings_pattern' $PI_ENV_FILE" 2>/dev/null)"; then
     while IFS='=' read -r name value; do
         [[ "$name" =~ ^BOT_SPOT_[A-Z_]+$ ]] || continue

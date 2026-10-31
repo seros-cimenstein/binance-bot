@@ -219,9 +219,9 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
   report per sleeve (LOOP_TAGS E1: candidates from the tags history as live,
   edge rules walk-forward on point-in-time scoreboards,
   `reports/phase53/algo_backtest_2026-10-25.md`).
-- [ ] Dashboard: Tags tab (live and new tags by kind, baskets, links,
+- [x] Dashboard: Tags tab (live and new tags by kind, baskets, links,
   events by date, claims and their outcome); Scoreboard tab; Algorithm tab
-  per sleeve with the rule's signals as columns.
+  per sleeve with the rule's signals as columns (LOOP_TAGS E2, E3).
 - [ ] Docs (`README.md`, `OPERATIONS.md`, `.env.example`) and `CODEX.md`
   "rules in force" describe the pipeline, the rule file and the sleeves.
 

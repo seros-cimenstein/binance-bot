@@ -11,6 +11,7 @@
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
 //! - `GET /api/tags`: the tags feed and tag registry as biz-app wrote them ([`tags`]).
+//! - `GET /api/scoreboard`: the newest tag scoreboard ([`scoreboard`]).
 //!
 //! Every request must address `localhost`, `127.0.0.1` or `[::1]` in its `Host` header, so a
 //! web page that rebinds its DNS name to 127.0.0.1 cannot read the data.
@@ -18,6 +19,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod history;
+pub mod scoreboard;
 pub mod tags;
 pub mod wallet;
 
@@ -33,7 +35,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use bb_binance::BinanceClient;
 use bb_trader::audit::failed_route_halt;
-use bb_trader::config::{DEFAULT_AUDIT_PATH, DEFAULT_STOP_PATH};
+use bb_trader::config::{DEFAULT_AUDIT_PATH, DEFAULT_STATE_PATH, DEFAULT_STOP_PATH};
 use bb_trader::memory::load_audit_rows;
 use serde_json::{Value, json};
 
@@ -54,12 +56,18 @@ const INDEX_HTML: &str = include_str!("index.html");
 pub struct BotSpotFiles {
     pub audit_path: PathBuf,
     pub stop_path: PathBuf,
+    /// The trader's state file: what each sleeve holds.
+    pub state_path: PathBuf,
     /// The tags feed, its registry and the proxy file (the Tags tab).
     pub tags: TagFiles,
+    /// The newest tag scoreboard (`CRYPTOBOT_GUI_SCOREBOARD_PATH`, default
+    /// [`scoreboard::DEFAULT_PATH`], where `bb tag-scoreboard` writes `latest.json`).
+    pub scoreboard_path: PathBuf,
 }
 
 impl BotSpotFiles {
-    /// From `BOT_SPOT_{AUDIT,STOP}_PATH`, `BOT_SPOT_TAGS_FEED_PATH` and `BOT_SPOT_PROXIES`.
+    /// From `BOT_SPOT_{AUDIT,STOP,STATE}_PATH`, `BOT_SPOT_TAGS_FEED_PATH`,
+    /// `BOT_SPOT_PROXIES` and `CRYPTOBOT_GUI_SCOREBOARD_PATH`.
     pub fn from_env() -> Self {
         let path =
             |name: &str, default: &str| PathBuf::from(bb_core::env::string(&[name], default));
@@ -67,6 +75,8 @@ impl BotSpotFiles {
         Self {
             audit_path: path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
             stop_path: path("BOT_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
+            state_path: path("BOT_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
+            scoreboard_path: path("CRYPTOBOT_GUI_SCOREBOARD_PATH", scoreboard::DEFAULT_PATH),
             tags: TagFiles {
                 feed_path: path("BOT_SPOT_TAGS_FEED_PATH", bb_trader::tags::DEFAULT_FEED_PATH),
                 proxies_path: (!proxies.trim().is_empty()).then(|| PathBuf::from(proxies.trim())),
@@ -169,6 +179,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/history", get(history_handler))
         .route("/api/wallet", get(wallet_handler))
         .route("/api/tags", get(tags_handler))
+        .route("/api/scoreboard", get(scoreboard_handler))
         .layer(middleware::from_fn(localhost_only))
         .with_state(Arc::new(state))
 }
@@ -218,6 +229,11 @@ async fn tags_handler(State(app): State<Arc<AppState>>) -> Response {
     blocking_json(move || tags::tags_view(&files, bb_core::time::now_ms())).await
 }
 
+async fn scoreboard_handler(State(app): State<Arc<AppState>>) -> Response {
+    let path = app.bot_spot.scoreboard_path.clone();
+    blocking_json(move || scoreboard::scoreboard_view(&path)).await
+}
+
 async fn history_handler(State(app): State<Arc<AppState>>) -> Response {
     let wallet = app.wallet().await;
     let state = app.clone();
@@ -258,7 +274,9 @@ fn no_store(mut response: Response) -> Response {
 
 /// Bot Spot state: stop file, the trader's own halt verdict (failed route, else the Phase 53
 /// sleeve_mismatch halt), the newest cycle
-/// summaries (newest first; the page's liveness is the newest one), the tags feed summary the
+/// summaries (newest first, each with its `sleeve` and `sleeve_check`; the page's liveness
+/// is the newest one), the rule the newest cycle ran (`rule`: its `run_config.rule`), what
+/// each sleeve holds per the state file (`sleeves`), the tags feed summary the
 /// newest cycle that read one recorded (`tags`: its cycle time and the audit `tags` field,
 /// `null` before Phase 53), and where the data came from (`source`: a missing audit file
 /// means this host has no Bot Spot data at all).
@@ -285,6 +303,10 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
                 "algo": row.get("algo"),
                 // What was left out to keep the row under its size budget (Phase 53 D6).
                 "trimmed": row.get("trimmed"),
+                // The sleeve the row decided for (Phase 53 D5; D4 rows name it in `algo`).
+                "sleeve": row.get("sleeve").or_else(|| row.get("algo").and_then(|a| a.get("sleeve"))),
+                // Sleeve halt and review rows (Phase 53 D3).
+                "sleeve_check": row.get("sleeve_check"),
             })
         })
         .collect();
@@ -297,6 +319,16 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
             row.get("tags")
                 .map(|feed| json!({"cycle_at": row.get("timestamp"), "feed": feed}))
         });
+    let rule = audit
+        .rows
+        .iter()
+        .rev()
+        .filter(|row| row.get("row_type").and_then(Value::as_str) == Some("cycle_summary"))
+        .find_map(|row| row.get("run_config")?.get("rule").cloned());
+    let sleeves = match bb_trader::state::TraderState::load_strict(&files.state_path) {
+        Ok(state) => json!({"path": files.state_path, "state": state.sleeves, "error": null}),
+        Err(error) => json!({"path": files.state_path, "state": null, "error": error}),
+    };
     let audit_meta = std::fs::metadata(&files.audit_path).ok();
     let audit_modified = audit_meta
         .as_ref()
@@ -313,6 +345,8 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
         "halt": halt,
         "audit_error": audit.error,
         "cycles": cycles,
+        "rule": rule,
+        "sleeves": sleeves,
         "tags": tags,
     })
 }
@@ -368,6 +402,8 @@ mod tests {
         BotSpotFiles {
             audit_path: dir.join("audit.jsonl"),
             stop_path: dir.join("bot-spot.stop"),
+            state_path: dir.join("state.json"),
+            scoreboard_path: dir.join("scoreboard.json"),
             tags: TagFiles {
                 feed_path: dir.join("tags-feed.json"),
                 proxies_path: None,
@@ -463,6 +499,45 @@ mod tests {
         let tags = &status_view(&files)["tags"];
         assert_eq!(tags["cycle_at"], json!("t2"));
         assert_eq!(tags["feed"]["tradable"], json!(["BTC"]));
+    }
+
+    #[test]
+    fn status_names_each_rows_sleeve_the_rule_and_what_each_sleeve_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = files(dir.path());
+        // No state file: nothing held yet (the trader migrates on its first tick).
+        assert_eq!(status_view(&files)["sleeves"]["state"], Value::Null);
+        let rule = json!({"path": "config/rules/x.json", "rules_version": "two", "style": "fixed", "sha256": "ab",
+            "sleeves": [{"name": "fast", "share": 0.6}, {"name": "core", "share": 0.4}]});
+        write_lines(
+            &files.audit_path,
+            &[
+                json!({"timestamp": "t1", "row_type": "cycle_summary", "run_config": {"rule": {"rules_version": "old"}}}),
+                // A D4 row names its sleeve in `algo` only.
+                json!({"timestamp": "t2", "row_type": "cycle_summary", "algo": {"sleeve": "fast"}, "run_config": {"rule": rule}}),
+                json!({"timestamp": "t3", "row_type": "cycle_summary", "sleeve": "core", "algo": {"sleeve": "core", "risk_off": true}, "run_config": {"rule": rule}}),
+                json!({"timestamp": "t4", "row_type": "route", "sleeve": "core"}),
+                json!({"timestamp": "t5", "row_type": "cycle_summary", "status": "blocked",
+                       "sleeve_check": {"kind": "sleeve_mismatch", "reason": "fast owns 0.2 ETH, 0.1 free"}}),
+            ],
+        );
+        std::fs::write(
+            &files.state_path,
+            json!({"cycle_count": 3, "sleeves": {"holdings": {"fast": {"asset": "ETH", "qty": 0.2, "opened_at": "t2"}}, "since": "t0"}}).to_string(),
+        )
+        .unwrap();
+        let view = status_view(&files);
+        let sleeves: Vec<&Value> = view["cycles"].as_array().unwrap().iter().map(|c| &c["sleeve"]).collect();
+        assert_eq!(sleeves, [&Value::Null, &json!("core"), &json!("fast"), &Value::Null]);
+        assert_eq!(view["cycles"][0]["sleeve_check"]["kind"], "sleeve_mismatch");
+        // The rule of the newest cycle that recorded one; the holdings from the state file.
+        assert_eq!(view["rule"], rule);
+        assert_eq!(view["sleeves"]["state"]["holdings"]["fast"]["asset"], "ETH");
+        assert_eq!(view["sleeves"]["state"]["holdings"]["fast"]["qty"].as_f64(), Some(0.2));
+        assert!(view["halt"].as_str().unwrap().contains("fast owns 0.2 ETH"));
+        // A broken state file is shown, not hidden.
+        std::fs::write(&files.state_path, r#"{"sleeves": null}"#).unwrap();
+        assert!(status_view(&files)["sleeves"]["error"].as_str().unwrap().contains("malformed sleeves"));
     }
 
     #[test]
