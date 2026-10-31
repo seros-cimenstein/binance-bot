@@ -107,7 +107,14 @@ Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
 profiles `gui`/`live`/`all`) serves the Bot Spot trades, the Algorithm tab
 (each decision row with its listed coins' weighted signals, own 1h move
 and score; "Running" while a row is at most an hour old, the heartbeat), the
-tags feed summary the trader recorded (Tags tab), stop-file and
+tags feed and tag registry as biz-app wrote them (Tags tab, `/api/tags`, read
+from `BOT_SPOT_TAGS_FEED_PATH` with `tags-registry.json` and
+`binance-spot-assets.json` from the same directory and the proxy file
+`BOT_SPOT_PROXIES`: every live tag by kind with its 24h and 7d posters and
+lean, new tags (live within 24 hours of the feed's `as_of`), registry aliases,
+asset tags marked Binance market / through a proxy / scored only, baskets,
+links with 7d posters, events by date, claims with target, deadline and status
+`open` or `deadline passed`, no price check), stop-file and
 failed-route-halt state at `http://localhost:8787` on the Docker host. It is
 published on `127.0.0.1` only and mounts the data dir read-only. From another
 machine: `ssh -L 8787:localhost:8787 <host>`. On a systemd host,
@@ -117,8 +124,10 @@ machine: `ssh -L 8787:localhost:8787 <host>`. On a systemd host,
 Laptop on the Pi's live data: `scripts/cryptobot_gui_pi.sh --open` (the
 `cryptobot-gui` fish command). It rsyncs the Pi's `docker-data` into
 `~/.cache/binance-bot/pi-data` every 30 s (old omp logins, the old bot
-session and session files are not copied; nothing is written on the Pi), maps the
-trader's file paths from the Pi's `.env.docker`,
+session and session files, the candle caches and the tags history are not
+copied; nothing is written on the Pi), maps the trader's file paths (audit,
+stop, tags feed) from the Pi's `.env.docker`, uses this repo's
+`config/proxies.json` for the Tags tab,
 and runs the local release build against the mirror with the laptop's
 read-only keys for the wallet. Started without Pi data, the page says so
 instead of showing empty tabs. Overrides: `PI_HOST`, `PI_DATA_DIR`,
@@ -294,8 +303,8 @@ kind (`reach_paths`) and per kind the 10 loudest tags (`top`: name,
 tag id that is not `<kind>:<name>`, `as_of` older than
 `BOT_SPOT_TAGS_MAX_AGE_MINUTES` (45) or more than 5 minutes ahead of the
 Pi's clock). `context_hash` covers the feed by its `as_of` and digest. The
-algorithm (below) scores the asset tags. The dashboard's Tags tab shows the
-newest recorded summary. Until the Phase 53 rollout the Pi's `biz-feed` unit
+algorithm (below) scores the asset tags. The dashboard's Algorithm tab shows
+the newest recorded feed status; its Tags tab reads the feed itself. Until the Phase 53 rollout the Pi's `biz-feed` unit
 still writes the old `biz-feed.json`, so this trader would record the feed as
 unavailable there.
 

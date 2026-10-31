@@ -205,6 +205,7 @@
   .cycle-detail .facts { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
   .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .nowrap { white-space: nowrap; }
 
   .tip { position: fixed; z-index: 50; pointer-events: none; background: var(--fg); color: var(--bg); padding: 7px 10px; border-radius: 8px;
          font-size: 12px; max-width: 280px; box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
@@ -252,7 +253,7 @@
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
 const TABS = ["overview", "history", "wallet", "algorithm", "tags"];
-const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet" };
+const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet", tags: "/api/tags" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
@@ -1079,56 +1080,99 @@ function algorithmPage() {
 }
 
 // ---------- Tags ----------
-function namesBox(names, none) {
-  return names.length ? el("div", { class: "small" }, names.join(", ")) : el("div", { class: "small muted" }, none);
+// The tags feed and registry as biz-app wrote them (/api/tags), read directly.
+const KIND_LABELS = { asset: "Assets", narrative: "Narratives", macro: "Macro", event: "Events", entity: "Entities", claim: "Claims", mood: "Mood" };
+function marketChip(t) {
+  if (t.market === "tradable") return chip("Binance", "pos");
+  if (t.market === "proxy") return chip("via " + (t.proxies || []).join(", "), "accent");
+  if (t.market === "scored_only") return chip("Scored only", "");
+  return null;
+}
+function leanCell(v) { return el("td", { class: "r" }, el("span", { class: tone(v) + " num" }, signedNum(v))); }
+function tagName(t) {
+  return el("span", null, el("b", null, t.name), t.new ? " " : null, t.new ? chip("New", "accent") : null,
+    t.aliases && t.aliases.length ? el("div", { class: "small faint" }, "also " + t.aliases.join(", ")) : null);
+}
+function dateCell(iso) { return el("td", { class: "nowrap", title: iso ? stamp(iso) : "" }, iso ? shortDate(iso) : "—"); }
+function kindTable(kind, tags) {
+  const extra = kind === "asset" ? [["Market"]] : kind === "event" ? [["Event date"]] : kind === "claim" ? [["Target"], ["Deadline"], ["Status"]] : [];
+  const cells = (t) => kind === "asset" ? [el("td", null, marketChip(t) || "—")]
+    : kind === "event" ? [el("td", { class: "nowrap" }, t.event_at || "—")]
+    : kind === "claim" ? [el("td", null, t.target || "—"), el("td", { class: "nowrap" }, t.deadline || "—"), el("td", null, claimChip(t.claim_status))]
+    : [];
+  const shown = tags.slice(0, shownCount("tags:" + kind, 40));
+  return el("div", null,
+    table([["Tag"], ...extra, ["Posters 24h", "r"], ["Posters 7d", "r"], ["Lean 24h", "r"], ["Lean 7d", "r"], ["Horizon 7d"], ["Live since"]],
+      shown.map((t) => el("tr", null, el("td", null, tagName(t)), ...cells(t),
+        el("td", { class: "r num" }, String(t.posters_24h)), el("td", { class: "r num" }, String(t.posters_7d)),
+        leanCell(t.lean_24h), leanCell(t.lean_7d), el("td", null, t.horizon_7d || "—"), dateCell(t.live_since)))),
+    olderButton("tags:" + kind, 40, tags.length));
+}
+function claimChip(status) {
+  if (!status) return "—";
+  return chip(status === "open" ? "Open" : status === "deadline passed" ? "Deadline passed" : "Deadline unclear", status === "open" ? "accent" : "");
 }
 function tagsPage() {
-  const status = ui.data.status;
-  const head = pageHead("Tags feed", "What the trader read from the tags feed (biz-app) at its newest decision. The algorithm scores the asset tags of coins it can buy.", null);
-  if (!status) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
-  const t = status.tags;
-  if (!t) return el("div", { class: "grid" }, head, card(null, empty("No tags reading yet", "No decision row has a tags field yet; the trader records the feed with every decision.")));
-  const f = t.feed || {};
-  if (f.status !== "fresh") {
+  const v = ui.data.tags;
+  const head = pageHead("Tags", "The tags feed and the tag registry as biz-app wrote them: every live tag by kind, baskets, links, events by date and claims. Asset tags are marked as the trader's reach marks them.", null);
+  if (!v) return el("div", { class: "grid" }, head, ui.errors.tags ? card(null, errorBox(ui.errors.tags)) : loadingView());
+  const reg = v.registry || {};
+  const regText = reg.error ? "registry: " + reg.error : reg.tags + " tags in the registry (" + (reg.prompt_version || "?") + ", as of " + stamp(reg.as_of) + ")";
+  if (v.feed && v.feed.error) {
     return el("div", { class: "grid" }, head,
-      el("div", { class: "grid kpis" }, kpi("Feed", "Unavailable", "decision " + ago(t.cycle_at), "neg")),
-      card("Why", el("div", { class: "small" }, f.reason || "unknown")));
+      el("div", { class: "grid kpis" }, kpi("Feed", "Unavailable", v.feed.path, "neg")),
+      card("Why", el("div", { class: "small" }, v.feed.error, el("div", { class: "faint" }, regText))));
   }
-  const kinds = Object.entries(f.kinds || {}).sort((a, z) => z[1] - a[1] || a[0].localeCompare(z[0]));
-  const total = kinds.reduce((s, [, n]) => s + n, 0);
-  // A row trimmed to its size budget keeps only the lengths of these lists (Phase 53 D6).
-  const trimmedNames = f.tradable === undefined && f.tradable_count !== undefined;
-  const tradable = f.tradable || [], scored = f.scored_only || [], sources = f.sources || [];
-  const proxied = Object.entries(f.proxied || {});
-  const leftOut = (n) => el("div", { class: "small muted" }, n + " name(s), left out of the decision row to fit its size budget.");
-  const paths = Object.entries(f.reach_paths || {}).map(([via, n]) => n + " " + via).join(" · ");
+  const tags = v.tags || [], kinds = (v.kinds || []).filter((k) => k.live > 0 || k.registered);
+  const total = tags.length, fresh = tags.filter((t) => t.new).length;
+  const age = num(v.feed.age_minutes);
+  const sources = v.feed.sources || [];
   const readers = sources.map((s) => s.model + (s.prompt_version ? " · " + s.prompt_version : "")).join(", ");
+  const mf = v.market_files || {};
+  const marketNote = mf.spot_assets_error || mf.proxies_error;
   const kpis = el("div", { class: "grid kpis" },
-    kpi("Feed", "Fresh", "as of " + stamp(f.as_of) + " · " + f.age_minutes + " min old at the decision", "pos"),
-    kpi("Live tags", String(total), kinds.length + " kinds"),
-    trimmedNames
-      ? kpi("Tradable assets", String(f.tradable_count), f.proxied_count + " through proxies · " + f.scored_only_count + " scored only" + (paths ? " · paths: " + paths : ""))
-      : kpi("Tradable assets", String(new Set([...tradable, ...proxied.flatMap(([, p]) => p)]).size),
-        proxied.length + " through proxies · " + scored.length + " scored only" + (paths ? " · paths: " + paths : "")),
-    kpi("Reader", readers || "—", "decision " + ago(t.cycle_at)));
-  const kindsCard = card("Live tags by kind", kinds.length
-    ? table([["Kind"], ["Tags", "r"]], kinds.map(([k, n]) => el("tr", null, el("td", null, k), el("td", { class: "r num" }, String(n)))))
-    : empty("No live tags", "The feed lists no tag with 5 or more posters in 7 days."), { flush: kinds.length > 0 });
-  const sourcesCard = card("Sources", sources.length
-    ? table([["Source"], ["As of"], ["Posts", "r"], ["Untagged", "r"], ["Registry"]], sources.map((s) => el("tr", null,
-        el("td", null, s.id || "—"), el("td", null, s.as_of ? stamp(s.as_of) : "—"),
-        el("td", { class: "r num" }, String(s.items || 0)), el("td", { class: "r num" }, String(s.untagged || 0)),
-        el("td", null, s.registry_version || "—"))))
-    : empty("No source listed", ""), { flush: sources.length > 0 });
-  return el("div", { class: "grid" }, head, kpis, kindsCard,
-    card("Tradable assets", trimmedNames ? leftOut(f.tradable_count) : namesBox(tradable, "No asset tag with an eligible Binance market."), { hint: "own Binance market: the rule may buy these" }),
-    card("Through proxies", trimmedNames ? leftOut(f.proxied_count) : proxied.length
-      ? el("div", { class: "small" }, proxied.map(([name, list]) => name + " → " + list.join(", ")).join(" · "))
-      : el("div", { class: "small muted" }, "No live asset tag reaches a proxy (operator file BOT_SPOT_PROXIES)."), { hint: "the operator's proxy file: these stand-ins may be bought" }),
-    card("Scored only", trimmedNames ? leftOut(f.scored_only_count) : namesBox(scored, "None."), { hint: "no eligible Binance market and no proxy: never bought" }),
-    sourcesCard,
+    kpi("Feed", age !== null && age <= 45 ? "Fresh" : "Stale", "as of " + stamp(v.feed.as_of) + " · " + (age ?? "?") + " min old", age !== null && age <= 45 ? "pos" : "neg"),
+    kpi("Live tags", String(total), kinds.filter((k) => k.live > 0).length + " kinds · " + fresh + " new in " + v.new_hours + "h"),
+    kpi("Registry", reg.error ? "—" : String(reg.tags), reg.error ? reg.error : "tags ever seen · " + (reg.prompt_version || "") + " · as of " + stamp(reg.as_of)),
+    kpi("Reader", readers || "—", sources.map((s) => (s.items || 0) + " posts, " + (s.untagged || 0) + " untagged").join("; ")));
+  if (!ui.tagsKind || !kinds.some((k) => k.kind === ui.tagsKind)) ui.tagsKind = (kinds[0] || {}).kind || "asset";
+  const kindPick = seg(kinds.map((k) => [k.kind, (KIND_LABELS[k.kind] || pretty(k.kind)) + " " + k.live + (k.new ? " (+" + k.new + " new)" : "")]), ui.tagsKind, (k) => { ui.tagsKind = k; render(); });
+  const ofKind = tags.filter((t) => t.kind === ui.tagsKind);
+  const reg_n = (kinds.find((k) => k.kind === ui.tagsKind) || {}).registered;
+  const kindCard = card("Live tags", el("div", { class: "grid", style: "gap:10px" }, kindPick,
+    marketNote && ui.tagsKind === "asset" ? el("div", { class: "small neg" }, "Markets unknown: " + marketNote) : null,
+    ofKind.length ? el("div", { style: "margin:0 -16px" }, kindTable(ui.tagsKind, ofKind)) : empty("No live " + ui.tagsKind + " tags", "")),
+    { hint: ofKind.length + " live" + (reg_n ? " of " + reg_n + " registered" : "") + " · busiest 7d first" });
+  const asOf = ms(v.feed.as_of);
+  const events = tags.filter((t) => t.kind === "event").sort((a, b) => String(a.event_at || "9999").localeCompare(String(b.event_at || "9999")));
+  const eventsCard = card("Events by date", events.length
+    ? table([["Date"], ["Event"], ["Posters 7d", "r"], ["Lean 7d", "r"]], events.map((t) => el("tr", { class: t.event_at && asOf && ms(t.event_at.slice(0, 10) + "T23:59:59Z") < asOf ? "faint" : null },
+        el("td", { class: "nowrap" }, t.event_at || "no date"), el("td", null, tagName(t)), el("td", { class: "r num" }, String(t.posters_7d)), leanCell(t.lean_7d))))
+    : empty("No live events", ""), { flush: events.length > 0, hint: "past dates greyed" });
+  const claims = tags.filter((t) => t.kind === "claim").sort((a, b) => String(a.deadline || "9999").localeCompare(String(b.deadline || "9999")));
+  const claimsCard = card("Claims", claims.length
+    ? table([["Claim"], ["Target"], ["Deadline"], ["Status"], ["Posters 7d", "r"], ["Lean 7d", "r"]], claims.map((t) => el("tr", null,
+        el("td", null, tagName(t)), el("td", null, t.target || "—"), el("td", { class: "nowrap" }, t.deadline || "—"), el("td", null, claimChip(t.claim_status)),
+        el("td", { class: "r num" }, String(t.posters_7d)), leanCell(t.lean_7d))))
+    : empty("No live claims", ""), { flush: claims.length > 0, hint: "status against the feed's as_of; no price check" });
+  const baskets = v.baskets || [];
+  const memberChip = (m) => el("span", { class: "chip " + (m.market === "tradable" ? "pos" : m.market === "proxy" ? "accent" : ""), title: m.market === "scored_only" ? "scored only" : (m.market || "") }, m.asset + " " + fixed(m.weight, 2));
+  const basketsCard = card("Baskets", baskets.length
+    ? table([["Narrative"], ["Posters 7d", "r"], ["Members (weight)"]], baskets.slice(0, shownCount("baskets", 20)).map((b) => el("tr", null,
+        el("td", null, el("b", null, b.name)), el("td", { class: "r num" }, String(b.posters_7d)),
+        el("td", null, el("div", { class: "chips" }, b.members.map(memberChip))))))
+    : empty("No baskets", "No narrative has members yet."), { flush: baskets.length > 0, hint: "green: Binance market · blue: through a proxy · grey: scored only" });
+  const links = v.links || [];
+  const linkLean = (l) => { const s = num(l.up_7d) + num(l.down_7d); return s > 0 ? (l.up_7d - l.down_7d) / s : null; };
+  const linksCard = card("Links", links.length
+    ? el("div", null, table([["Tag"], ["Asset"], ["Posters 7d", "r"], ["Posters 30d", "r"], ["Lean 7d", "r"]], links.slice(0, shownCount("links", 30)).map((l) => el("tr", null,
+        el("td", null, l.tag), el("td", null, assetLabel(l.asset)), el("td", { class: "r num" }, String(l.posters_7d)), el("td", { class: "r num" }, String(l.posters_30d)), leanCell(linkLean(l))))),
+      olderButton("links", 30, links.length))
+    : empty("No links with 7d posters", ""), { flush: links.length > 0, hint: links.length + " with 7d posters of " + v.links_total });
+  return el("div", { class: "grid" }, head, kpis, kindCard, eventsCard, claimsCard, basketsCard, linksCard,
     el("details", { class: "footnote" }, el("summary", null, "What this shows"),
-      el("p", null, "biz-app's AI tags every /biz/ post (assets, narratives, macro, events, entities, claims, mood) and lists the tags live at the feed's time (5 or more distinct posters in 7 days), rewriting the feed every 15 minutes. Asset tags of Binance coins count their mentions over every post without AI. The trader records a summary on each decision row (audit field tags): the feed's time and digest, the sources, the live tags per kind, which asset tags have an eligible Binance market, which reach one through the operator's proxy file (gold through PAXG and XAUT), and how many paths (own tag, proxy, basket membership, link) reach tradable assets. A missing, foreign or stale feed is recorded as unavailable with the reason; then the algorithm buys nothing.")));
+      el("p", null, "biz-app's AI tags every /biz/ post (assets, narratives, macro, events, entities, claims, mood) and its feed lists the tags live at the feed's time (5 or more distinct posters in 7 days), rewritten every 15 minutes; the registry lists every tag ever seen with its aliases. New: went live within " + v.new_hours + " hours of the feed's time. Lean: (up − down) / (up + down) of the window's tagged posts (bullish/bearish for assets and baskets, rising/easing otherwise). Asset markets as the trader's reach: an own Binance Spot market (biz-app's binance-spot-assets.json), a stand-in through the operator's proxy file (BOT_SPOT_PROXIES, gold through PAXG and XAUT), or scored only (never bought). Baskets: a narrative's member assets with weights. Links: posts tying a tag to an asset. A claim is open until its deadline's day ends; its target is the posters' free text and is not checked against prices."),
+      el("p", null, "Files: " + v.feed.path + " · " + (reg.path || "") + (mf.proxies_path ? " · " + mf.proxies_path : ""))));
 }
 
 // ---------- data loading ----------

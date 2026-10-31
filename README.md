@@ -150,9 +150,10 @@ A read-only web page for the trader, in five tabs that refresh every 30 s:
   its listed coins' weighted signals (held coins and the 20 best candidates) (one column per name in the rule file), own 1h, 24h and 7d moves and score,
   and the decision rows newest first (click one for its scores); rows from
   before Phase 52 show their decision only.
-- **Tags:** the tags feed summary the trader recorded at its newest decision
-  (as of, sources, live tags per kind, the asset tags it may buy, those reaching
-  a market through a proxy, those without either, which are scored only).
+- **Tags:** the tags feed and tag registry as biz-app wrote them: every live tag
+  by kind (24h and 7d posters and lean, horizon, aliases, new ones marked),
+  asset tags marked Binance market / through a proxy / scored only, baskets,
+  links, events by date and claims with target, deadline and status.
 
 Trade results come from the route quotes the trader logs: each submitted route
 opens a trade in the coin it bought, which closes when the bot later sells that

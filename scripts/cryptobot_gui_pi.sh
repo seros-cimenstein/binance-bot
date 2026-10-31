@@ -6,7 +6,9 @@
 # MIRROR_SECONDS), points cryptobot-gui at the mirror and runs it in the foreground. Ctrl+C
 # stops both. Nothing is written on the Pi: the only remote commands are rsync reads and one
 # grep of the non-secret file paths in the Pi's env file. Old omp logins, the old bot
-# session and session files are not copied.
+# session and session files are not copied, nor the candle caches and the tags history
+# (large, and not read by the dashboard). The Tags tab reads the mirrored tags feed with
+# its registry and asset list, and this repo's proxy file (config/proxies.json).
 #
 # Extra arguments go to cryptobot-gui, e.g. `scripts/cryptobot_gui_pi.sh --open`.
 #
@@ -62,7 +64,8 @@ mirror() {
     # files by rename, so the dashboard never reads a half-copied file.
     rsync -a --delete --timeout=20 \
         --exclude 'omp-agent/' --exclude 'bot-spot-session/' --exclude '*.session' \
-        --exclude 'archive/' \
+        --exclude 'archive/' --exclude 'tags-history/' --exclude 'scoreboard-cache/' \
+        --exclude 'entry-study-cache/' \
         "$PI_HOST:$PI_DATA_DIR/" "$MIRROR_DIR/"
 }
 
@@ -74,11 +77,13 @@ mirror
 declare -A paths=(
     [BOT_SPOT_AUDIT_PATH]=bot-spot-decisions.jsonl
     [BOT_SPOT_STOP_PATH]=bot-spot.stop
+    [BOT_SPOT_TAGS_FEED_PATH]=tags-feed.json
 )
 for name in "${!paths[@]}"; do
     export "$name=$MIRROR_DIR/${paths[$name]}"
 done
-settings_pattern='^BOT_SPOT_(AUDIT_PATH|STOP_PATH)='
+export BOT_SPOT_PROXIES="${BOT_SPOT_PROXIES:-$REPO_DIR/config/proxies.json}"
+settings_pattern='^BOT_SPOT_(AUDIT_PATH|STOP_PATH|TAGS_FEED_PATH)='
 if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "grep -E '$settings_pattern' $PI_ENV_FILE" 2>/dev/null)"; then
     while IFS='=' read -r name value; do
         [[ "$name" =~ ^BOT_SPOT_[A-Z_]+$ ]] || continue

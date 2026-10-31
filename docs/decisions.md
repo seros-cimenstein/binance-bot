@@ -318,3 +318,11 @@ live (a buy spends its share of the portfolio value, capped by the cash
 left); an edge rule reads a directory of point-in-time scoreboards
 (`--scoreboards`), the newest usable at each step; the cache must hold PAXG
 and XAUT besides the liquid 20.
+
+## 2026-10-31 Phase 53 loop: the dashboard's Tags tab (`LOOP_TAGS.md` E2)
+
+Asked through the ask tool, answered by the loop manager for the operator:
+claims show "Status only": `open` until the deadline's day ends, `deadline
+passed` after (against the feed's `as_of`), with the posters' 7d lean; no
+price check ("free-text targets cannot support a reliable price-based outcome
+without guessing").

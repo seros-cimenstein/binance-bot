@@ -10,6 +10,7 @@
 //! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
+//! - `GET /api/tags`: the tags feed and tag registry as biz-app wrote them ([`tags`]).
 //!
 //! Every request must address `localhost`, `127.0.0.1` or `[::1]` in its `Host` header, so a
 //! web page that rebinds its DNS name to 127.0.0.1 cannot read the data.
@@ -17,6 +18,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod history;
+pub mod tags;
 pub mod wallet;
 
 use std::path::PathBuf;
@@ -36,6 +38,7 @@ use bb_trader::memory::load_audit_rows;
 use serde_json::{Value, json};
 
 use crate::history::{ParsedAudit, parse_audit};
+use crate::tags::TagFiles;
 use bb_trader::trades::build_trades;
 use crate::wallet::WalletView;
 
@@ -51,16 +54,23 @@ const INDEX_HTML: &str = include_str!("index.html");
 pub struct BotSpotFiles {
     pub audit_path: PathBuf,
     pub stop_path: PathBuf,
+    /// The tags feed, its registry and the proxy file (the Tags tab).
+    pub tags: TagFiles,
 }
 
 impl BotSpotFiles {
-    /// From `BOT_SPOT_{AUDIT,STOP}_PATH`.
+    /// From `BOT_SPOT_{AUDIT,STOP}_PATH`, `BOT_SPOT_TAGS_FEED_PATH` and `BOT_SPOT_PROXIES`.
     pub fn from_env() -> Self {
         let path =
             |name: &str, default: &str| PathBuf::from(bb_core::env::string(&[name], default));
+        let proxies = bb_core::env::string(&["BOT_SPOT_PROXIES"], "");
         Self {
             audit_path: path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
             stop_path: path("BOT_SPOT_STOP_PATH", DEFAULT_STOP_PATH),
+            tags: TagFiles {
+                feed_path: path("BOT_SPOT_TAGS_FEED_PATH", bb_trader::tags::DEFAULT_FEED_PATH),
+                proxies_path: (!proxies.trim().is_empty()).then(|| PathBuf::from(proxies.trim())),
+            },
         }
     }
 }
@@ -158,6 +168,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(status))
         .route("/api/history", get(history_handler))
         .route("/api/wallet", get(wallet_handler))
+        .route("/api/tags", get(tags_handler))
         .layer(middleware::from_fn(localhost_only))
         .with_state(Arc::new(state))
 }
@@ -200,6 +211,11 @@ async fn index() -> Response {
 async fn status(State(app): State<Arc<AppState>>) -> Response {
     let files = app.bot_spot.clone();
     blocking_json(move || status_view(&files)).await
+}
+
+async fn tags_handler(State(app): State<Arc<AppState>>) -> Response {
+    let files = app.bot_spot.tags.clone();
+    blocking_json(move || tags::tags_view(&files, bb_core::time::now_ms())).await
 }
 
 async fn history_handler(State(app): State<Arc<AppState>>) -> Response {
@@ -352,6 +368,10 @@ mod tests {
         BotSpotFiles {
             audit_path: dir.join("audit.jsonl"),
             stop_path: dir.join("bot-spot.stop"),
+            tags: TagFiles {
+                feed_path: dir.join("tags-feed.json"),
+                proxies_path: None,
+            },
         }
     }
 
