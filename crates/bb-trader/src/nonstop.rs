@@ -352,13 +352,13 @@ impl Nonstop {
             view: Arc::clone(&slow.view),
             balances: slow.balances.clone(),
         };
-        let rule = config.algo_rule;
+        let sleeve = config.algo_rule.trading_sleeve();
         self.runtime
             .begin_cycle(&cycle_id, ALGO_SESSION_ID, snapshot)
             .await;
         let report = self
             .runtime
-            .run_algo_turn(decision.verdict, &rule, decision.coins, shutdown)
+            .run_algo_turn(decision.verdict, sleeve, decision.coins, shutdown)
             .await;
         if shutdown.is_cancelled() {
             self.runtime.begin_shutdown();
@@ -620,38 +620,42 @@ impl Nonstop {
             .collect();
         let step = crate::book::Snapshot::live(now_ms, coins, candidates);
         let book = self.book(slow, now_ms);
-        let feed = match &tags {
-            TagsNow::Fresh(feed) => Some(&feed.assets),
-            TagsNow::Unavailable { .. } => None,
+        let (assets, feed) = match &tags {
+            TagsNow::Fresh(feed) => (Some(&feed.assets), Some((&feed.feed, &feed.reach))),
+            TagsNow::Unavailable { .. } => (None, None),
         };
-        let rule = self.runtime.config.algo_rule;
+        let sleeve = self.runtime.config.algo_rule.trading_sleeve();
         let inputs = Inputs {
             snap: &step,
             book: &book,
-            tags: feed,
+            tags: assets,
+            feed,
         };
-        let verdict = decide(&inputs, &rule);
+        let verdict = decide(&inputs, sleeve);
+        let scorer = crate::decider::Scorer::new(inputs, sleeve);
         let mut scored: Vec<(f64, serde_json::Value)> = step
             .liquid_top
             .iter()
             .filter(|asset| !held.contains(*asset))
             .chain(held)
             .map(|asset| {
-                let terms = crate::decider::terms(&inputs, asset, rule.min_posters);
-                let score = terms.score(&rule.weights);
+                let scored = scorer.score(asset);
+                let signals: serde_json::Map<String, serde_json::Value> = scored
+                    .values
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), serde_json::json!(value)))
+                    .collect();
                 let coin = serde_json::json!({
                     "asset": asset,
                     "held": held.contains(asset),
                     "priced": step.coin(asset).is_some(),
-                    "talk": terms.talk,
-                    "stance": terms.stance,
-                    "momentum": terms.momentum,
+                    "signals": signals,
                     "ret_1h_pct": step.coin(asset).and_then(|c| c.ret_1h),
                     "ret_24h_pct": step.coin(asset).and_then(|c| c.ret_24h),
                     "ret_7d_pct": step.coin(asset).and_then(|c| c.ret_7d),
-                    "score": score,
+                    "score": scored.score,
                 });
-                (score, coin)
+                (scored.score, coin)
             })
             .collect();
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -668,7 +672,7 @@ impl Nonstop {
         let config = &self.runtime.config;
         DecisionContext {
             timestamp: crate::audit::utc_timestamp(),
-            rules_version: config.rules_version.clone(),
+            rules_version: config.algo_rule.rules_version.clone(),
             market_pick_mode: config.market_pick_mode.as_str(),
             portfolio_value_usdt: decision.equity,
             balances: slow.balances.clone(),
@@ -734,19 +738,26 @@ mod tests {
     use crate::config::TraderConfig;
     use crate::universe::tests::{config, view};
 
-    const BUY_ETH: &str = "0,0,1,0.5,0";
-    const HOLD: &str = "0,0,1,5,0";
+    /// Momentum alone, buy at +0.5 (ETH's +7% 1h move buys) or at +5 (nothing does).
+    const BUY_ETH: f64 = 0.5;
+    const HOLD: f64 = 5.0;
 
-    fn trader_config(dir: &Path, weights: &str) -> TraderConfig {
+    fn trader_config(dir: &Path, buy_above: f64) -> TraderConfig {
         let p = |name: &str| dir.join(name).to_string_lossy().into_owned();
         let (audit, state, stop, feed) =
             (p("audit.jsonl"), p("state.json"), p("stop"), p("feed.json"));
+        let rule = crate::rules::tests::write(
+            dir,
+            &[("talk.6h", 0.0), ("stance.6h", 0.0), ("momentum.1h", 1.0)],
+            buy_above,
+            0.0,
+        );
         config(&[
             ("BOT_SPOT_AUDIT_PATH", audit.as_str()),
             ("BOT_SPOT_STATE_PATH", state.as_str()),
             ("BOT_SPOT_STOP_PATH", stop.as_str()),
             ("BOT_SPOT_TAGS_FEED_PATH", feed.as_str()),
-            ("BOT_SPOT_ALGO_WEIGHTS", weights),
+            ("BOT_SPOT_ALGO_RULE", rule.as_str()),
         ])
     }
 
@@ -990,7 +1001,8 @@ mod tests {
         // The decision row carries every scored coin's inputs (the dashboard's Algorithm tab).
         let eth = &first[1]["algo"]["coins"][0];
         assert_eq!((eth["asset"].as_str(), eth["held"].as_bool()), (Some("ETH"), Some(false)));
-        assert_eq!((eth["momentum"].as_f64(), eth["stance"].as_f64(), eth["score"].as_f64()), (Some(1.0), Some(0.0), Some(1.0)));
+        let signal = |name: &str| eth["signals"][name].as_f64();
+        assert_eq!((signal("momentum.1h"), signal("stance.6h"), eth["score"].as_f64()), (Some(1.0), Some(0.0), Some(1.0)));
         assert!((eth["ret_1h_pct"].as_f64().unwrap() - (3000.0 / 2800.0 - 1.0) * 100.0).abs() < 1e-9);
         // The 24h return is ETH/USDT's 24h ticker change from the catalog.
         assert_eq!(eth["ret_24h_pct"].as_f64(), Some(-4.2));

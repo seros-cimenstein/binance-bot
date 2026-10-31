@@ -134,7 +134,7 @@ pub struct AuditRow {
     pub timestamp: String,
     pub mode: String,
     pub status: RowStatus,
-    /// The operator's rule-set name (`BOT_SPOT_RULES_VERSION`); LLM-era rows have
+    /// The operator's rule-set name (the rule file's `rules_version`); LLM-era rows have
     /// `prompt_version` instead.
     pub rules_version: String,
     pub context_hash: String,
@@ -180,7 +180,7 @@ impl AuditRow {
             timestamp: utc_timestamp(),
             mode: config.mode().into(),
             status,
-            rules_version: config.rules_version.clone(),
+            rules_version: config.algo_rule.rules_version.clone(),
             context_hash: String::new(),
             decision,
             candidate_route_count: 0,

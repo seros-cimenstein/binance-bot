@@ -5,6 +5,7 @@
 //! The output is deterministic: the same cache and flags give byte-identical files (no run
 //! time or wall clock in them).
 
+use std::fmt;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,8 +16,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use super::data::{MINUTE_MS, Market, TagsHistory};
 use super::engine::{Config, LIQUID, RunResult, run};
 use super::rule::BizAlgo;
-use crate::decider::{Rule, Weights};
 use crate::error::{Result, TraderError};
+use crate::rules::{Horizon, Rule, Sleeve, Style};
+use crate::signals::{Name, Span};
 
 /// `biz_algo` grid rows listed in the report.
 const GRID_ROWS_SHOWN: usize = 5;
@@ -155,10 +157,91 @@ pub struct ReportContext {
     pub split: SplitReport,
 }
 
+/// The backtest's weight set over the legacy names: `talk.6h`, `stance.6h`,
+/// `momentum.1h` and the levels (`--biz-weights` or the tuning grid; the trader reads a
+/// rule file, [`crate::rules`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GridWeights {
+    pub talk: f64,
+    pub stance: f64,
+    pub momentum: f64,
+    /// A candidate is bought when its score is at least this.
+    pub buy_above: f64,
+    /// A held coin is sold when its score is below this.
+    pub sell_below: f64,
+}
+
+impl GridWeights {
+    /// `talk,stance,momentum,buy_above,sell_below`, e.g. `1,0.5,0.5,0.5,0`.
+    pub fn parse(spec: &str) -> std::result::Result<Self, String> {
+        let values: Vec<f64> = spec
+            .split(',')
+            .map(|part| {
+                part.trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| format!("weights {spec:?}: {part:?} is not a number"))
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        let [talk, stance, momentum, buy_above, sell_below] = values[..] else {
+            return Err(format!(
+                "weights {spec:?}: need 5 numbers: talk,stance,momentum,buy_above,sell_below"
+            ));
+        };
+        if sell_below > buy_above {
+            return Err(format!(
+                "weights {spec:?}: sell_below must not exceed buy_above"
+            ));
+        }
+        Ok(Self {
+            talk,
+            stance,
+            momentum,
+            buy_above,
+            sell_below,
+        })
+    }
+
+    /// The one-sleeve fixed rule these weights stand for.
+    pub fn rule(&self, min_posters: u64) -> Rule {
+        Rule {
+            rules_version: "algo-backtest".into(),
+            style: Style::Fixed,
+            sleeves: vec![Sleeve {
+                name: "fast".into(),
+                share: 1.0,
+                horizon: Horizon::Any,
+                defensive: vec!["USDT".into()],
+                risk_off_below: None,
+                buy_above: self.buy_above,
+                sell_below: self.sell_below,
+                min_posters,
+                weights: [
+                    (Name::Talk, self.talk),
+                    (Name::Stance, self.stance),
+                    (Name::Momentum(Span::H1), self.momentum),
+                ]
+                .into(),
+            }],
+        }
+    }
+}
+
+impl fmt::Display for GridWeights {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "talk.6h {:+}, stance.6h {:+}, momentum.1h {:+}; buy at score ≥ {:+}, sell below {:+}",
+            self.talk, self.stance, self.momentum, self.buy_above, self.sell_below
+        )
+    }
+}
+
 /// One `biz_algo` weight set tried on the older half.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridRow {
-    pub weights: Weights,
+    pub weights: GridWeights,
     pub net_pnl_pct: f64,
     pub round_trips: usize,
     pub max_drawdown_pct: f64,
@@ -169,7 +252,9 @@ pub struct GridRow {
 pub struct SplitReport {
     /// First step of the newer half.
     pub mid_ms: i64,
-    pub rule: Rule,
+    pub weights: GridWeights,
+    /// Distinct posters a 6h window needs before its stance counts.
+    pub min_posters: u64,
     /// Every weight set tried on the older half, in grid order; `None` when the weights
     /// came from `--biz-weights`.
     pub grid: Option<Vec<GridRow>>,
@@ -192,7 +277,7 @@ pub fn split_point(cfg: &Config) -> Result<i64> {
 
 /// The weight sets `biz_algo` is tuned over: talk and stance −1/0/+1 (0 only without
 /// feeds), momentum 0/1, buy at 0.5/1, sell below −0.5/0.
-pub fn weight_grid(with_biz: bool) -> Vec<Weights> {
+pub fn weight_grid(with_biz: bool) -> Vec<GridWeights> {
     let signed: &[f64] = if with_biz { &[-1.0, 0.0, 1.0] } else { &[0.0] };
     let mut out = Vec::new();
     for &talk in signed {
@@ -200,7 +285,7 @@ pub fn weight_grid(with_biz: bool) -> Vec<Weights> {
             for momentum in [0.0, 1.0] {
                 for buy_above in [0.5, 1.0] {
                     for sell_below in [-0.5, 0.0] {
-                        out.push(Weights {
+                        out.push(GridWeights {
                             talk,
                             stance,
                             momentum,
@@ -222,16 +307,10 @@ pub fn tune(
     older: &Config,
     inputs: &AlgoInputs,
     min_posters: u64,
-) -> Result<(Weights, Vec<GridRow>)> {
+) -> Result<(GridWeights, Vec<GridRow>)> {
     let mut rows = Vec::new();
     for weights in weight_grid(inputs.tags.is_some()) {
-        let rule = BizAlgo::new(
-            Rule {
-                weights,
-                min_posters,
-            },
-            inputs.tags.clone(),
-        );
+        let rule = BizAlgo::new(weights.rule(min_posters), inputs.tags.clone());
         let r = run(market, older, Box::new(rule))?;
         rows.push(GridRow {
             weights,
@@ -270,25 +349,23 @@ fn run_split(
         ..*cfg
     };
     let (weights, grid) = match &args.biz_weights {
-        Some(spec) => (Weights::parse(spec).map_err(TraderError::config)?, None),
+        Some(spec) => (GridWeights::parse(spec).map_err(TraderError::config)?, None),
         None => {
             let (weights, rows) = tune(market, &older, inputs, args.biz_min_posters)?;
             (weights, Some(rows))
         }
     };
-    let rule = Rule {
-        weights,
-        min_posters: args.biz_min_posters,
-    };
+    let rule = weights.rule(args.biz_min_posters);
     let mut results = Vec::new();
     for (label, half) in [("older", older), ("newer", newer)] {
-        let mut r = run(market, &half, Box::new(BizAlgo::new(rule, inputs.tags.clone())))?;
+        let mut r = run(market, &half, Box::new(BizAlgo::new(rule.clone(), inputs.tags.clone())))?;
         r.name = format!("{}@{label}", r.name);
         results.push(r);
     }
     let split = SplitReport {
         mid_ms,
-        rule,
+        weights,
+        min_posters: args.biz_min_posters,
         grid,
         tags: tags_summary(inputs.tags.as_deref(), args.tags_history.as_deref()),
     };
@@ -505,7 +582,7 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         let _ = writeln!(
             out,
             "- Rule: {}; stances need {} distinct posters in the 6h window.",
-            split.rule.weights, split.rule.min_posters
+            split.weights, split.min_posters
         );
         match &split.grid {
             None => {

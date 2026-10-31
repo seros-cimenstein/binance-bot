@@ -1,0 +1,28 @@
+{
+  "rules_version": "algo-2026-10-29",
+  "style": "fixed",
+  "sleeves": [
+    {
+      "name": "fast",
+      "share": 1.0,
+      "horizon": "any",
+      "defensive": ["USDT"],
+      "risk_off_below": null,
+      "buy_above": 0.5,
+      "sell_below": -0.5,
+      "min_posters": 2,
+      "weights": {"talk.6h": 0, "stance.6h": 1, "momentum.1h": 1}
+    },
+    {
+      "name": "core",
+      "share": 0.0,
+      "horizon": "any",
+      "defensive": ["USDT"],
+      "risk_off_below": null,
+      "buy_above": 0.5,
+      "sell_below": -0.5,
+      "min_posters": 2,
+      "weights": {}
+    }
+  ]
+}

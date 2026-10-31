@@ -181,11 +181,12 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
 - [x] Price horizons: 1h from the trader's polls, 24h from the all-symbol
   24h ticker (one request), 7d from cached 1h klines per candidate; the
   backtest derives the same from cached 1m candles (LOOP_TAGS C2, C3).
-- [ ] Signal catalog, each −1..1, per tag and window: direction, level,
+- [x] Signal catalog, each −1..1, per tag and window: direction, level,
   surge, novelty, breadth, persistence, agreement, horizon mix,
   price-confirmed; per asset the sum through direct tags, baskets, links
   and proxies; market-wide signals from macro and mood; momentum per price
-  horizon. Unknown names in the rule refuse to start.
+  horizon. Unknown names in the rule refuse to start (LOOP_TAGS C5, D1;
+  the legacy `talk.6h` stays −1..3 so `algo-2026-10-29` reproduces).
 - [ ] Scoreboard `bb tag-scoreboard` (replaces `bb biz-lead-study`): every
   tag kind and signal against its assets' (market-wide: BTC and the liquid
   basket's) moves at +1h/+24h/+7d versus random hours, after fees, older

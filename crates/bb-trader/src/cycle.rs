@@ -207,7 +207,7 @@ impl Runtime {
     pub(crate) async fn run_algo_turn(
         &self,
         verdict: crate::decider::Verdict,
-        rule: &crate::decider::Rule,
+        sleeve: &crate::rules::Sleeve,
         coins: Vec<Value>,
         shutdown: &CancellationToken,
     ) -> TurnReport {
@@ -259,12 +259,12 @@ impl Runtime {
         let summary = if said.is_empty() {
             let best = verdict.best.as_ref().map_or_else(
                 || "nothing scored".to_owned(),
-                |(asset, score)| format!("best {asset} score {score:+.3} < buy level {:+}", rule.weights.buy_above),
+                |(asset, score)| format!("best {asset} score {score:+.3} < buy level {:+}", sleeve.buy_above),
             );
             let held = verdict
                 .held
                 .iter()
-                .map(|(asset, score)| format!("{asset} score {score:+.3} ≥ sell level {:+}", rule.weights.sell_below))
+                .map(|(asset, score)| format!("{asset} score {score:+.3} ≥ sell level {:+}", sleeve.sell_below))
                 .collect::<Vec<_>>();
             if held.is_empty() {
                 format!("rule-based decider: hold in cash ({best})")
@@ -275,10 +275,11 @@ impl Runtime {
             format!("rule-based decider: {}", said.join("; "))
         };
         let record = json!({
-            "rule": rule.weights.to_string(),
-            "buy_above": rule.weights.buy_above,
-            "sell_below": rule.weights.sell_below,
-            "min_posters": rule.min_posters,
+            "sleeve": sleeve.name,
+            "rule": sleeve.to_string(),
+            "buy_above": sleeve.buy_above,
+            "sell_below": sleeve.sell_below,
+            "min_posters": sleeve.min_posters,
             "best": verdict.best.as_ref().map(pair),
             "held": verdict.held.iter().map(pair).collect::<Vec<_>>(),
             "orders": orders,
@@ -758,7 +759,7 @@ mod tests {
             .unwrap();
         let context = DecisionContext {
             timestamp: crate::audit::utc_timestamp(),
-            rules_version: config.rules_version.clone(),
+            rules_version: config.algo_rule.rules_version.clone(),
             market_pick_mode: config.market_pick_mode.as_str(),
             portfolio_value_usdt: dec!(100),
             balances: balances.clone(),
@@ -889,10 +890,9 @@ mod tests {
     async fn the_algo_turn_sends_its_orders_through_execute_route_and_stops_at_a_failure() {
         use crate::decider::{Action, Verdict};
         let server = MockServer::start().await;
-        let algo = [("BOT_SPOT_ALGO_WEIGHTS", "0,0,1,0.5,0")];
         let dir = tempfile::tempdir().unwrap();
-        let config = trader_config(dir.path(), &algo);
-        let rule = config.algo_rule;
+        let config = trader_config(dir.path(), &[]);
+        let sleeve = config.algo_rule.trading_sleeve().clone();
         let first = runtime(&server, config, CycleMode::PlanOnly).await;
         let buy = Verdict {
             actions: vec![Action::Buy {
@@ -903,7 +903,7 @@ mod tests {
             held: Vec::new(),
         };
         let report = first
-            .run_algo_turn(buy, &rule, Vec::new(), &CancellationToken::new())
+            .run_algo_turn(buy, &sleeve, Vec::new(), &CancellationToken::new())
             .await;
         assert_eq!(report.error.as_deref(), None);
         let (summary, _) = first.finish_cycle(&report).await.unwrap();
@@ -915,10 +915,12 @@ mod tests {
         assert_eq!(rows[1]["decision"]["action"], "traded");
         assert_eq!(rows[1]["algo"]["best"]["asset"], "SOL");
         assert_eq!(rows[1]["session_id"], "session-1");
+        assert_eq!(rows[1]["rules_version"], "algo-2026-10-29");
+        assert_eq!(rows[1]["algo"]["sleeve"], "fast");
 
         // A sell that cannot be quoted stops the turn: no buy of a second coin.
         let dir = tempfile::tempdir().unwrap();
-        let second = runtime(&server, trader_config(dir.path(), &algo), CycleMode::PlanOnly).await;
+        let second = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
         let rotate = Verdict {
             actions: vec![
                 Action::Sell {
@@ -934,7 +936,7 @@ mod tests {
             held: vec![("BTC".into(), -0.5)],
         };
         let report = second
-            .run_algo_turn(rotate, &rule, Vec::new(), &CancellationToken::new())
+            .run_algo_turn(rotate, &sleeve, Vec::new(), &CancellationToken::new())
             .await;
         assert!(report.error.as_deref().unwrap().contains("no free BTC balance"), "{report:?}");
         assert_eq!(order_calls(&server).await, 0);

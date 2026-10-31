@@ -105,7 +105,7 @@ Docker: `docker compose ps` and `docker compose logs -f <service>`.
 
 Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
 profiles `gui`/`live`/`all`) serves the Bot Spot trades, the Algorithm tab
-(each decision row with every scored coin's /biz/ talk and stance, own 1h move
+(each decision row with every scored coin's weighted signals, own 1h move
 and score; "Running" while a row is at most an hour old, the heartbeat), the
 tags feed summary the trader recorded (Tags tab), stop-file and
 failed-route-halt state at `http://localhost:8787` on the Docker host. It is
@@ -305,13 +305,13 @@ operator 2026-10-30; unset means no proxies, a named missing or invalid file
 stops the trader at start), from narrative baskets listing it (weighted by its
 share) and from links tying any tag to it. Baskets and links landing on GOLD
 follow its proxies. Only live asset tags, directly or through a proxy, make buy
-candidates; the `algo-2026-10-29` rule still scores talk and stance on a coin's
-own asset tag only, so a proxy such as PAXG is scored on its momentum until a
-rule gives the new signals weight. The Pi's `.env.docker` needs
+candidates; the `algo-2026-10-29` rule weights only `talk.6h`, `stance.6h` (a
+coin's own asset tag) and `momentum.1h`, so a proxy such as PAXG is scored on
+its momentum until a rule gives the new signals weight. The Pi's `.env.docker` needs
 `BOT_SPOT_PROXIES=config/proxies.json` at the Phase 53 rollout.
 
 Signals (`crate::signals`): the catalog of names a rule may weight. The
-legacy `talk`, `stance` and `momentum.1h` are the `algo-2026-10-29` terms
+legacy `talk.6h`, `stance.6h` and `momentum.1h` are the `algo-2026-10-29` terms
 (the decider reads them from there); `momentum.24h` and `momentum.7d` (caps
 10% and 20%); per tradable asset `<kind>.<signal>[.<window>]` (the tag signal
 over every reach path from a tag of that kind, averaged by path weight; link
@@ -319,21 +319,37 @@ paths use the link's own up/down for `direction` and `agreement`); market-wide
 `market.<macro|mood>.<signal>[.<window>]` (averaged by the tags' posters).
 Signals: `direction`, `level`, `surge`, `novelty`, `breadth`, `persistence`,
 `agreement`, `horizon`, `price_confirmed`; each −1..1 or 0..1 except the
-legacy `talk` (−1..3). The module docs list each formula, its windows and
-range; an unknown name is an error. The rule file that weights them comes
-with Phase 53 D1.
+legacy `talk.6h` (−1..3). The module docs list each formula, its windows and
+range; an unknown name is an error, and a rule file naming one refuses to
+start.
+
+### The rule file
+
+`BOT_SPOT_ALGO_RULE` (required) is the path of the operator's rule file
+(`crate::rules`; shipped `config/rules/algo-2026-10-29.json`, in the image
+`/app/config/rules/`). It replaces the env rule (the five weights, the poster
+minimum and `BOT_SPOT_RULES_VERSION`, listed in `REMOVED_VARS`, now ignored with one
+warning). Fields: `rules_version` (recorded on every audit row and in
+`run_config`), `style` `fixed`, and `sleeves`, each with `name`, `share` (the
+shares sum to 1), `horizon` (`any`, `short`, `swing`, `long`), `defensive`
+assets, `risk_off_below` (`null` = never), `buy_above`, `sell_below` (not
+above `buy_above`), `min_posters` and `weights` by signal name. Unknown fields,
+an unknown signal, shares not summing to 1, a missing or unreadable file: the
+trader refuses to start. Until sleeve holdings are booked separately (Phase 53
+D3-D5) the trader runs the one sleeve holding a share and refuses a file with
+two funded sleeves, a horizon filter other than `any` or a `risk_off_below`
+(operator, 2026-10-31). `run_config.rule` records the path, style and sleeves.
 
 ### The algorithm
 
-`crate::decider` decides on every tick with the operator's rule
-(`BOT_SPOT_ALGO_WEIGHTS`, required; the trader refuses to start without it).
-It reads the wallet and the tags feed, and the prices of
+`crate::decider` decides on every tick with the funded sleeve of the operator's
+rule file. It reads the wallet and the tags feed, and the prices of
 the coins it may buy (the tradable assets the feed's live asset tags reach,
 directly or through a proxy, with an eligible USDT market,
 stablecoins left out) and for the coins it holds (operator decision
 2026-10-29: no market breadth read). It scores those coins with
-`talk,stance,momentum,buy_above,sell_below` (momentum is the coin's own
-1h move; stances need `BOT_SPOT_ALGO_MIN_POSTERS`, 2), sells a held coin
+`Σ weight · signal` over the sleeve's weighted names (stances need the
+sleeve's `min_posters`), sells a held coin
 scoring below the sell level into USDT and, with nothing held, buys the best
 coin with all USDT at or above the buy level. Every order is quoted for the
 whole free balance and sent through `execute_route`, so the stop file,
@@ -343,17 +359,18 @@ nothing is a buy candidate, so it can only hold or sell; a coin without a
 price is left out of that tick.
 
 The rule in force (operator, 2026-10-29, `docs/decisions.md`):
-`BOT_SPOT_ALGO_WEIGHTS=0,1,1,0.5,-0.5`, `BOT_SPOT_ALGO_MIN_POSTERS=2`,
-`BOT_SPOT_RULES_VERSION=algo-2026-10-29`: score = /biz/ 6h stance + 1h
-momentum (talk weight 0); buy at +0.5, sell below -0.5. Its backtest:
+`BOT_SPOT_ALGO_RULE=config/rules/algo-2026-10-29.json`, rule set
+`algo-2026-10-29`: fast sleeve share 1, score = `stance.6h` + `momentum.1h`
+(`talk.6h` weight 0, 2 posters); buy at +0.5, sell below -0.5; core sleeve
+share 0, no weights. Its backtest:
 `reports/algo_backtest_2026-10-25.md` (`bb algo-backtest` on the old /biz/
 coin feed history, `--end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
 tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
 
-- **Records.** Decision rows carry `algo` (rule, best candidate and score,
-  held coins and scores, orders, and per scored coin `talk`, `stance`,
-  `momentum`, `ret_1h_pct`, `ret_24h_pct`, `ret_7d_pct`, `score`), `rules_version`
-  (`BOT_SPOT_RULES_VERSION`, required) and `session_id` `algo`. The
+- **Records.** Decision rows carry `algo` (sleeve, rule, levels, best candidate
+  and score, held coins and scores, orders, and per scored coin `signals` (each
+  weighted name and its value), `ret_1h_pct`, `ret_24h_pct`, `ret_7d_pct`,
+  `score`), `rules_version` (from the rule file) and `session_id` `algo`. The
   dashboard's Algorithm tab shows every scored coin.
 - **Practice run.** `docker compose --profile paper up -d bot-spot-paper`
   runs the nonstop trader plan-only with its own files
@@ -361,7 +378,7 @@ tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
   move the wallet, so it keeps deciding on the real balances.
 - **Going live** (after the practice run and the operator's go):
   `docker tag binance-bot:latest binance-bot:pre-algo-<date>`, set the
-  operator's `BOT_SPOT_ALGO_WEIGHTS` in `~/binance-bot/.env.docker`, `docker
+  operator's `BOT_SPOT_ALGO_RULE` in `~/binance-bot/.env.docker`, `docker
   compose up -d bot-spot`, watch the first decisions. Back: retag
   the rollback image and recreate. `touch docker-data/bot-spot.stop` stops it.
 
@@ -435,7 +452,8 @@ The other flags are `--starting-balance` (1000), `--fee-bps` (7.5),
 `--slippage-bps` (5), `--step-minutes` (20) and `--output-dir` (`reports`).
 
 The rule: each liquid-top coin scores
-`w_talk·talk + w_stance·stance + w_momentum·momentum`
+`w_talk·talk.6h + w_stance·stance.6h + w_momentum·momentum.1h` (a one-sleeve
+fixed rule; the backtest does not read the rule file yet, Phase 53 E1)
 (talk: /biz/ 6h mention rate over its 24h rate − 1, from 4 mentions in 24h,
 capped −1..3; stance: (up − down) / tagged of the 6h AI tags with
 `--biz-min-posters` (2) posters; momentum: 1h return / 5%, capped), read from

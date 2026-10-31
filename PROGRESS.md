@@ -69,9 +69,13 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
    not reach the Pi before F2 (the Pi still writes `biz-feed.json`). Done in
    the tree: 24h and 7d price moves (C2, C3), reach and the operator's proxy
    file (C4, `config/proxies.json`: gold through PAXG and XAUT; F2 must add
-   `BOT_SPOT_PROXIES=config/proxies.json` to the Pi's `.env.docker`). Next:
-   signal catalog and scoreboard (C5, C6), trader (rule file, sleeves,
-   risk-off), backtest, dashboard, plan-only rollout. The pre-change binary
+   `BOT_SPOT_PROXIES=config/proxies.json` to the Pi's `.env.docker`), the
+   signal catalog (C5), `bb tag-scoreboard` (C6) and the rule file (D1:
+   `BOT_SPOT_ALGO_RULE=config/rules/algo-2026-10-29.json` replaces
+   the env rule (weights, poster minimum, `BOT_SPOT_RULES_VERSION`; listed in
+   `REMOVED_VARS`); F2 must set it in the Pi's `.env.docker` and drop
+   the three old lines). Next: edge-style rules, sleeves and risk-off
+   (D2-D6), backtest, dashboard, plan-only rollout. The pre-change binary
    for E1's comparison is kept in `~/binance-bot-prechange/` (README there).
    Then a tuning phase where the operator picks weights, rule style and the
    sleeve split.

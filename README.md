@@ -53,17 +53,22 @@ Run `bb --help` or `bb <command> --help`.
 The trader is an algorithm (operator decision 2026-10-29, Phase 52): no LLM, no
 chat, no host tools. With `--nonstop` it ticks every 15 s: it polls every
 price with one request, reads the tags feed (`tags-feed-v1` from biz-app,
-`BOT_SPOT_TAGS_FEED_PATH`), and runs the operator's rule (`crate::decider`,
-`BOT_SPOT_ALGO_WEIGHTS`, required) on the coins the feed's live asset tags reach
+`BOT_SPOT_TAGS_FEED_PATH`), and runs the operator's rule file (`crate::rules`,
+`BOT_SPOT_ALGO_RULE`, required) on the coins the feed's live asset tags reach
 with an eligible USDT market (directly, or through the operator's proxy file
 `BOT_SPOT_PROXIES`, e.g. gold through PAXG and XAUT) and the coins it holds. A decision row is written when
 the decided action changes and once an hour; an unchanged tick writes nothing:
 
-- **Score.** `w_talk·talk + w_stance·stance + w_momentum·momentum` per coin:
-  /biz/ talk surge, /biz/ AI stance (needs `BOT_SPOT_ALGO_MIN_POSTERS`) and the
-  coin's own 1h move. `BOT_SPOT_ALGO_WEIGHTS` is
-  `talk,stance,momentum,buy_above,sell_below`; `BOT_SPOT_RULES_VERSION` names
-  the rule set.
+- **Score.** `Σ weight · signal` per coin over the rule file's weighted signal
+  names (`crate::signals`: `talk.6h` /biz/ talk surge, `stance.6h` /biz/ AI
+  stance, needs the sleeve's `min_posters`, `momentum.1h` the coin's own 1h
+  move, and the tag and market-wide signals). The file holds `rules_version`
+  (recorded on every row), sleeves (share, horizon filter, defensive assets,
+  risk-off level, buy and sell levels, poster minimum, weights) and `style`
+  `fixed`. A missing file, an unknown signal, shares not summing to 1 or a
+  sell level above the buy level: the trader refuses to start. Until sleeves
+  are booked separately it runs the one sleeve holding a share and refuses a
+  second funded sleeve, a horizon filter or a risk-off level.
 - **Orders.** A held coin scoring below the sell level is sold into USDT; with
   nothing held, the best coin at or above the buy level is bought with all
   USDT. Every order goes through `execute_route` and every hard-safety check
@@ -75,7 +80,9 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
   weights on the older half of the window and judges them on the newer
   (OPERATIONS.md, "Algorithm backtest"). The compose profile
   `paper` runs the nonstop trader plan-only.
-- **Rule in force:** `0,1,1,0.5,-0.5` (`algo-2026-10-29`, `docs/decisions.md`).
+- **Rule in force:** `config/rules/algo-2026-10-29.json` (fast sleeve, share 1:
+  `talk.6h` 0, `stance.6h` 1, `momentum.1h` 1, buy at +0.5, sell below -0.5,
+  2 posters; core sleeve share 0; `docs/decisions.md`).
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
   - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked on every tick, before every route, before every leg and before every order;
@@ -89,7 +96,7 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
   - Spot MARKET orders only, at most `BOT_SPOT_MAX_ROUTE_LEGS` legs.
 - **Audit.** Each route and each recorded decision is one fsync'd row in
   `BOT_SPOT_AUDIT_PATH`. It uses the Python schema plus `rules_version`
-  (`BOT_SPOT_RULES_VERSION`, required) and, on decision rows, the rule's
+  (the rule file's) and, on decision rows, the rule's
   verdict (`algo`).
   There are no Telegram or phone alerts (operator decision 2026-10-29); watch
   the dashboard and the audit log.
@@ -127,7 +134,7 @@ A read-only web page for the trader, in five tabs that refresh every 30 s:
   API-key safety check (withdrawals, IP restriction, extra permissions).
 - **Algorithm:** the trader's status (running while it writes a decision row at
   least hourly, stopped by the stop file, halted), the newest decision with
-  every scored coin's /biz/ talk and stance, own 1h, 24h and 7d moves, momentum and score,
+  every scored coin's weighted signals (one column per name in the rule file), own 1h, 24h and 7d moves and score,
   and the decision rows newest first (click one for its scores); rows from
   before Phase 52 show their decision only.
 - **Tags:** the tags feed summary the trader recorded at its newest decision

@@ -19,8 +19,9 @@
 //! - [`tags`]: the tags feed (`tags-feed-v1`) from biz-app, read every tick and summarised
 //!   on each decision row. [`reach`]: how tags reach tradable assets (own tag, the
 //!   operator's proxies, baskets, links). [`signals`]: the signal catalog a rule weights,
-//!   by name (legacy talk/stance/momentum, per-asset tag signals through reach,
-//!   market-wide macro and mood, momentum per horizon).
+//!   by name (legacy `talk.6h`/`stance.6h`, per-asset tag signals through reach,
+//!   market-wide macro and mood, momentum per horizon). [`rules`]: the operator's rule
+//!   file (`BOT_SPOT_ALGO_RULE`: sleeves, levels, weights by signal name).
 //! - [`decider`]: the operator's rule (no LLM); backtested as `biz_algo`.
 //! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
 //! - [`nonstop`]: the trader loop (a tick every 15 s, rows on change plus an hourly
@@ -43,6 +44,7 @@ pub mod executor;
 pub mod memory;
 pub mod nonstop;
 pub mod reach;
+pub mod rules;
 pub mod scope;
 pub mod scoreboard;
 pub mod signals;

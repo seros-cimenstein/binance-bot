@@ -48,7 +48,7 @@ services:
 
   # ---------- LIVE ----------
 
-  # The nonstop algorithm trader (needs BOT_SPOT_ALGO_WEIGHTS): polls prices every 15 s and
+  # The nonstop algorithm trader (needs BOT_SPOT_ALGO_RULE): polls prices every 15 s and
   # writes a decision row when the decided action changes, plus one an hour.
   # Live submission still requires BOT_SPOT_ENABLED=true, BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot,
   # USE_TESTNET=false, DRY_RUN=false, CONFIRM_LIVE_TRADING=yes. Emergency stop: touch data/bot-spot.stop.
@@ -60,7 +60,7 @@ services:
 
   # Practice run of the nonstop trader: plan-only, so it records `planned` routes and places
   # no order. Its own audit, state and lock; the emergency stop file is shared, so
-  # data/bot-spot.stop stops it too. Needs BOT_SPOT_ALGO_WEIGHTS in the env file. Plan-only
+  # data/bot-spot.stop stops it too. Needs BOT_SPOT_ALGO_RULE in the env file. Plan-only
   # decisions do not move the wallet: it keeps deciding on the real balances.
   bot-spot-paper:
     <<: *base

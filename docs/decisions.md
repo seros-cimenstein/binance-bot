@@ -202,3 +202,25 @@ answers through the ask tool, given by the loop manager for the operator:
   1217 (newest 1223 kept), the Camoufox browser (re-download with `camoufox
   fetch`) and `~/.cache/puccinialin`. Docker volumes, archive data and the
   dashboard mirror kept. Result: 16G free with the debug build present.
+
+## 2026-10-31 Phase 53 loop: rule file (`LOOP_TAGS.md` D1)
+
+Three answers through the ask tool, given by the loop manager for the
+operator:
+
+- Sleeve features before D3-D5, "Refuse until D5": the trader decides with
+  the one sleeve holding a share and refuses to start on a rule file with
+  two funded sleeves, a horizon filter other than `any` or a
+  `risk_off_below` ("a validated rule file never promises trading behavior
+  the trader cannot yet perform").
+- Fields the ledger left open in `config/rules/algo-2026-10-29.json`,
+  "Neutral, no new trading choice": fast `horizon` `any`, `defensive`
+  `["USDT"]`, `risk_off_below` null; core share 0, the same neutral fields,
+  buy 0.5 / sell -0.5 / 2 posters copied from fast, no weights. The core
+  sleeve's trading choices stay for the tuning phase.
+- Rule name, "File only": the rule file's `rules_version` is the one source;
+  `BOT_SPOT_RULES_VERSION` joins `REMOVED_VARS` (warns once) and leaves the
+  Pi's `.env.docker` in F2.
+
+Manager note (iteration 17): the catalog's legacy names are `talk.6h` and
+`stance.6h` (renamed from `talk` and `stance`, no aliases).

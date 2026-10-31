@@ -20,7 +20,7 @@ pub const BIZ_TRACE_HEADER: &str = "time,feed_as_of,best_coin,best_score,held_co
 /// - The decider's sells and its one buy (all cash) become the intents; no exit plan,
 ///   only the score sells.
 pub struct BizAlgo {
-    rule: crate::decider::Rule,
+    rule: crate::rules::Rule,
     tags: Option<Arc<TagsHistory>>,
     steps: usize,
     steps_with_feed: usize,
@@ -28,7 +28,9 @@ pub struct BizAlgo {
 }
 
 impl BizAlgo {
-    pub fn new(rule: crate::decider::Rule, tags: Option<Arc<TagsHistory>>) -> Self {
+    /// `rule`'s trading sleeve decides; the history keeps the asset windows only, so the
+    /// rule weights the legacy names (`report::GridWeights::rule`).
+    pub fn new(rule: crate::rules::Rule, tags: Option<Arc<TagsHistory>>) -> Self {
         Self {
             rule,
             tags,
@@ -61,8 +63,9 @@ impl StepRule for BizAlgo {
                 snap,
                 book,
                 tags: feed.map(|f| &f.assets),
+                feed: None,
             },
-            &self.rule,
+            self.rule.trading_sleeve(),
         );
         let scored = |pair: Option<&(String, f64)>| {
             pair.map_or_else(|| (String::new(), String::new()), |(a, s)| (a.clone(), format!("{s:.4}")))
@@ -103,9 +106,10 @@ impl StepRule for BizAlgo {
             || "no tags feed history: the talk and stance terms were 0".to_string(),
             |_| format!("tags feed visible at {} of {} steps", self.steps_with_feed, self.steps),
         );
+        let sleeve = self.rule.trading_sleeve();
         vec![format!(
-            "rule: {}; stances need {} posters; {feeds}",
-            self.rule.weights, self.rule.min_posters
+            "rule {}; stances need {} posters; {feeds}",
+            sleeve, sleeve.min_posters
         )]
     }
 

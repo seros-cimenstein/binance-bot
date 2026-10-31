@@ -1002,23 +1002,24 @@ function cycleAction(c) { return ((c.decision && c.decision.action) || "").toLow
 function cycleFailed(c) { return !!c.error; }
 function cycleKey(c) { return "cycle:" + (c.cycle_id || c.timestamp); }
 function signedNum(v, dp = 2) { const n = num(v); return n === null ? "—" : (n > 0 ? "+" : n < 0 ? "−" : "") + nf(dp, dp).format(Math.abs(n)); }
-// The rule's inputs for every coin it scored: /biz/ talk and stance, own 1h momentum, score; the 24h and 7d moves for reference.
+// The rule's inputs for every coin it scored: each weighted signal (named as in the rule file), score; the 1h, 24h and 7d moves for reference.
 function coinsTable(algo) {
   const coins = (algo && algo.coins) || [];
   if (!coins.length) return el("div", { class: "small muted" }, algo ? "No coin scored: no fresh feed coin and nothing held." : "Recorded before Phase 52: no scores.");
   const buy = num(algo.buy_above), sell = num(algo.sell_below);
+  // Rows written before the rule file (Phase 53 D1) carry talk, stance and momentum fields.
+  const signalsOf = (c) => c.signals || (c.talk === undefined ? {} : { "talk.6h": c.talk, "stance.6h": c.stance, "momentum.1h": c.momentum });
+  const names = [...new Set(coins.flatMap((c) => Object.keys(signalsOf(c))))];
   const verdict = (c) => c.held
     ? (sell !== null && num(c.score) < sell ? chip("Sell", "neg") : chip("Keep", "accent"))
     : (!c.priced ? chip("No price", "") : buy !== null && num(c.score) >= buy ? chip("Buy level", "pos") : null);
-  return table([["Coin"], ["Talk", "r"], ["Stance", "r"], ["1h move", "r"], ["24h move", "r"], ["7d move", "r"], ["Momentum", "r"], ["Score", "r"], [""]],
+  return table([["Coin"], ...names.map((n) => [n, "r"]), ["1h move", "r"], ["24h move", "r"], ["7d move", "r"], ["Score", "r"], [""]],
     coins.map((c) => el("tr", null,
       el("td", null, assetLabel(c.asset, c.held ? chip("Held", "accent") : null)),
-      el("td", { class: "r num" }, signedNum(c.talk)),
-      el("td", { class: "r num" }, signedNum(c.stance)),
+      ...names.map((n) => el("td", { class: "r num" }, signedNum(signalsOf(c)[n]))),
       el("td", { class: "r" }, el("span", { class: tone(c.ret_1h_pct) + " num" }, pct(c.ret_1h_pct))),
       el("td", { class: "r" }, el("span", { class: tone(c.ret_24h_pct) + " num" }, pct(c.ret_24h_pct))),
       el("td", { class: "r" }, el("span", { class: tone(c.ret_7d_pct) + " num" }, pct(c.ret_7d_pct))),
-      el("td", { class: "r num" }, signedNum(c.momentum)),
       el("td", { class: "r" }, el("b", { class: "num" }, signedNum(c.score, 3))),
       el("td", { class: "r" }, verdict(c)))));
 }
@@ -1035,7 +1036,7 @@ function cycleDetail(c) {
 }
 function algorithmPage() {
   const st = ui.data.status;
-  const head = pageHead("Algorithm", "The operator's rule: every coin's /biz/ talk and stance (its asset tag in the tags feed) and its own 1h move, scored. A row is written when the decision changes, and at least once an hour.", null);
+  const head = pageHead("Algorithm", "The operator's rule file: every coin's weighted signals (from the tags feed and its own price moves), scored. A row is written when the decision changes, and at least once an hour.", null);
   if (!st) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
   if (noBotData()) return el("div", { class: "grid" }, head, card(null, empty(...NO_DATA)));
   const state = botState();

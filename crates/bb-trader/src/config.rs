@@ -89,6 +89,11 @@ pub const REMOVED_VARS: &[&str] = &[
     // BOT_SPOT_TAGS_MAX_AGE_MINUTES) instead of the old /biz/ coin feed.
     "BOT_SPOT_BIZ_FEED_PATH",
     "BOT_SPOT_BIZ_MAX_AGE_MINUTES",
+    // Phase 53: the rule file (BOT_SPOT_ALGO_RULE) holds the weights, levels, poster
+    // minimum and the rule's name.
+    "BOT_SPOT_ALGO_WEIGHTS",
+    "BOT_SPOT_ALGO_MIN_POSTERS",
+    "BOT_SPOT_RULES_VERSION",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -134,9 +139,6 @@ pub struct TraderConfig {
     pub confirm_live_trading: String,
     pub enabled: bool,
     pub dynamic_scope: String,
-    /// `BOT_SPOT_RULES_VERSION`: the operator's name for the rule set in force, recorded
-    /// on every audit row (required with the rule).
-    pub rules_version: String,
     pub state_path: PathBuf,
     pub route_stale_seconds: f64,
     // files
@@ -169,9 +171,11 @@ pub struct TraderConfig {
     /// without a Spot market reach these markets ([`crate::reach`]). Unset: no proxies.
     pub proxies_path: Option<PathBuf>,
     pub proxies: crate::reach::Proxies,
-    /// The operator's rule (`BOT_SPOT_ALGO_WEIGHTS`, `BOT_SPOT_ALGO_MIN_POSTERS`); required:
-    /// the trader never runs on rules the code picked.
-    pub algo_rule: crate::decider::Rule,
+    /// The operator's rule file (`BOT_SPOT_ALGO_RULE`, e.g.
+    /// `config/rules/algo-2026-10-29.json`); required: the trader never runs on rules the
+    /// code picked. Its `rules_version` is recorded on every audit row.
+    pub algo_rule_path: PathBuf,
+    pub algo_rule: crate::rules::Rule,
     // operator scope
     pub scope: ScopeConfig,
 }
@@ -215,26 +219,19 @@ impl TraderConfig {
             &env.csv("BOT_SPOT_BLOCKED_QUOTES", "IDR"),
             env.boolean("BOT_SPOT_BLOCK_FIAT_ASSETS", true)?,
         )?;
-        let spec = env.raw("BOT_SPOT_ALGO_WEIGHTS").ok_or_else(|| {
+        let algo_rule_path = env.raw("BOT_SPOT_ALGO_RULE").map(PathBuf::from).ok_or_else(|| {
             TraderError::config(
-                "BOT_SPOT_ALGO_WEIGHTS is required (talk,stance,momentum,buy_above,sell_below): the operator's rule",
+                "BOT_SPOT_ALGO_RULE is required: the path to the operator's rule file (e.g. config/rules/algo-2026-10-29.json)",
             )
         })?;
-        let algo_rule = crate::decider::Rule {
-            weights: crate::decider::Weights::parse(&spec).map_err(TraderError::config)?,
-            min_posters: env.integer("BOT_SPOT_ALGO_MIN_POSTERS", 2)?,
-        };
+        let algo_rule = crate::rules::Rule::load(&algo_rule_path)
+            .map_err(|e| TraderError::config(format!("BOT_SPOT_ALGO_RULE: {e}")))?;
         let proxies_path = env.raw("BOT_SPOT_PROXIES").map(PathBuf::from);
         let proxies = match &proxies_path {
             Some(path) => crate::reach::Proxies::load(path)
                 .map_err(|e| TraderError::config(format!("BOT_SPOT_PROXIES: {e}")))?,
             None => crate::reach::Proxies::default(),
         };
-        let rules_version = env.raw("BOT_SPOT_RULES_VERSION").ok_or_else(|| {
-            TraderError::config(
-                "BOT_SPOT_RULES_VERSION is required: the operator's name for the rule set",
-            )
-        })?;
         let config = Self {
             api_key,
             api_secret,
@@ -247,7 +244,6 @@ impl TraderConfig {
             dynamic_scope: env
                 .string("BOT_SPOT_DYNAMIC_SCOPE", "")
                 .to_ascii_lowercase(),
-            rules_version,
             state_path: env.path("BOT_SPOT_STATE_PATH", DEFAULT_STATE_PATH),
             route_stale_seconds: env.float("BOT_SPOT_ROUTE_STALE_SECONDS", 60.0)?,
             audit_path: env.path("BOT_SPOT_AUDIT_PATH", DEFAULT_AUDIT_PATH),
@@ -286,6 +282,7 @@ impl TraderConfig {
             )?,
             proxies_path,
             proxies,
+            algo_rule_path,
             algo_rule,
             scope,
         };
@@ -309,9 +306,6 @@ impl TraderConfig {
             if path.as_os_str().is_empty() {
                 return Err(TraderError::config(format!("{name} must not be blank")));
             }
-        }
-        if self.rules_version.trim().is_empty() {
-            return Err(TraderError::config("BOT_SPOT_RULES_VERSION must not be blank"));
         }
         if self.tags_max_age_minutes == 0 {
             return Err(TraderError::config(
@@ -372,7 +366,7 @@ impl TraderConfig {
         let decimal = |value: Decimal| value.normalize().to_string();
         serde_json::json!({
             "mode": self.mode(),
-            "rules_version": self.rules_version,
+            "rules_version": self.algo_rule.rules_version,
             "tick_seconds": nonstop.then_some(crate::nonstop::TICK.as_secs()),
             "routing": {
                 "market_pick_mode": self.market_pick_mode.as_str(),
@@ -395,8 +389,9 @@ impl TraderConfig {
                 "proxies": self.proxies,
             },
             "rule": {
-                "weights": self.algo_rule.weights.to_string(),
-                "min_posters": self.algo_rule.min_posters,
+                "path": self.algo_rule_path,
+                "style": self.algo_rule.style,
+                "sleeves": self.algo_rule.sleeves,
             },
             "scope": self.scope,
         })
@@ -570,9 +565,8 @@ pub(crate) mod tests {
         let mut map: HashMap<String, String> = HashMap::from([
             ("BINANCE_API_KEY".to_owned(), "key".to_owned()),
             ("BINANCE_API_SECRET".to_owned(), "secret".to_owned()),
-            // Tests run on a fixed rule; production requires the operator's.
-            ("BOT_SPOT_ALGO_WEIGHTS".to_owned(), "1,0.5,0.5,0.5,0".to_owned()),
-            ("BOT_SPOT_RULES_VERSION".to_owned(), "test-rules".to_owned()),
+            // Tests run on the shipped rule file; production requires the operator's.
+            ("BOT_SPOT_ALGO_RULE".to_owned(), crate::rules::tests::SHIPPED.to_owned()),
         ]);
         for (name, value) in pairs {
             map.insert((*name).to_owned(), (*value).to_owned());
@@ -596,13 +590,14 @@ pub(crate) mod tests {
             ("BINANCE_API_KEY", "KEY-must-not-leak"),
             ("BINANCE_API_SECRET", "SECRET-must-not-leak"),
             ("CONFIRM_LIVE_TRADING", "yes"),
-            ("BOT_SPOT_RULES_VERSION", "rules-2026-10-30"),
         ]))
         .unwrap();
         let snapshot = config.run_config(true);
         let text = snapshot.to_string();
         assert!(!text.contains("must-not-leak"), "{text}");
-        assert_eq!(snapshot["rules_version"], "rules-2026-10-30");
+        assert_eq!(snapshot["rules_version"], "algo-2026-10-29");
+        assert_eq!(snapshot["rule"]["style"], "fixed");
+        assert_eq!(snapshot["rule"]["sleeves"][0]["weights"]["stance.6h"], 1.0);
         assert_eq!(snapshot["tick_seconds"], 15);
     }
 
@@ -680,7 +675,6 @@ pub(crate) mod tests {
             [("BOT_SPOT_MAX_ROUTE_LEGS", "4")],
             [("BOT_SPOT_MAX_ROUTE_LEGS", "0")],
             [("BOT_SPOT_MARKET_PICK_MODE", "yolo")],
-            [("BOT_SPOT_RULES_VERSION", " ")],
             [("BOT_SPOT_CANDIDATE_LIMIT", "-1")],
             [("BOT_SPOT_BLOCKED_ASSETS", "B@D")],
             [("USE_TESTNET", "maybe")],
@@ -708,34 +702,39 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_rule_is_required_and_parsed_from_the_operators_weights() {
+    fn the_trader_refuses_to_start_without_a_valid_rule_file() {
         let without = |name: &str| {
             let base = lookup(&[]);
             let skip = name.to_owned();
             move |key: &str| if key == skip { None } else { base(key) }
         };
-        let err = TraderConfig::from_lookup(without("BOT_SPOT_ALGO_WEIGHTS"))
+        let err = TraderConfig::from_lookup(without("BOT_SPOT_ALGO_RULE"))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("BOT_SPOT_ALGO_WEIGHTS is required"), "{err}");
-        let err = TraderConfig::from_lookup(without("BOT_SPOT_RULES_VERSION"))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("BOT_SPOT_RULES_VERSION is required"), "{err}");
-        let config = TraderConfig::from_lookup(lookup(&[
-            ("BOT_SPOT_ALGO_WEIGHTS", "1,0.25,0.5,0.5,0"),
-            ("BOT_SPOT_ALGO_MIN_POSTERS", "3"),
-        ]))
-        .unwrap();
-        assert_eq!((config.algo_rule.min_posters, config.algo_rule.weights.stance), (3, 0.25));
-        assert_eq!(config.run_config(false)["rule"]["min_posters"], 3);
-        assert!(TraderConfig::from_lookup(lookup(&[("BOT_SPOT_ALGO_WEIGHTS", "1,2")])).is_err());
-        // An env file still carrying the six-number LLM-era rule (with a value weight)
-        // refuses to start instead of shifting the levels into the wrong slots.
-        let err = TraderConfig::from_lookup(lookup(&[("BOT_SPOT_ALGO_WEIGHTS", "1,0.5,0.5,0,0.5,0")]))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("need 5 numbers"), "{err}");
+        assert!(err.contains("BOT_SPOT_ALGO_RULE is required"), "{err}");
+        let dir = tempfile::tempdir().unwrap();
+        let refuse = |text: Option<&str>, reason: &str| {
+            let path = dir.path().join("rule.json");
+            let _ = std::fs::remove_file(&path);
+            if let Some(text) = text {
+                std::fs::write(&path, text).unwrap();
+            }
+            let err = TraderConfig::from_lookup(lookup(&[("BOT_SPOT_ALGO_RULE", path.to_str().unwrap())]))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("BOT_SPOT_ALGO_RULE") && err.contains(reason), "{reason:?} not in {err}");
+        };
+        let shipped = std::fs::read_to_string(crate::rules::tests::SHIPPED).unwrap();
+        refuse(None, "cannot read");
+        refuse(Some(&shipped.replace("\"stance.6h\"", "\"stance\"")), "unknown signal \"stance\"");
+        refuse(Some(&shipped.replace("\"share\": 1.0", "\"share\": 0.9")), "sum to 0.9, not 1");
+        refuse(Some(&shipped.replace("\"sell_below\": -0.5", "\"sell_below\": 0.7")), "sell_below 0.7 is above buy_above 0.5");
+        // A stale env file (every removed setting, the old env rule included, set to the
+        // old five-number rule) is ignored with a warning: the file decides.
+        let stale: Vec<(&str, &str)> = REMOVED_VARS.iter().map(|name| (*name, "1,0.25,0.5,0.5,0")).collect();
+        let config = TraderConfig::from_lookup(lookup(&stale)).unwrap();
+        let fast = config.algo_rule.trading_sleeve();
+        assert_eq!((config.algo_rule.rules_version.as_str(), fast.min_posters, fast.buy_above), ("algo-2026-10-29", 2, 0.5));
     }
 
     #[test]

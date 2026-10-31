@@ -4,8 +4,8 @@
 //!
 //! | Name | Range | Meaning |
 //! |---|---|---|
-//! | `talk` | −1..3 | legacy: the coin's own asset tag, 6h mention rate over its 24h rate − 1; 0 under [`SURGE_MIN_MENTIONS`] mentions in 24h |
-//! | `stance` | −1..1 | legacy: (up − down) / (up + down) of the own asset tag's 6h AI tags; 0 under `min_posters` posters or without tags |
+//! | `talk.6h` | −1..3 | legacy: the coin's own asset tag, 6h mention rate over its 24h rate − 1; 0 under [`SURGE_MIN_MENTIONS`] mentions in 24h |
+//! | `stance.6h` | −1..1 | legacy: (up − down) / (up + down) of the own asset tag's 6h AI tags; 0 under `min_posters` posters or without tags |
 //! | `momentum.<1h\|24h\|7d>` | −1..1 | the coin's return over the horizon capped at ±[`MOMENTUM_CAP_PCT`] (5%), ±10%, ±20% and divided by the cap |
 //! | `<kind>.<signal>[.<window>]` | see below | per tradable asset: the tag signal over every [`crate::reach`] path from a tag of `<kind>`, averaged by path weight |
 //! | `market.<macro\|mood>.<signal>[.<window>]` | see below | market-wide: the tag signal over every live macro or mood tag, averaged by the tags' posters |
@@ -323,8 +323,8 @@ impl FromStr for Name {
     fn from_str(name: &str) -> Result<Self, String> {
         let parts: Vec<&str> = name.trim().split('.').collect();
         match parts.as_slice() {
-            ["talk"] => Ok(Name::Talk),
-            ["stance"] => Ok(Name::Stance),
+            ["talk", "6h"] => Ok(Name::Talk),
+            ["stance", "6h"] => Ok(Name::Stance),
             ["momentum", span] => match Span::parse(span) {
                 Some(span) if span.momentum_cap().is_some() => Ok(Name::Momentum(span)),
                 _ => Err(format!(
@@ -352,7 +352,7 @@ impl FromStr for Name {
                 Ok(Name::Asset { kind, signal, span })
             }
             _ => Err(format!(
-                "unknown signal {name:?}: expected talk, stance, momentum.<h>, <kind>.<signal>[.<window>] or market.<kind>.<signal>[.<window>]"
+                "unknown signal {name:?}: expected talk.6h, stance.6h, momentum.<h>, <kind>.<signal>[.<window>] or market.<kind>.<signal>[.<window>]"
             )),
         }
     }
@@ -365,8 +365,8 @@ impl fmt::Display for Name {
             None => signal.as_str().to_owned(),
         };
         match self {
-            Name::Talk => f.write_str("talk"),
-            Name::Stance => f.write_str("stance"),
+            Name::Talk => f.write_str("talk.6h"),
+            Name::Stance => f.write_str("stance.6h"),
             Name::Momentum(span) => write!(f, "momentum.{}", span.as_str()),
             Name::Asset { kind, signal, span } => write!(f, "{kind}.{}", tail(signal, span)),
             Name::Market { kind, signal, span } => {
@@ -376,7 +376,13 @@ impl fmt::Display for Name {
     }
 }
 
-/// Legacy `talk` of a coin's own asset tag (see the module docs).
+impl serde::Serialize for Name {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+/// Legacy `talk.6h` of a coin's own asset tag (see the module docs).
 pub fn talk(windows: &Windows) -> f64 {
     if windows.h24.mentions < SURGE_MIN_MENTIONS {
         return 0.0;
@@ -384,7 +390,7 @@ pub fn talk(windows: &Windows) -> f64 {
     (windows.h6.mentions as f64 * 4.0 / windows.h24.mentions as f64 - 1.0).clamp(-1.0, 3.0)
 }
 
-/// Legacy `stance` of a coin's own asset tag (see the module docs).
+/// Legacy `stance.6h` of a coin's own asset tag (see the module docs).
 pub fn stance(windows: &Windows, min_posters: u64) -> f64 {
     lean(
         windows.h6.posters,
@@ -406,6 +412,23 @@ pub fn momentum(coin: Option<&CoinView>, span: Span) -> f64 {
         Span::H6 | Span::D30 => None,
     };
     ret.map_or(0.0, |r| r.clamp(-cap, cap) / cap)
+}
+
+/// The names that read only the coin's own asset tag and price (`talk.6h`, `stance.6h`,
+/// `momentum.*`); `None` for the tag and market names, which need the whole feed
+/// ([`Signals`]).
+pub fn own_value(
+    name: &Name,
+    own: Option<&Windows>,
+    coin: Option<&CoinView>,
+    min_posters: u64,
+) -> Option<f64> {
+    match name {
+        Name::Talk => Some(own.map_or(0.0, talk)),
+        Name::Stance => Some(own.map_or(0.0, |w| stance(w, min_posters))),
+        Name::Momentum(span) => Some(momentum(coin, *span)),
+        Name::Asset { .. } | Name::Market { .. } => None,
+    }
 }
 
 /// (up − down) / (up + down) with the poster gate.
@@ -436,7 +459,7 @@ pub struct Signals<'a> {
 }
 
 impl<'a> Signals<'a> {
-    /// `min_posters` gates `direction`, `agreement` and the legacy `stance`.
+    /// `min_posters` gates `direction`, `agreement` and the legacy `stance.6h`.
     pub fn new(feed: &'a Feed, reach: &'a Reach, min_posters: u64) -> Self {
         let loudest = Span::ALL
             .into_iter()
@@ -577,9 +600,9 @@ impl<'a> Signals<'a> {
         coin: Option<&CoinView>,
     ) -> f64 {
         match name {
-            Name::Talk => own.map_or(0.0, talk),
-            Name::Stance => own.map_or(0.0, |w| stance(w, self.min_posters)),
-            Name::Momentum(span) => momentum(coin, *span),
+            Name::Talk | Name::Stance | Name::Momentum(_) => {
+                own_value(name, own, coin, self.min_posters).unwrap_or(0.0)
+            }
             Name::Asset {
                 kind,
                 signal: Signal::PriceConfirmed,
@@ -674,8 +697,8 @@ mod tests {
         // 2 legacy + 3 momentum + 7 kinds × 34 + 2 market kinds × 31 (no price_confirmed).
         assert_eq!(all.len(), 2 + 3 + 7 * 34 + 2 * 31);
         for good in [
-            "talk",
-            "stance",
+            "talk.6h",
+            "stance.6h",
             "momentum.7d",
             "asset.direction.6h",
             "narrative.surge.24h",
@@ -688,7 +711,10 @@ mod tests {
         }
         for bad in [
             "",
-            "talk.6h",
+            "talk",
+            "stance",
+            "talk.24h",
+            "stance.1h",
             "momentum.6h",
             "momentum",
             "stock.direction.6h",

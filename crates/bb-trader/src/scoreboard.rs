@@ -920,14 +920,14 @@ mod tests {
         let feeds = 50 * 24;
         let board = run_study(&candles, &lead, &noisy, feeds, H0 + 52 * 24 * HOUR_MS);
         // Both tags are asset tags: `asset.direction.6h` pools LEAD (planted) and NOISE.
-        // Split them by checking the legacy `stance` per asset through a LEAD-only study.
+        // Split them by checking the legacy `stance.6h` per asset through a LEAD-only study.
         let only_lead: Candles = candles
             .iter()
             .filter(|(a, _)| a.as_str() != "NOISE")
             .map(|(a, h)| (a.clone(), h.clone()))
             .collect();
         let lead_board = run_study(&only_lead, &lead, &noisy, feeds, H0 + 52 * 24 * HOUR_MS);
-        let found = row(&lead_board, "stance", "24h");
+        let found = row(&lead_board, "stance.6h", "24h");
         assert!(found.all.excess_pct > 0.5 && found.all.t > 3.0, "{found:?}");
         assert!(found.older.excess_pct > 0.0 && found.newer.excess_pct > 0.0 && !found.decayed);
         assert!(found.all.hit_rate > 0.55, "{found:?}");
@@ -940,7 +940,7 @@ mod tests {
             .collect();
         let noise_board = run_study(&only_noise, &lead, &noisy, feeds, H0 + 52 * 24 * HOUR_MS);
         for horizon in ["1h", "24h", "7d"] {
-            let r = row(&noise_board, "stance", horizon);
+            let r = row(&noise_board, "stance.6h", horizon);
             assert!(
                 r.all.t.abs() < 2.0,
                 "noise looks like a lead at {horizon}: {r:?}"
@@ -962,7 +962,7 @@ mod tests {
         assert!(board.history.feeds <= 20 * 24 + 1);
         // A +7d result for a signal one day before D is not in it (its outcome is after D):
         // the 7d rows hold only signals up to D − 7d.
-        let r7 = row(&board, "stance", "7d");
+        let r7 = row(&board, "stance.6h", "7d");
         assert!(r7.all.n > 0);
         let h7 = &board.horizons["7d"];
         assert!(
