@@ -85,6 +85,10 @@ pub const REMOVED_VARS: &[&str] = &[
     "BOT_SPOT_DEFAULT_EXIT_PLAN",
     "BOT_SPOT_DEFAULT_EXIT_PLAN_FROM",
     "BOT_SPOT_EXIT_POLL_SECONDS",
+    // Phase 53: the trader reads the tags feed (BOT_SPOT_TAGS_FEED_PATH,
+    // BOT_SPOT_TAGS_MAX_AGE_MINUTES) instead of the old /biz/ coin feed.
+    "BOT_SPOT_BIZ_FEED_PATH",
+    "BOT_SPOT_BIZ_MAX_AGE_MINUTES",
 ];
 
 /// How destination assets are picked for the candidate table.
@@ -157,10 +161,10 @@ pub struct TraderConfig {
     pub fee_cache_seconds: f64,
     // memory (information only)
     pub trade_memory_limit: usize,
-    /// Phase 51: the /biz/ feed (`crate::biz`) recorded every cycle, information only.
-    pub biz_feed_path: PathBuf,
+    /// Phase 53: the tags feed (`crate::tags`) read every tick; the rule scores on it.
+    pub tags_feed_path: PathBuf,
     /// A feed whose `as_of` is older than this is recorded as unavailable.
-    pub biz_max_age_minutes: u64,
+    pub tags_max_age_minutes: u64,
     /// The operator's rule (`BOT_SPOT_ALGO_WEIGHTS`, `BOT_SPOT_ALGO_MIN_POSTERS`); required:
     /// the trader never runs on rules the code picked.
     pub algo_rule: crate::decider::Rule,
@@ -265,10 +269,10 @@ impl TraderConfig {
             ticker_stale_seconds: env.float("BOT_SPOT_TICKER_STALE_SECONDS", 300.0)?,
             fee_cache_seconds: env.float("BOT_SPOT_FEE_CACHE_SECONDS", 60.0)?,
             trade_memory_limit: env.integer("BOT_SPOT_TRADE_MEMORY_LIMIT", 8)?,
-            biz_feed_path: env.path("BOT_SPOT_BIZ_FEED_PATH", crate::biz::DEFAULT_FEED_PATH),
-            biz_max_age_minutes: env.integer(
-                "BOT_SPOT_BIZ_MAX_AGE_MINUTES",
-                crate::biz::DEFAULT_MAX_AGE_MINUTES,
+            tags_feed_path: env.path("BOT_SPOT_TAGS_FEED_PATH", crate::tags::DEFAULT_FEED_PATH),
+            tags_max_age_minutes: env.integer(
+                "BOT_SPOT_TAGS_MAX_AGE_MINUTES",
+                crate::tags::DEFAULT_MAX_AGE_MINUTES,
             )?,
             algo_rule,
             scope,
@@ -297,9 +301,9 @@ impl TraderConfig {
         if self.rules_version.trim().is_empty() {
             return Err(TraderError::config("BOT_SPOT_RULES_VERSION must not be blank"));
         }
-        if self.biz_max_age_minutes == 0 {
+        if self.tags_max_age_minutes == 0 {
             return Err(TraderError::config(
-                "biz_max_age_minutes must be positive",
+                "BOT_SPOT_TAGS_MAX_AGE_MINUTES must be positive",
             ));
         }
         if !(1..=3).contains(&self.max_route_legs) {
@@ -372,9 +376,9 @@ impl TraderConfig {
                 "leg_rounding_reserve_bps": decimal(self.leg_rounding_reserve_bps),
             },
             "trade_memory_limit": self.trade_memory_limit,
-            "biz": {
-                "feed_path": self.biz_feed_path,
-                "max_age_minutes": self.biz_max_age_minutes,
+            "tags": {
+                "feed_path": self.tags_feed_path,
+                "max_age_minutes": self.tags_max_age_minutes,
             },
             "rule": {
                 "weights": self.algo_rule.weights.to_string(),

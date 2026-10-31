@@ -163,13 +163,20 @@ pub struct DecisionContext {
     pub execution_invariants: Vec<String>,
     pub route_scope: Value,
     pub trade_memory: TradeMemory,
-    /// The /biz/ feed (`None` in tests; the cycle always reads it); the rule scores on it.
-    pub biz: Option<crate::biz::BizNow>,
+    /// The tags feed (`None` in tests; the cycle always reads it); the rule scores on it.
+    pub tags: Option<crate::tags::TagsNow>,
 }
 
 impl DecisionContext {
-    /// The recorded context (`--evidence-only` output; hashed into `context_hash`).
+    /// The recorded context (`--evidence-only` output), with the tags feed's summary.
     pub fn as_payload(&self) -> Value {
+        let mut payload = self.hashed_payload();
+        payload["tags"] = json!(self.tags);
+        payload
+    }
+
+    /// What `context_hash` covers: the tags feed only by its `as_of` and file digest.
+    fn hashed_payload(&self) -> Value {
         json!({
             "timestamp": self.timestamp,
             "rules_version": self.rules_version,
@@ -180,7 +187,7 @@ impl DecisionContext {
             "execution_invariants": self.execution_invariants,
             "route_scope": self.route_scope,
             "trade_memory": self.trade_memory,
-            "biz": self.biz,
+            "tags": self.tags.as_ref().map(crate::tags::TagsNow::fingerprint),
         })
     }
 
@@ -192,7 +199,7 @@ impl DecisionContext {
     }
 
     pub fn context_hash(&self) -> String {
-        hash_payload(&self.as_payload())
+        hash_payload(&self.hashed_payload())
     }
 }
 
@@ -238,5 +245,43 @@ mod tests {
         assert_eq!(decimal_json(Decimal::new(12_300, 4)).to_string(), "1.23");
         assert_eq!(decimal_json(Decimal::ZERO).to_string(), "0");
         assert_eq!(opt_decimal_json(None), Value::Null);
+    }
+
+    #[test]
+    fn context_hash_covers_the_tags_feed_by_as_of_and_digest_and_the_payload_shows_its_summary() {
+        const FEED: &str = r#"{"schema":"tags-feed-v1","as_of":"2026-10-20T10:00:00Z",
+            "tags":{"asset:ETH":{"kind":"asset","name":"ETH","windows":{"6h":{"mentions":3}}},
+                    "asset:GOLD":{"kind":"asset","name":"GOLD","windows":{"6h":{"mentions":9}}}}}"#;
+        let as_of_ms = 1_792_490_400_000; // 2026-10-20T10:00:00Z
+        let read = |text: &str, minutes: i64| {
+            let feed = crate::tags::parse(text, as_of_ms + minutes * 60_000, 45, |c| c == "ETH").unwrap();
+            DecisionContext {
+                timestamp: "2026-10-20T10:30:00+00:00".into(),
+                rules_version: "r".into(),
+                market_pick_mode: "all",
+                balances: Balances::default(),
+                portfolio_value_usdt: Decimal::ZERO,
+                candidate_routes: Vec::new(),
+                execution_invariants: Vec::new(),
+                route_scope: json!({}),
+                trade_memory: TradeMemory {
+                    status: "empty",
+                    reason: None,
+                    recent_trade_count: 0,
+                    recent_loss_streak: 0,
+                    current_holding: None,
+                    recent_outcomes: Vec::new(),
+                },
+                tags: Some(crate::tags::TagsNow::Fresh(Box::new(feed))),
+            }
+        };
+        // The same file read later hashes the same; another file does not.
+        assert_eq!(read(FEED, 1).context_hash(), read(FEED, 30).context_hash());
+        let edited = FEED.replace(r#""mentions":9"#, r#""mentions":10"#);
+        assert_ne!(read(FEED, 1).context_hash(), read(&edited, 1).context_hash());
+        let payload = read(FEED, 30).as_payload();
+        assert_eq!(payload["tags"]["tradable"], json!(["ETH"]));
+        assert_eq!(payload["tags"]["scored_only"], json!(["GOLD"]));
+        assert_eq!(payload["tags"]["age_minutes"], json!(30));
     }
 }

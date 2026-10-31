@@ -172,8 +172,8 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
 
 ### Signals and scoreboard
 
-- [ ] `crate::tags` (replaces `crate::biz`) reads `tags-feed-v1` only; test
-  fixture from a real file.
+- [x] `crate::tags` (replaces `crate::biz`) reads `tags-feed-v1` only; test
+  fixture from a real file (`tests/fixtures/tags-feed-v1.json`, LOOP_TAGS C1).
 - [ ] Proxies: operator file `BOT_SPOT_PROXIES` (e.g. `GOLD` -> `PAXG`,
   `XAUT`); a tag reaches a tradable asset directly, through a proxy, a
   basket membership or a link; others are scored, never bought.

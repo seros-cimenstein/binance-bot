@@ -1,6 +1,6 @@
 //! Binance Spot algorithm trader (Phase 52: no LLM).
 //!
-//! The operator's rule ([`decider`]) decides each cycle on the /biz/ feed ([`biz`]) and
+//! The operator's rule ([`decider`]) decides each cycle on the tags feed ([`tags`]) and
 //! the coins' own 1m prices ([`book`]); every order goes through the route path, and hard
 //! safety stays in
 //! [`executor`] (arming, stop file, run lock, permissions, order-test, filters, sizing,
@@ -16,7 +16,8 @@
 //! - [`state`]: the persisted cycle counter and last cycle.
 //! - [`algo_backtest`]: offline backtest of the algorithm on cached 1m candles, tuned on
 //!   the older half and judged on the newer (research only, no network, no order path).
-//! - [`biz`]: the /biz/ feed from biz-app, recorded per cycle, information only (Phase 51).
+//! - [`tags`]: the tags feed (`tags-feed-v1`) from biz-app, read every tick and summarised
+//!   on each decision row.
 //! - [`decider`]: the operator's rule (no LLM); backtested as `biz_algo`.
 //! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
 //! - [`nonstop`]: the trader loop (a tick every 15 s, rows on change plus an hourly
@@ -28,7 +29,6 @@
 pub mod algo_backtest;
 pub mod assets;
 pub mod audit;
-pub mod biz;
 pub mod book;
 pub mod cli;
 pub mod config;
@@ -41,6 +41,7 @@ pub mod memory;
 pub mod nonstop;
 pub mod scope;
 pub mod state;
+pub mod tags;
 pub mod trades;
 pub mod universe;
 

@@ -7,7 +7,7 @@
 //! 2. Slow state (the market catalog with its fees, and the wallet balances) is reloaded
 //!    every [`SLOW_REFRESH_MS`] and on the tick after every executed route; a failed reload
 //!    keeps the previous state.
-//! 3. Per-tick inputs: the /biz/ feed file and one all-symbols `ticker/price` request
+//! 3. Per-tick inputs: the tags feed file and one all-symbols `ticker/price` request
 //!    (weight 4). Each coin's minute closes come from those polls, seeded once from 1m
 //!    klines, so its 15m/1h moves are the trader's own (no breadth read).
 //! 4. The operator's rule ([`crate::decider`]) decides. A decision row (the cycle summary,
@@ -24,13 +24,13 @@ use rust_decimal::prelude::ToPrimitive;
 use tokio_util::sync::CancellationToken;
 
 use crate::audit::{AuditRow, EndCycle, RowStatus, failed_route_halt};
-use crate::biz::BizNow;
 use crate::book::{CoinView, coin_view_from_minutes, live_book};
 use crate::context::{DecisionContext, execution_invariants, route_scope};
 use crate::cycle::{ALGO_SESSION_ID, CycleMode, Runtime, Snapshot};
 use crate::decider::{Action, Inputs, Verdict, decide};
 use crate::error::{Result, TraderError};
 use crate::state::{LastCycle, TraderState};
+use crate::tags::TagsNow;
 use crate::universe::{Balances, MarketView, build_route_candidates};
 
 /// Price poll and decision interval (operator decision 2026-10-29: REST polling every 15 s).
@@ -124,7 +124,7 @@ pub enum Tick {
 struct Decision {
     verdict: Verdict,
     key: String,
-    biz: BizNow,
+    tags: TagsNow,
     equity: Decimal,
     /// Every held coin and buy candidate with its score terms, highest score first
     /// (recorded on the decision row as `algo.coins`).
@@ -195,9 +195,9 @@ impl Nonstop {
     pub async fn evidence(&mut self) -> Result<DecisionContext> {
         let now_ms = bb_core::time::now_ms();
         self.refresh(now_ms).await?;
-        let (biz, candidates, held) = self.inputs()?;
+        let (tags, candidates, held) = self.inputs()?;
         self.poll_prices(now_ms, &candidates, &held).await;
-        let decision = self.decide(now_ms, biz, candidates, &held)?;
+        let decision = self.decide(now_ms, tags, candidates, &held)?;
         let slow = self.slow_state()?;
         let mut context = self.context(slow, &decision);
         context.candidate_routes =
@@ -245,11 +245,11 @@ impl Nonstop {
             }
             return Err(error);
         }
-        let (biz, candidates, held) = self.inputs()?;
+        let (tags, candidates, held) = self.inputs()?;
         if !self.poll_prices(now_ms, &candidates, &held).await && !force {
             return Ok(Tick::Unchanged);
         }
-        let decision = self.decide(now_ms, biz, candidates, &held)?;
+        let decision = self.decide(now_ms, tags, candidates, &held)?;
         if !self.due(&decision.key, now_ms, force) {
             return Ok(Tick::Unchanged);
         }
@@ -373,20 +373,20 @@ impl Nonstop {
         Ok(())
     }
 
-    /// This tick's /biz/ feed, the coins the rule may buy (the fresh feed's coins with an
+    /// This tick's tags feed, the coins the rule may buy (the fresh feed's asset tags with an
     /// eligible USDT market, cash-like coins left out) and the coins it holds.
-    fn inputs(&self) -> Result<(BizNow, Vec<String>, BTreeSet<String>)> {
+    fn inputs(&self) -> Result<(TagsNow, Vec<String>, BTreeSet<String>)> {
         let slow = self.slow_state()?;
-        let biz = self.runtime.biz_feed(&slow.view);
+        let tags = self.runtime.tags_feed(&slow.view);
         let usdt_market = |asset: &str| {
             slow.view
                 .markets
                 .get(&format!("{asset}/USDT"))
                 .is_some_and(|market| market.eligible)
         };
-        let candidates = match &biz {
-            BizNow::Fresh(feed) => feed
-                .coins
+        let candidates = match &tags {
+            TagsNow::Fresh(feed) => feed
+                .assets
                 .keys()
                 .filter(|asset| {
                     asset.as_str() != "USDT"
@@ -395,7 +395,7 @@ impl Nonstop {
                 })
                 .cloned()
                 .collect(),
-            BizNow::Unavailable { .. } => Vec::new(),
+            TagsNow::Unavailable { .. } => Vec::new(),
         };
         let held = self
             .book(slow, 0)
@@ -403,7 +403,7 @@ impl Nonstop {
             .into_keys()
             .filter(|asset| usdt_market(asset))
             .collect();
-        Ok((biz, candidates, held))
+        Ok((tags, candidates, held))
     }
 
     fn book(&self, slow: &Slow, t: i64) -> crate::book::Book {
@@ -483,7 +483,7 @@ impl Nonstop {
     fn decide(
         &self,
         now_ms: i64,
-        biz: BizNow,
+        tags: TagsNow,
         candidates: Vec<String>,
         held: &BTreeSet<String>,
     ) -> Result<Decision> {
@@ -495,15 +495,15 @@ impl Nonstop {
             .collect();
         let step = crate::book::Snapshot::live(now_ms, coins, candidates);
         let book = self.book(slow, now_ms);
-        let feed = match &biz {
-            BizNow::Fresh(feed) => Some(&feed.coins),
-            BizNow::Unavailable { .. } => None,
+        let feed = match &tags {
+            TagsNow::Fresh(feed) => Some(&feed.assets),
+            TagsNow::Unavailable { .. } => None,
         };
         let rule = self.runtime.config.algo_rule;
         let inputs = Inputs {
             snap: &step,
             book: &book,
-            biz: feed,
+            tags: feed,
         };
         let verdict = decide(&inputs, &rule);
         let mut scored: Vec<(f64, serde_json::Value)> = step
@@ -531,7 +531,7 @@ impl Nonstop {
         Ok(Decision {
             key: decision_key(&verdict),
             verdict,
-            biz,
+            tags,
             equity: slow.balances.free_value_usdt(&slow.view),
             coins: scored.into_iter().map(|(_, coin)| coin).collect(),
         })
@@ -553,7 +553,7 @@ impl Nonstop {
                 &slow.view,
                 config.trade_memory_limit,
             ),
-            biz: Some(decision.biz.clone()),
+            tags: Some(decision.tags.clone()),
         }
     }
 }
@@ -608,7 +608,7 @@ mod tests {
             ("BOT_SPOT_AUDIT_PATH", audit.as_str()),
             ("BOT_SPOT_STATE_PATH", state.as_str()),
             ("BOT_SPOT_STOP_PATH", stop.as_str()),
-            ("BOT_SPOT_BIZ_FEED_PATH", feed.as_str()),
+            ("BOT_SPOT_TAGS_FEED_PATH", feed.as_str()),
             ("BOT_SPOT_ALGO_WEIGHTS", weights),
         ])
     }
@@ -620,7 +620,7 @@ mod tests {
             .to_rfc3339();
         std::fs::write(
             dir.join("feed.json"),
-            json!({"schema": "biz-feed-v1", "as_of": as_of, "coins": {"ETH": {"6h": {"mentions": 3}}}}).to_string(),
+            json!({"schema": "tags-feed-v1", "as_of": as_of, "tags": {"asset:ETH": {"kind": "asset", "name": "ETH", "windows": {"6h": {"mentions": 3}}}}}).to_string(),
         )
         .unwrap();
         let minute = now_ms - now_ms.rem_euclid(60_000);

@@ -52,9 +52,10 @@ Run `bb --help` or `bb <command> --help`.
 
 The trader is an algorithm (operator decision 2026-10-29, Phase 52): no LLM, no
 chat, no host tools. With `--nonstop` it ticks every 15 s: it polls every
-price with one request, reads the /biz/ feed, and runs the operator's rule
-(`crate::decider`, `BOT_SPOT_ALGO_WEIGHTS`, required) on the feed's coins with
-an eligible USDT market and the coins it holds. A decision row is written when
+price with one request, reads the tags feed (`tags-feed-v1` from biz-app,
+`BOT_SPOT_TAGS_FEED_PATH`), and runs the operator's rule (`crate::decider`,
+`BOT_SPOT_ALGO_WEIGHTS`, required) on the feed's asset tags with an eligible
+USDT market and the coins it holds. A decision row is written when
 the decided action changes and once an hour; an unchanged tick writes nothing:
 
 - **Score.** `w_talk·talk + w_stance·stance + w_momentum·momentum` per coin:
@@ -69,7 +70,7 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
 - **No added trading limits.** No stop-loss, take-profit, cooldown or caps
   beyond the rule the operator chose. Old guardrail env vars are ignored with
   one warning listing them.
-- **Backtest.** `bb algo-backtest --biz-feeds <history dir>` tunes the
+- **Backtest.** `bb algo-backtest --tags-history <history dir>` tunes the
   weights on the older half of the window and judges them on the newer
   (OPERATIONS.md, "Algorithm backtest"). The compose profile
   `paper` runs the nonstop trader plan-only.
@@ -128,9 +129,9 @@ A read-only web page for the trader, in five tabs that refresh every 30 s:
   every scored coin's /biz/ talk and stance, own 1h move, momentum and score,
   and the decision rows newest first (click one for its scores); rows from
   before Phase 52 show their decision only.
-- **/biz/:** the /biz/ feed the trader read at its newest decision (mentions,
-  posters and stance per coin, coins without a Binance market); the algorithm
-  scores its coins.
+- **Tags:** the tags feed summary the trader recorded at its newest decision
+  (as of, sources, live tags per kind, the asset tags it may buy and those
+  without a Binance market, which are scored only).
 
 Trade results come from the route quotes the trader logs: each submitted route
 opens a trade in the coin it bought, which closes when the bot later sells that

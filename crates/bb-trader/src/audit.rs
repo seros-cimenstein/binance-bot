@@ -157,9 +157,11 @@ pub struct AuditRow {
     /// ([`TraderConfig::run_config`]), so each cycle says what setup produced it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_config: Option<Value>,
-    /// Cycle summaries (Phase 51): the /biz/ feed the cycle read ([`crate::biz::BizNow`]).
+    /// Cycle summaries (Phase 53): the tags feed the cycle read, summarised
+    /// ([`crate::tags::TagsNow`]: `as_of`, age, digest, sources, tags per kind, tradable and
+    /// scored-only asset names).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub biz: Option<Value>,
+    pub tags: Option<Value>,
     /// Cycle summaries: the rule, the best candidate, the held coins' scores and the
     /// orders it asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -194,7 +196,7 @@ impl AuditRow {
             session_id: String::new(),
             operator_review: None,
             run_config: None,
-            biz: None,
+            tags: None,
             algo: None,
         }
     }

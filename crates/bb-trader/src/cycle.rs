@@ -151,18 +151,18 @@ impl Runtime {
         )
     }
 
-    /// The /biz/ feed now, keeping the coins with an eligible market in the view.
-    pub(crate) fn biz_feed(&self, view: &MarketView) -> crate::biz::BizNow {
+    /// The tags feed now, keeping the asset tags with an eligible market in the view.
+    pub(crate) fn tags_feed(&self, view: &MarketView) -> crate::tags::TagsNow {
         let listed: std::collections::BTreeSet<&str> = view
             .markets
             .values()
             .filter(|market| market.eligible)
             .map(|market| market.base.as_str())
             .collect();
-        crate::biz::read(
-            &self.config.biz_feed_path,
+        crate::tags::read(
+            &self.config.tags_feed_path,
             bb_core::time::now_ms(),
-            self.config.biz_max_age_minutes,
+            self.config.tags_max_age_minutes,
             |coin| listed.contains(coin),
         )
     }
@@ -354,8 +354,8 @@ impl Runtime {
         row.session_id = state.session_id.clone();
         row.error = report.error.clone().unwrap_or_default();
         row.run_config = self.run_config.get().cloned();
-        row.biz = match &state.context.biz {
-            Some(biz) => Some(serde_json::to_value(biz)?),
+        row.tags = match &state.context.tags {
+            Some(tags) => Some(serde_json::to_value(tags)?),
             None => None,
         };
         row.algo = state.algo.clone();
@@ -764,7 +764,7 @@ mod tests {
             execution_invariants: execution_invariants(&config),
             route_scope: route_scope(&config),
             trade_memory: runtime.trade_memory(&balances, &view, 8),
-            biz: None,
+            tags: None,
         };
         runtime
             .begin_cycle(

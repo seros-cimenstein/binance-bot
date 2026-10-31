@@ -3,7 +3,7 @@
 Current state only; rewrite it, do not append (`CODEX.md`, "Required
 Workflow"). History: git log, `docs/decisions.md`, `docs/archive/`.
 
-Updated 2026-10-30.
+Updated 2026-10-31.
 
 ## Direction
 
@@ -62,10 +62,15 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
 ## Next steps
 
 1. Phase 53, dynamic tags, scoreboard and two horizons
-   (`IMPLEMENTATION_PLAN.md`; operator decisions 2026-10-30): feed (seven
-   tag kinds), signals and scoreboard, trader (rule file, sleeves, risk-off),
-   backtest, dashboard, plan-only rollout. Then a tuning phase where the
-   operator picks weights, rule style and the sleeve split.
+   (`IMPLEMENTATION_PLAN.md`; operator decisions 2026-10-30; loop
+   `LOOP_TAGS.md`): feed (B1-B6) built on the laptop; the trader in this tree
+   now reads only `tags-feed-v1` (`BOT_SPOT_TAGS_FEED_PATH`, C1), so it must
+   not reach the Pi before F2 (the Pi still writes `biz-feed.json`). Next:
+   signals and scoreboard (C2-C6), trader (rule file, sleeves, risk-off),
+   backtest, dashboard, plan-only rollout. The pre-change binary for E1's
+   comparison is kept in `~/binance-bot-prechange/` (README there). Then a
+   tuning phase where the operator picks weights, rule style and the sleeve
+   split.
 2. Live only on the operator's go (`CODEX.md`, rollout rule): back up
    `.env.docker`, `docker compose up -d bot-spot`, watch the first decisions
    and orders; back: retag `binance-bot:pre-algo-20261030` and recreate.

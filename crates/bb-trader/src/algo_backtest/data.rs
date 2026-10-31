@@ -1,6 +1,6 @@
 //! Offline 1m candles for the algorithm backtest, read from the `bb entry-study` cache
 //! (`data/entry-study-cache/1m_<BASE>_USDT_<start>_<end>.json`, rows `{t,o,h,l,c,v}`), and
-//! the /biz/ feed history the `biz_algo` rule reads ([`BizHistory`]).
+//! the tags feed history the `biz_algo` rule reads ([`TagsHistory`]).
 //!
 //! Point-in-time access only: every reader takes a time `t` and sees just the bars that
 //! closed by `t` (and the feeds whose `as_of` is at or before `t`). A coin without a bar
@@ -14,8 +14,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::biz::CoinWindows;
 use crate::error::{Result, TraderError};
+use crate::tags::Windows;
 
 pub const MINUTE_MS: i64 = 60_000;
 /// The only quote the cache files are read for.
@@ -242,28 +242,30 @@ fn cache_file_asset(name: &str) -> Option<&str> {
         .then_some(base)
 }
 
-/// One /biz/ feed of the history.
+/// One tags feed of the history: its asset tags (what the rule reads).
 #[derive(Debug, Clone, PartialEq)]
-pub struct BizFeedAt {
+pub struct TagsAt {
     /// The newest moment whose posts the feed includes (biz-app's visibility rule).
     pub as_of_ms: i64,
-    pub coins: BTreeMap<String, CoinWindows>,
+    /// Asset tags by asset name.
+    pub assets: BTreeMap<String, Windows>,
 }
 
-/// `biz-feed-v1` files rebuilt for past times by biz-app (`biz-insights feed --history`),
-/// sorted by `as_of`. At time `t` the newest feed with `as_of <= t` is visible, unless it is
-/// older than the age limit (then none is, as the live trader treats a stale feed).
+/// `tags-feed-v1` files rebuilt for past times by biz-app (`biz-insights feed --history`,
+/// one per hour), sorted by `as_of`. At time `t` the newest feed with `as_of <= t` is
+/// visible, unless it is older than the age limit (then none is, as the live trader treats a
+/// stale feed).
 #[derive(Debug, Clone, PartialEq)]
-pub struct BizHistory {
-    feeds: Vec<BizFeedAt>,
+pub struct TagsHistory {
+    feeds: Vec<TagsAt>,
     /// Every `model@prompt_version` seen.
     readers: BTreeSet<String>,
     max_age_ms: i64,
 }
 
-impl BizHistory {
+impl TagsHistory {
     /// Feeds in any order; of two with the same `as_of` the first is kept.
-    pub fn new(mut feeds: Vec<BizFeedAt>, readers: BTreeSet<String>, max_age_minutes: i64) -> Self {
+    pub fn new(mut feeds: Vec<TagsAt>, readers: BTreeSet<String>, max_age_minutes: i64) -> Self {
         feeds.sort_by_key(|f| f.as_of_ms);
         feeds.dedup_by_key(|f| f.as_of_ms);
         Self {
@@ -274,13 +276,13 @@ impl BizHistory {
     }
 
     /// Every `*.json` in `dir` (by file name). Fails on a missing directory, an empty one,
-    /// or any file that is not a `biz-feed-v1` feed.
+    /// or any file that is not a `tags-feed-v1` feed.
     pub fn load_dir(dir: &Path, max_age_minutes: i64) -> Result<Self> {
         if max_age_minutes <= 0 {
-            return Err(TraderError::config("the /biz/ feed age limit must be positive"));
+            return Err(TraderError::config("the tags feed age limit must be positive"));
         }
         let entries = std::fs::read_dir(dir).map_err(|e| {
-            TraderError::config(format!("missing /biz/ feed directory {}: {e}", dir.display()))
+            TraderError::config(format!("missing tags history directory {}: {e}", dir.display()))
         })?;
         let mut paths = Vec::new();
         for entry in entries {
@@ -292,7 +294,7 @@ impl BizHistory {
         paths.sort();
         if paths.is_empty() {
             return Err(TraderError::config(format!(
-                "no /biz/ feeds (*.json) in {}",
+                "no tags feeds (*.json) in {}",
                 dir.display()
             )));
         }
@@ -300,20 +302,20 @@ impl BizHistory {
         let mut readers = BTreeSet::new();
         for path in &paths {
             let text = std::fs::read_to_string(path)?;
-            let raw = crate::biz::parse_raw(&text).map_err(|e| {
-                TraderError::config(format!("bad /biz/ feed {}: {e}", path.display()))
+            let feed = crate::tags::parse_raw(&text).map_err(|e| {
+                TraderError::config(format!("bad tags feed {}: {e}", path.display()))
             })?;
-            readers.insert(format!("{}@{}", raw.model, raw.prompt_version));
-            feeds.push(BizFeedAt {
-                as_of_ms: raw.as_of_ms,
-                coins: raw.coins,
+            readers.extend(feed.readers());
+            feeds.push(TagsAt {
+                as_of_ms: feed.as_of_ms,
+                assets: feed.assets().map(|(name, w)| (name.to_owned(), *w)).collect(),
             });
         }
         Ok(Self::new(feeds, readers, max_age_minutes))
     }
 
     /// The feed visible at `t`.
-    pub fn at(&self, t: i64) -> Option<&BizFeedAt> {
+    pub fn at(&self, t: i64) -> Option<&TagsAt> {
         let i = self.feeds.partition_point(|f| f.as_of_ms <= t);
         let feed = self.feeds.get(i.checked_sub(1)?)?;
         (t - feed.as_of_ms <= self.max_age_ms).then_some(feed)
@@ -494,12 +496,12 @@ mod tests {
 
     #[test]
     fn a_feed_is_visible_from_its_as_of_until_it_is_too_old() {
-        let feed = |minute: i64| BizFeedAt {
+        let feed = |minute: i64| TagsAt {
             as_of_ms: T0 + minute * MINUTE_MS,
-            coins: BTreeMap::new(),
+            assets: BTreeMap::new(),
         };
         // Hourly feeds at 0 and 60, then a gap until 300; 90 minutes of age allowed.
-        let history = BizHistory::new(vec![feed(60), feed(0), feed(300)], BTreeSet::new(), 90);
+        let history = TagsHistory::new(vec![feed(60), feed(0), feed(300)], BTreeSet::new(), 90);
         let at = |minute: i64| history.at(T0 + minute * MINUTE_MS).map(|f| (f.as_of_ms - T0) / MINUTE_MS);
         assert_eq!(at(-1), None);
         assert_eq!(at(0), Some(0));
@@ -510,8 +512,8 @@ mod tests {
         assert_eq!(at(300), Some(300));
 
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.json"), r#"{"schema":"biz-feed-v2","as_of":"2026-07-19T08:00:00Z"}"#).unwrap();
-        let err = BizHistory::load_dir(dir.path(), 90).unwrap_err().to_string();
-        assert!(err.contains("bad /biz/ feed") && err.contains("biz-feed-v1"), "{err}");
+        std::fs::write(dir.path().join("a.json"), r#"{"schema":"tags-feed-v2","as_of":"2026-07-19T08:00:00Z","tags":{}}"#).unwrap();
+        let err = TagsHistory::load_dir(dir.path(), 90).unwrap_err().to_string();
+        assert!(err.contains("bad tags feed") && err.contains("tags-feed-v1"), "{err}");
     }
 }

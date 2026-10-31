@@ -1,37 +1,37 @@
 //! `biz_algo`: the trader's algorithm ([`crate::decider`]) as a backtest rule.
 //!
-//! It reads only the step's [`Snapshot`], its own [`Book`] and the /biz/ feed visible at the
+//! It reads only the step's [`Snapshot`], its own [`Book`] and the tags feed visible at the
 //! step time.
 
 use std::sync::Arc;
 
-use super::data::BizHistory;
+use super::data::TagsHistory;
 use super::engine::{Intent, StepRule, Trace};
 use crate::book::{Book, Snapshot};
 
 /// Per-step trace header of `biz_algo`.
 pub const BIZ_TRACE_HEADER: &str = "time,feed_as_of,best_coin,best_score,held_coin,held_score,action";
 
-/// `biz_algo`: the trader's algorithm ([`crate::decider`]) on the /biz/ feed history and
+/// `biz_algo`: the trader's algorithm ([`crate::decider`]) on the tags feed history and
 /// the market snapshot.
 ///
-/// - Each step reads the feed visible at the step time ([`BizHistory::at`]); without
+/// - Each step reads the feed visible at the step time ([`TagsHistory::at`]); without
 ///   history, or with none visible, the /biz/ terms are 0.
 /// - The decider's sells and its one buy (all cash) become the intents; no exit plan,
 ///   only the score sells.
 pub struct BizAlgo {
     rule: crate::decider::Rule,
-    biz: Option<Arc<BizHistory>>,
+    tags: Option<Arc<TagsHistory>>,
     steps: usize,
     steps_with_feed: usize,
     trace: Vec<String>,
 }
 
 impl BizAlgo {
-    pub fn new(rule: crate::decider::Rule, biz: Option<Arc<BizHistory>>) -> Self {
+    pub fn new(rule: crate::decider::Rule, tags: Option<Arc<TagsHistory>>) -> Self {
         Self {
             rule,
-            biz,
+            tags,
             steps: 0,
             steps_with_feed: 0,
             trace: Vec::new(),
@@ -53,14 +53,14 @@ impl StepRule for BizAlgo {
 
     fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
         use crate::decider::{Action, Inputs, decide};
-        let feed = self.biz.as_ref().and_then(|h| h.at(snap.t));
+        let feed = self.tags.as_ref().and_then(|h| h.at(snap.t));
         self.steps += 1;
         self.steps_with_feed += usize::from(feed.is_some());
         let verdict = decide(
             &Inputs {
                 snap,
                 book,
-                biz: feed.map(|f| &f.coins),
+                tags: feed.map(|f| &f.assets),
             },
             &self.rule,
         );
@@ -99,9 +99,9 @@ impl StepRule for BizAlgo {
     }
 
     fn notes(&self) -> Vec<String> {
-        let feeds = self.biz.as_ref().map_or_else(
-            || "no /biz/ feed history: the talk and stance terms were 0".to_string(),
-            |_| format!("/biz/ feed visible at {} of {} steps", self.steps_with_feed, self.steps),
+        let feeds = self.tags.as_ref().map_or_else(
+            || "no tags feed history: the talk and stance terms were 0".to_string(),
+            |_| format!("tags feed visible at {} of {} steps", self.steps_with_feed, self.steps),
         );
         vec![format!(
             "rule: {}; stances need {} posters; {feeds}",

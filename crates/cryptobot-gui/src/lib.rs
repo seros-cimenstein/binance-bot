@@ -6,7 +6,7 @@
 //!
 //! - `GET /`: the dashboard page.
 //! - `GET /api/status`: Bot Spot stop file, failed-route halt, the newest decision rows (with
-//!   the rule's per-coin scores in `algo`) and the /biz/ feed the newest decision read.
+//!   the rule's per-coin scores in `algo`) and the tags feed summary the newest decision read.
 //! - `GET /api/history`: every Bot Spot trade with its P&L ([`history`]).
 //! - `GET /api/wallet`: balances, Binance wallet totals, account and API-key permissions
 //!   ([`wallet`]).
@@ -241,10 +241,10 @@ fn no_store(mut response: Response) -> Response {
 }
 
 /// Bot Spot state: stop file, the trader's own failed-route halt verdict, the newest cycle
-/// summaries (newest first; the page's liveness is the newest one), the /biz/ feed the newest cycle
-/// that read one recorded (`biz`: its cycle time and the audit `biz` field, `null` before
-/// Phase 51), and where the data came from (`source`: a missing audit file means this host
-/// has no Bot Spot data at all).
+/// summaries (newest first; the page's liveness is the newest one), the tags feed summary the
+/// newest cycle that read one recorded (`tags`: its cycle time and the audit `tags` field,
+/// `null` before Phase 53), and where the data came from (`source`: a missing audit file
+/// means this host has no Bot Spot data at all).
 pub fn status_view(files: &BotSpotFiles) -> Value {
     let audit = load_audit_rows(&files.audit_path);
     let halt = failed_route_halt(&audit);
@@ -269,13 +269,13 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
             })
         })
         .collect();
-    let biz = audit
+    let tags = audit
         .rows
         .iter()
         .rev()
         .filter(|row| row.get("row_type").and_then(Value::as_str) == Some("cycle_summary"))
         .find_map(|row| {
-            row.get("biz")
+            row.get("tags")
                 .map(|feed| json!({"cycle_at": row.get("timestamp"), "feed": feed}))
         });
     let audit_meta = std::fs::metadata(&files.audit_path).ok();
@@ -294,7 +294,7 @@ pub fn status_view(files: &BotSpotFiles) -> Value {
         "halt": halt,
         "audit_error": audit.error,
         "cycles": cycles,
-        "biz": biz,
+        "tags": tags,
     })
 }
 
@@ -411,23 +411,24 @@ mod tests {
     }
 
     #[test]
-    fn status_shows_the_biz_feed_of_the_newest_cycle_that_read_one() {
+    fn status_shows_the_tags_feed_of_the_newest_cycle_that_read_one() {
         let dir = tempfile::tempdir().unwrap();
         let files = files(dir.path());
-        assert_eq!(status_view(&files)["biz"], Value::Null);
+        assert_eq!(status_view(&files)["tags"], Value::Null);
         write_lines(
             &files.audit_path,
             &[
-                json!({"timestamp": "t1", "row_type": "cycle_summary", "biz": {"status": "unavailable", "reason": "old"}}),
-                json!({"timestamp": "t2", "row_type": "cycle_summary", "biz": {"status": "fresh", "coins": {}}}),
-                json!({"timestamp": "t3", "row_type": "route", "biz": {"status": "unavailable", "reason": "not a cycle"}}),
-                // A skipped cycle never read the feed.
+                json!({"timestamp": "t1", "row_type": "cycle_summary", "tags": {"status": "unavailable", "reason": "old"}}),
+                json!({"timestamp": "t2", "row_type": "cycle_summary", "tags": {"status": "fresh", "tradable": ["BTC"]}}),
+                json!({"timestamp": "t3", "row_type": "route", "tags": {"status": "unavailable", "reason": "not a cycle"}}),
+                // A skipped cycle never read the feed; a pre-Phase-53 row has the old field.
                 json!({"timestamp": "t4", "row_type": "cycle_summary"}),
+                json!({"timestamp": "t5", "row_type": "cycle_summary", "biz": {"status": "fresh"}}),
             ],
         );
-        let biz = &status_view(&files)["biz"];
-        assert_eq!(biz["cycle_at"], json!("t2"));
-        assert_eq!(biz["feed"]["status"], json!("fresh"));
+        let tags = &status_view(&files)["tags"];
+        assert_eq!(tags["cycle_at"], json!("t2"));
+        assert_eq!(tags["feed"]["tradable"], json!(["BTC"]));
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 
-use super::data::{BizHistory, MINUTE_MS, Market};
+use super::data::{MINUTE_MS, Market, TagsHistory};
 use super::engine::{Config, LIQUID, RunResult, run};
 use super::rule::BizAlgo;
 use crate::decider::{Rule, Weights};
@@ -54,13 +54,13 @@ pub struct AlgoBacktestArgs {
     /// Where the three report files go.
     #[arg(long, default_value = "reports")]
     pub output_dir: PathBuf,
-    /// `biz-feed-v1` history (`biz-insights feed --history`); without it the
+    /// Hourly `tags-feed-v1` history (`biz-insights feed --history`); without it the
     /// /biz/ terms are 0.
     #[arg(long)]
-    pub biz_feeds: Option<PathBuf>,
+    pub tags_history: Option<PathBuf>,
     /// A feed older than this at a step is not visible (hourly history needs more than 60).
     #[arg(long, default_value_t = 90)]
-    pub biz_max_age_minutes: i64,
+    pub tags_max_age_minutes: i64,
     /// Fixed weights `talk,stance,momentum,buy_above,sell_below` (e.g. read
     /// off the `bb biz-lead-study` report) instead of tuning them on the older half.
     #[arg(long)]
@@ -70,10 +70,10 @@ pub struct AlgoBacktestArgs {
     pub biz_min_posters: u64,
 }
 
-/// What the algorithm needs beyond the market: the /biz/ feed history.
+/// What the algorithm needs beyond the market: the tags feed history.
 #[derive(Debug, Clone, Default)]
 pub struct AlgoInputs {
-    pub biz: Option<Arc<BizHistory>>,
+    pub tags: Option<Arc<TagsHistory>>,
 }
 
 /// Fail unless the cache holds every liquid coin, reaches the window end, and has the warm-up
@@ -173,8 +173,8 @@ pub struct SplitReport {
     /// Every weight set tried on the older half, in grid order; `None` when the weights
     /// came from `--biz-weights`.
     pub grid: Option<Vec<GridRow>>,
-    /// One line describing the /biz/ feed history.
-    pub biz: String,
+    /// One line describing the tags feed history.
+    pub tags: String,
 }
 
 /// First step of the newer half: the window's middle, rounded down to the step grid.
@@ -224,13 +224,13 @@ pub fn tune(
     min_posters: u64,
 ) -> Result<(Weights, Vec<GridRow>)> {
     let mut rows = Vec::new();
-    for weights in weight_grid(inputs.biz.is_some()) {
+    for weights in weight_grid(inputs.tags.is_some()) {
         let rule = BizAlgo::new(
             Rule {
                 weights,
                 min_posters,
             },
-            inputs.biz.clone(),
+            inputs.tags.clone(),
         );
         let r = run(market, older, Box::new(rule))?;
         rows.push(GridRow {
@@ -282,7 +282,7 @@ fn run_split(
     };
     let mut results = Vec::new();
     for (label, half) in [("older", older), ("newer", newer)] {
-        let mut r = run(market, &half, Box::new(BizAlgo::new(rule, inputs.biz.clone())))?;
+        let mut r = run(market, &half, Box::new(BizAlgo::new(rule, inputs.tags.clone())))?;
         r.name = format!("{}@{label}", r.name);
         results.push(r);
     }
@@ -290,14 +290,14 @@ fn run_split(
         mid_ms,
         rule,
         grid,
-        biz: biz_summary(inputs.biz.as_deref(), args.biz_feeds.as_deref()),
+        tags: tags_summary(inputs.tags.as_deref(), args.tags_history.as_deref()),
     };
     Ok((results, split))
 }
 
-fn biz_summary(history: Option<&BizHistory>, dir: Option<&Path>) -> String {
+fn tags_summary(history: Option<&TagsHistory>, dir: Option<&Path>) -> String {
     let (Some(history), Some(dir)) = (history, dir) else {
-        return "not loaded (no `--biz-feeds`): the talk and stance terms are 0, so the rule trades on momentum alone".to_string();
+        return "not loaded (no `--tags-history`): the talk and stance terms are 0, so the rule trades on momentum alone".to_string();
     };
     let span = |ms: Option<i64>| ms.map_or_else(|| "none".to_string(), iso);
     let readers: Vec<&str> = history.readers().iter().map(String::as_str).collect();
@@ -416,7 +416,7 @@ pub fn markdown(results: &[RunResult], ctx: &ReportContext) -> String {
         iso(split.mid_ms),
         iso(cfg.end_ms)
     );
-    let _ = writeln!(out, "- /biz/ feeds: {}.", split.biz);
+    let _ = writeln!(out, "- Tags feeds: {}.", split.tags);
     let _ = writeln!(out);
     let _ = writeln!(out, "## Results\n");
     let _ = writeln!(
@@ -600,11 +600,11 @@ pub fn run_backtest(args: &AlgoBacktestArgs) -> Result<(Vec<RunResult>, Vec<Path
         min_notional: MIN_NOTIONAL_USDT,
     };
     cfg.validate()?;
-    let biz = match &args.biz_feeds {
-        Some(dir) => Some(Arc::new(BizHistory::load_dir(dir, args.biz_max_age_minutes)?)),
+    let tags = match &args.tags_history {
+        Some(dir) => Some(Arc::new(TagsHistory::load_dir(dir, args.tags_max_age_minutes)?)),
         None => None,
     };
-    let inputs = AlgoInputs { biz };
+    let inputs = AlgoInputs { tags };
     let market = Market::load_dir(&args.cache_dir)?;
     check_coverage(&market, start_ms, end_ms)?;
     let (results, split) = run_split(&market, &cfg, &inputs, args)?;
@@ -702,21 +702,21 @@ mod tests {
             slippage_bps: 5.0,
             step_minutes: 20,
             output_dir: out.to_path_buf(),
-            biz_feeds: None,
-            biz_max_age_minutes: 90,
+            tags_history: None,
+            tags_max_age_minutes: 90,
             biz_weights: None,
             biz_min_posters: 2,
         }
     }
 
-    /// Hourly /biz/ feeds over the window and the day before it, all about SOL.
-    fn biz_feeds() -> tempfile::TempDir {
+    /// Hourly tags feeds over the window and the day before it, all about SOL.
+    fn tags_history() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         for hour in 0..48_i64 {
             let as_of = T_END - 2 * DAY_MS + hour * 3_600_000;
             let m6 = 2 + hour % 7;
             let body = format!(
-                r#"{{"schema":"biz-feed-v1","as_of":"{}","model":"m","prompt_version":"p","coins":{{"SOL":{{"6h":{{"mentions":{m6},"posters":3,"bullish":2.0,"bearish":{}}},"24h":{{"mentions":12,"posters":5,"bullish":3.0,"bearish":1.0}}}}}}}}"#,
+                r#"{{"schema":"tags-feed-v1","as_of":"{}","sources":[{{"id":"biz","model":"m","prompt_version":"p"}}],"tags":{{"asset:SOL":{{"kind":"asset","name":"SOL","windows":{{"6h":{{"mentions":{m6},"posters":3,"up":2.0,"down":{}}},"24h":{{"mentions":12,"posters":5,"up":3.0,"down":1.0}}}}}}}}}}"#,
                 iso(as_of),
                 hour % 3
             );
@@ -728,10 +728,10 @@ mod tests {
     #[test]
     fn biz_algo_is_tuned_on_the_older_half_and_judged_on_the_newer() {
         let cache = cache_dir();
-        let feeds = biz_feeds();
+        let feeds = tags_history();
         let out = tempfile::tempdir().unwrap();
         let mut a = args(cache.path(), out.path());
-        a.biz_feeds = Some(feeds.path().to_path_buf());
+        a.tags_history = Some(feeds.path().to_path_buf());
         let (results, paths) = run_backtest(&a).unwrap();
         assert_eq!(
             results.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
@@ -778,7 +778,7 @@ mod tests {
                 .all(|r| r.split(',').count() == 8 && !r.contains(",,"))
         );
         let md = std::fs::read_to_string(&paths[0]).unwrap();
-        for needle in ["Survivorship", "25 bps per round trip", "Out of sample", "not loaded (no `--biz-feeds`)"] {
+        for needle in ["Survivorship", "25 bps per round trip", "Out of sample", "not loaded (no `--tags-history`)"] {
             assert!(md.contains(needle), "missing {needle:?}");
         }
         let trades = std::fs::read_to_string(&paths[2]).unwrap();

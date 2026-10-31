@@ -107,7 +107,7 @@ Dashboard: the read-only `cryptobot-gui` (compose service `cryptobot-gui`,
 profiles `gui`/`live`/`all`) serves the Bot Spot trades, the Algorithm tab
 (each decision row with every scored coin's /biz/ talk and stance, own 1h move
 and score; "Running" while a row is at most an hour old, the heartbeat), the
-/biz/ feed the trader read (/biz/ tab), stop-file and
+tags feed summary the trader recorded (Tags tab), stop-file and
 failed-route-halt state at `http://localhost:8787` on the Docker host. It is
 published on `127.0.0.1` only and mounts the data dir read-only. From another
 machine: `ssh -L 8787:localhost:8787 <host>`. On a systemd host,
@@ -233,19 +233,22 @@ live arming variables in `.env` and the stop file.
 ### /biz/ feed
 
 biz-app (`~/projects/automation/imageboards/biz-app` on the laptop, a copy in
-`~/biz-app` on the Pi) writes the /biz/ feed `biz-feed-v1` with `uv run
---directory biz-app/biz_insights biz-insights feed` (`--at <UTC>` for a past moment): per
-Binance spot coin and per window (1h, 6h, 24h) the posts naming it (no AI),
-the distinct posters among them (a lower bound: /biz/ shows poster IDs only on
-some posts), and its AI's bullish and bearish tags on every post, weighted by
-the post's 1-3 score. `as_of` is the scraper's last fetch, so a stopped
-scraper makes the feed go stale. The real output of 2026-10-25T13:00Z is the
-test fixture `crates/bb-trader/tests/fixtures/biz-feed-v1.json`.
+`~/biz-app` on the Pi) writes the tags feed `tags-feed-v1` (`tags-feed.json`)
+with `uv run --directory biz-app/biz_insights biz-insights feed` (`--at <UTC>`
+for a past moment): the tags live at `as_of` (5 or more distinct posters in
+7 days) of seven kinds (asset, narrative, macro, event, entity, claim, mood),
+each with per-window (1h, 6h, 24h, 7d, 30d) mentions, distinct posters and
+threads, the AI's up/down weighted by the post's 1-3 score and the horizon
+mix; plus narrative baskets (`members`) and tag-to-asset `links` (contract:
+`IMPLEMENTATION_PLAN.md` Phase 53). Asset tags of Binance spot coins count
+the posts naming the coin without AI. Distinct posters are a lower bound:
+/biz/ shows poster IDs only on some posts. The real output of
+2026-10-31T00:00Z is the test fixture
+`crates/bb-trader/tests/fixtures/tags-feed-v1.json`.
 `biz-insights feed --history --step 60` writes one point-in-time feed per
-hour into `biz_insights/out/biz-feed-history/<as_of>.json` (from 2026-10-01;
-590 files to 2026-10-25T13:00Z), the input of `bb biz-lead-study --feeds`
-and `bb algo-backtest --biz-feeds`. Every post is tagged once (cache
-`out/feed.sqlite3`), so a rerun makes no model call.
+hour into `--history-dir` (default `<out>/tags-history/<as_of>.json`), the
+input of `bb algo-backtest --tags-history`. Every post is tagged once (cache
+`feed.sqlite3`), so a rerun makes no model call.
 
 Live, two systemd user units on the Pi keep the feed fresh (operator,
 2026-10-30, `docs/decisions.md`; unit files in `deploy/seref/`, installed in
@@ -272,21 +275,27 @@ ssh pi-wired 'systemctl --user stop biz-feed biz-watch'   # the feed then ages; 
 ```
 
 `as_of` is the start of the scraper's newest sync pass, so it advances only
-while `biz-watch` runs. The trader reads `BOT_SPOT_BIZ_FEED_PATH` (default
-`data/biz-feed.json`) every tick and records it on each decision row as
-`biz`: `status` `fresh` with `as_of`, `age_minutes`, `model`,
-`prompt_version`, the coins with an eligible Binance market and the `dropped`
-names, or `unavailable` with the reason (missing or unreadable file, another
-schema, `as_of` older than `BOT_SPOT_BIZ_MAX_AGE_MINUTES` (45) or more than 5
-minutes ahead of the Pi's clock). The algorithm (below) scores its coins on
-it. The dashboard's /biz/ tab shows the newest recorded feed.
+while `biz-watch` runs. The trader reads `BOT_SPOT_TAGS_FEED_PATH` (default
+`data/tags-feed.json`) every tick and records a summary on each decision row
+as `tags`: `status` `fresh` with `as_of`, `age_minutes`, the file's sha256
+`digest`, `sources` (model, prompt and registry version, posts, untagged),
+live tags per kind (`kinds`), the asset tags with an eligible Binance market
+(`tradable`) and those without one (`scored_only`, never bought), or
+`unavailable` with the reason (missing or unreadable file, another schema, a
+tag id that is not `<kind>:<name>`, `as_of` older than
+`BOT_SPOT_TAGS_MAX_AGE_MINUTES` (45) or more than 5 minutes ahead of the
+Pi's clock). `context_hash` covers the feed by its `as_of` and digest. The
+algorithm (below) scores the asset tags. The dashboard's Tags tab shows the
+newest recorded summary. Until the Phase 53 rollout the Pi's `biz-feed` unit
+still writes the old `biz-feed.json`, so this trader would record the feed as
+unavailable there.
 
 ### The algorithm
 
 `crate::decider` decides on every tick with the operator's rule
 (`BOT_SPOT_ALGO_WEIGHTS`, required; the trader refuses to start without it).
-It reads the wallet and the /biz/ feed, and the prices of
-the coins it may buy (the feed's coins with an eligible USDT market,
+It reads the wallet and the tags feed, and the prices of
+the coins it may buy (the feed's asset tags with an eligible USDT market,
 stablecoins left out) and for the coins it holds (operator decision
 2026-10-29: no market breadth read). It scores those coins with
 `talk,stance,momentum,buy_above,sell_below` (momentum is the coin's own
@@ -303,8 +312,8 @@ The rule in force (operator, 2026-10-29, `docs/decisions.md`):
 `BOT_SPOT_ALGO_WEIGHTS=0,1,1,0.5,-0.5`, `BOT_SPOT_ALGO_MIN_POSTERS=2`,
 `BOT_SPOT_RULES_VERSION=algo-2026-10-29`: score = /biz/ 6h stance + 1h
 momentum (talk weight 0); buy at +0.5, sell below -0.5. Its backtest:
-`reports/algo_backtest_2026-10-25.md` (`bb algo-backtest --biz-feeds
-<biz-feed-history> --end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
+`reports/algo_backtest_2026-10-25.md` (`bb algo-backtest` on the old /biz/
+coin feed history, `--end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
 tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
 
 - **Records.** Decision rows carry `algo` (rule, best candidate and score,
@@ -375,14 +384,14 @@ bb entry-study --audit docker-data/bot-spot-decisions.jsonl \
 
 `bb algo-backtest` backtests the trader's algorithm (`crate::decider`, as
 `biz_algo`) on the same 1m cache. It is offline and research only: it reads
-only `--cache-dir` (and `--biz-feeds`), never fetches or calls Binance, has
+only `--cache-dir` (and `--tags-history`), never fetches or calls Binance, has
 no order path, and leaves the live `bot-spot` untouched. If the cache is
 missing a liquid coin, ends before `--end`, or lacks 48h of history before
 the window start, it exits 1 with `missing cache`.
 
 ```bash
 cargo run --release -p bb-cli --bin bb -- algo-backtest \
-  --cache-dir data/entry-study-cache --biz-feeds <history dir> \
+  --cache-dir data/entry-study-cache --tags-history <history dir> \
   --end 2026-10-18T10:43:00Z --days 60
 ```
 
@@ -392,12 +401,13 @@ The other flags are `--starting-balance` (1000), `--fee-bps` (7.5),
 The rule: each liquid-top coin scores
 `w_talk·talk + w_stance·stance + w_momentum·momentum`
 (talk: /biz/ 6h mention rate over its 24h rate − 1, from 4 mentions in 24h,
-capped −1..3; stance: (bullish − bearish) / tagged of the 6h AI tags with
-`--biz-min-posters` (2) posters; momentum: 1h return / 5%, capped). A held
+capped −1..3; stance: (up − down) / tagged of the 6h AI tags with
+`--biz-min-posters` (2) posters; momentum: 1h return / 5%, capped), read from
+the coin's asset tag. A held
 coin scoring below the sell level is sold; with nothing held the best coin at
-or above the buy level is bought with all cash. `--biz-feeds <dir>` is the
-hourly `biz-feed-v1` history from biz-app (a feed counts at a step from its
-`as_of` on, for `--biz-max-age-minutes`, 90); without it the /biz/ terms are
+or above the buy level is bought with all cash. `--tags-history <dir>` is the
+hourly `tags-feed-v1` history from biz-app (a feed counts at a step from its
+`as_of` on, for `--tags-max-age-minutes`, 90); without it the /biz/ terms are
 0. The window is split: the weights are picked on the older half from a grid
 (talk and stance −1/0/+1, momentum 0/1, buy at 0.5/1, sell below −0.5/0; 72
 sets with feeds) by net %, or given with
@@ -406,8 +416,7 @@ sets with feeds) by net %, or given with
 and `biz_algo@newer`; the `@newer` row is the out-of-sample result. The
 report has a `biz_algo` rule section with the best grid rows, and
 `_biz_algo@<half>_trace.csv` (time, feed `as_of`, best coin and score, held
-coin and score, action). Not run on real feeds yet: biz-app does not write
-the history.
+coin and score, action).
 
 Cost model: fills happen at the next 1m open, with the fee plus slippage
 charged on each side (25 bps per round trip by default, against the measured

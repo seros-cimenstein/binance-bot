@@ -232,7 +232,7 @@
       <a href="#history" data-tab="history">History</a>
       <a href="#wallet" data-tab="wallet">Wallet</a>
       <a href="#algorithm" data-tab="algorithm">Algorithm</a>
-      <a href="#biz" data-tab="biz">/biz/</a>
+      <a href="#tags" data-tab="tags">Tags</a>
     </nav>
     <div class="top-right">
       <span class="status" id="status-pill" title=""><span class="dot"></span><span>…</span></span>
@@ -251,7 +251,7 @@
 // textContent / createTextNode; nothing is parsed as HTML.
 const REFRESH_MS = 30000;
 const DUST_USDT = 1;
-const TABS = ["overview", "history", "wallet", "algorithm", "biz"];
+const TABS = ["overview", "history", "wallet", "algorithm", "tags"];
 const ENDPOINTS = { status: "/api/status", history: "/api/history", wallet: "/api/wallet" };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PALETTE = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
@@ -698,7 +698,7 @@ function renderHeader() {
 function render() {
   renderHeader();
   const view = document.getElementById("view");
-  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, algorithm: algorithmPage, biz: bizPage };
+  const pages = { overview: overviewPage, history: historyPage, wallet: walletPage, algorithm: algorithmPage, tags: tagsPage };
   ui.pendingRender = false;
   view.replaceChildren(alerts() || "", pages[ui.tab]());
   hideTip();
@@ -1033,13 +1033,13 @@ function cycleDetail(c) {
 }
 function algorithmPage() {
   const st = ui.data.status;
-  const head = pageHead("Algorithm", "The operator's rule: every coin's /biz/ talk and stance and its own 1h move, scored. A row is written when the decision changes, and at least once an hour.", null);
+  const head = pageHead("Algorithm", "The operator's rule: every coin's /biz/ talk and stance (its asset tag in the tags feed) and its own 1h move, scored. A row is written when the decision changes, and at least once an hour.", null);
   if (!st) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
   if (noBotData()) return el("div", { class: "grid" }, head, card(null, empty(...NO_DATA)));
   const state = botState();
   const latest = st.cycles[0];
   const algo = latest && latest.algo;
-  const feed = st.biz && st.biz.feed;
+  const feed = st.tags && st.tags.feed;
   const traded = latest && cycleAction(latest) === "traded";
   const kpis = el("div", { class: "grid kpis" },
     kpi("Status", state.label, state.detail, state.tone || null),
@@ -1047,7 +1047,7 @@ function algorithmPage() {
       latest ? el("span", null, ago(latest.timestamp), latest.error ? el("b", { class: "neg" }, " · " + latest.error) : "") : "none yet",
       traded ? "accent" : null),
     kpi("Rule", (latest && latest.rules_version) || "—", algo ? algo.rule : ""),
-    kpi("/biz/ feed", !feed ? "—" : feed.status === "fresh" ? "Fresh" : "Unavailable",
+    kpi("Tags feed", !feed ? "—" : feed.status === "fresh" ? "Fresh" : "Unavailable",
       !feed ? "no feed recorded" : feed.status === "fresh" ? "as of " + stamp(feed.as_of) : feed.reason || "",
       !feed ? null : feed.status === "fresh" ? "pos" : "neg"));
   const now = card("Coins at the newest decision", latest && algo ? el("div", { class: "grid", style: "gap:8px" },
@@ -1070,46 +1070,46 @@ function algorithmPage() {
   return el("div", { class: "grid" }, head, kpis, now, decisions);
 }
 
-// ---------- /biz/ ----------
-function stanceCell(w) {
-  const bull = num(w.bullish) || 0, bear = num(w.bearish) || 0;
-  if (!bull && !bear) return el("span", { class: "muted" }, "—");
-  return el("span", { class: tone(bull - bear) + " num" }, "▲ " + nf(0, 1).format(bull) + " / ▼ " + nf(0, 1).format(bear));
+// ---------- Tags ----------
+function namesBox(names, none) {
+  return names.length ? el("div", { class: "small" }, names.join(", ")) : el("div", { class: "small muted" }, none);
 }
-function bizPage() {
+function tagsPage() {
   const status = ui.data.status;
-  const head = pageHead("/biz/ feed", "What the trader read from /biz/ (biz-app) at its newest decision. The algorithm scores coins on it.", null);
+  const head = pageHead("Tags feed", "What the trader read from the tags feed (biz-app) at its newest decision. The algorithm scores the asset tags of coins it can buy.", null);
   if (!status) return el("div", { class: "grid" }, head, ui.errors.status ? card(null, errorBox(ui.errors.status)) : loadingView());
-  const b = status.biz;
-  if (!b) return el("div", { class: "grid" }, head, card(null, empty("No /biz/ reading yet", "No decision row has a biz field yet; the trader records the feed with every decision.")));
-  const f = b.feed || {};
+  const t = status.tags;
+  if (!t) return el("div", { class: "grid" }, head, card(null, empty("No tags reading yet", "No decision row has a tags field yet; the trader records the feed with every decision.")));
+  const f = t.feed || {};
   if (f.status !== "fresh") {
     return el("div", { class: "grid" }, head,
-      el("div", { class: "grid kpis" }, kpi("Feed", "Unavailable", "decision " + ago(b.cycle_at), "neg")),
+      el("div", { class: "grid kpis" }, kpi("Feed", "Unavailable", "decision " + ago(t.cycle_at), "neg")),
       card("Why", el("div", { class: "small" }, f.reason || "unknown")));
   }
-  const win = (w, k) => (w && w[k]) || {};
-  const coins = Object.entries(f.coins || {}).map(([name, w]) => ({ name, w }))
-    .sort((a, z) => (num(win(z.w, "24h").mentions) || 0) - (num(win(a.w, "24h").mentions) || 0) || a.name.localeCompare(z.name));
-  const dropped = f.dropped || [];
+  const kinds = Object.entries(f.kinds || {}).sort((a, z) => z[1] - a[1] || a[0].localeCompare(z[0]));
+  const total = kinds.reduce((s, [, n]) => s + n, 0);
+  const tradable = f.tradable || [], scored = f.scored_only || [], sources = f.sources || [];
+  const readers = sources.map((s) => s.model + (s.prompt_version ? " · " + s.prompt_version : "")).join(", ");
   const kpis = el("div", { class: "grid kpis" },
     kpi("Feed", "Fresh", "as of " + stamp(f.as_of) + " · " + f.age_minutes + " min old at the decision", "pos"),
-    kpi("Coins", String(coins.length), dropped.length + " named without a Binance market"),
-    kpi("Reader", f.model || "—", f.prompt_version ? "instructions " + f.prompt_version : ""),
-    kpi("Decision", ago(b.cycle_at), stamp(b.cycle_at)));
-  const rows = coins.map((c) => el("tr", null,
-    el("td", null, assetLabel(c.name)),
-    ["1h", "6h", "24h"].map((k) => el("td", { class: "r num" }, String(win(c.w, k).mentions || 0))),
-    el("td", { class: "r num" }, String(win(c.w, "6h").posters || 0)),
-    el("td", { class: "r" }, stanceCell(win(c.w, "6h"))),
-    el("td", { class: "r" }, stanceCell(win(c.w, "24h")))));
-  const coinsCard = card("Coins", coins.length
-    ? table([["Coin"], ["Mentions 1h", "r"], ["6h", "r"], ["24h", "r"], ["Posters 6h", "r"], ["Stance 6h", "r"], ["Stance 24h", "r"]], rows)
-    : empty("No tradable coin", "The feed named no coin with an eligible Binance market."), { flush: coins.length > 0, hint: "most mentioned in 24h first" });
-  return el("div", { class: "grid" }, head, kpis, coinsCard,
-    dropped.length ? card("Named without a Binance market", el("div", { class: "small muted" }, dropped.join(", "))) : null,
+    kpi("Live tags", String(total), kinds.length + " kinds"),
+    kpi("Tradable assets", String(tradable.length), scored.length + " scored only (no Binance market)"),
+    kpi("Reader", readers || "—", "decision " + ago(t.cycle_at)));
+  const kindsCard = card("Live tags by kind", kinds.length
+    ? table([["Kind"], ["Tags", "r"]], kinds.map(([k, n]) => el("tr", null, el("td", null, k), el("td", { class: "r num" }, String(n)))))
+    : empty("No live tags", "The feed lists no tag with 5 or more posters in 7 days."), { flush: kinds.length > 0 });
+  const sourcesCard = card("Sources", sources.length
+    ? table([["Source"], ["As of"], ["Posts", "r"], ["Untagged", "r"], ["Registry"]], sources.map((s) => el("tr", null,
+        el("td", null, s.id || "—"), el("td", null, s.as_of ? stamp(s.as_of) : "—"),
+        el("td", { class: "r num" }, String(s.items || 0)), el("td", { class: "r num" }, String(s.untagged || 0)),
+        el("td", null, s.registry_version || "—"))))
+    : empty("No source listed", ""), { flush: sources.length > 0 });
+  return el("div", { class: "grid" }, head, kpis, kindsCard,
+    card("Tradable assets", namesBox(tradable, "No asset tag with an eligible Binance market."), { hint: "the rule may buy these" }),
+    card("Scored only", namesBox(scored, "None."), { hint: "no eligible Binance market: never bought" }),
+    sourcesCard,
     el("details", { class: "footnote" }, el("summary", null, "What this shows"),
-      el("p", null, "biz-app counts every /biz/ post that names a coin (mentions, distinct posters), and its AI tags every post's stance (bullish or bearish) on the coins it names, weighted by post quality (1-3). On the Pi it rewrites the feed every 15 minutes, and the trader records it on each decision row (audit field biz). A missing, foreign or stale feed is recorded as unavailable with the reason; then the algorithm buys nothing. The algorithm scores the feed's coins on their talk and stance.")));
+      el("p", null, "biz-app's AI tags every /biz/ post (assets, narratives, macro, events, entities, claims, mood) and lists the tags live at the feed's time (5 or more distinct posters in 7 days), rewriting the feed every 15 minutes. Asset tags of Binance coins count their mentions over every post without AI. The trader records a summary on each decision row (audit field tags): the feed's time and digest, the sources, the live tags per kind and which asset tags have an eligible Binance market. A missing, foreign or stale feed is recorded as unavailable with the reason; then the algorithm buys nothing.")));
 }
 
 // ---------- data loading ----------
