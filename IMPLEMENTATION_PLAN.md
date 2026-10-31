@@ -132,20 +132,23 @@ Feed contract `tags-feed-v1` (one JSON file, replaces `biz-feed-v1`; the
 trader, the backtest, the scoreboard and the dashboard read it):
 
 - `schema`, `as_of`, `windows` (`1h`, `6h`, `24h`, `7d`, `30d`),
-  `sources` (per source: `id`, `as_of`, `model`, `prompt_version`, `items`,
-  `untagged`).
-- `tags.<id>`: `kind`, `name`, `first_seen`, `live_since`; `event_at` for
-  events; `target` and `deadline` for claims; per window `mentions`,
-  `posters`, `threads`, `up`, `down` (score-weighted: bullish/bearish for
-  assets and baskets, rising/easing for macro, events, entities and mood),
-  `horizon` (score-weighted `short`, `swing`, `long`, `unstated`) and
-  `posts` (24h and shorter only).
+  `sources` (per source: `id`, `as_of`, `model`, `prompt_version`,
+  `registry_version`, `items`, `untagged`).
+- `tags.<id>` (`<kind>:<name>`, the registry id): `kind`, `name`,
+  `first_seen`, `live_since`; `event_at` for events; `target` and
+  `deadline` for claims; `windows.<window>`: `mentions`, `posters`,
+  `threads`, `up`, `down` (score-weighted: bullish/bearish for assets and
+  baskets, rising/easing for macro, events, entities and mood), `horizon`
+  (score-weighted `short`, `swing`, `long`, `unstated`) and `posts` (24h and
+  shorter only). Binance spot coins count AI-free mentions (as
+  `biz-feed-v1`) and stay listed while named in the last 24 hours.
 - `members.<narrative>`: its assets with weights (from the AI's tags and
   co-mentions).
 - `links.<tag>.<asset>.<window>`: `posters`, `up`, `down`: posts that tie a
   tag to an asset.
-- Only live tags appear. The registry `tags-registry.json` lists every
-  tag: `id`, `kind`, `aliases`, `merged_from`, `first_seen`, `live_since`.
+- Only live tags appear (plus the named coins above). The registry
+  `tags-registry.json` lists every tag: `id`, `kind`, `aliases`,
+  `merged_from`, `first_seen`, `live_since`.
 
 Not in this phase: tuning (next phase, the operator picks weights, rule
 style and sleeve split); other sources (news, Polymarket, Binance futures
