@@ -266,7 +266,7 @@ for a past moment): the tags live at `as_of` (5 or more distinct posters in
 each with per-window (1h, 6h, 24h, 7d, 30d) mentions, distinct posters and
 threads, the AI's up/down weighted by the post's 1-3 score and the horizon
 mix; plus narrative baskets (`members`) and tag-to-asset `links` (contract:
-`IMPLEMENTATION_PLAN.md` Phase 53). Asset tags of Binance spot coins count
+`docs/archive/implementation-plan-phase-53.md`). Asset tags of Binance spot coins count
 the posts naming the coin without AI. Distinct posters are a lower bound:
 /biz/ shows poster IDs only on some posts. The real output of
 2026-10-31T00:00Z is the test fixture

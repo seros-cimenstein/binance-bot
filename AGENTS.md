@@ -20,6 +20,7 @@ Read only when the task needs it:
 | What does the binary do, which commands exist? | `README.md` |
 | Why is a rule the way it is; exact operator wording? | `docs/decisions.md` |
 | History of a finished phase (1-50)? | `docs/archive/implementation-plan-phases-1-50.md` |
+| Phase 53 (tags feed contract, scoreboard, rule file, sleeves)? | `docs/archive/implementation-plan-phase-53.md` |
 | The old LLM trader's rules, decisions, Phase 51? | `docs/archive/llm-trader-era-to-2026-10-29.md` |
 | What happened on a past date? | git log, then `docs/archive/progress-2026-05-25_to_2026-10-29.md` |
 | A finished loop ledger? | `docs/archive/loops/` |

@@ -1,6 +1,6 @@
 # Loop ledger: Phase 53, dynamic tags, scoreboard and two horizons (2026-10-30)
 
-STATUS: OPEN
+STATUS: DONE
 
 Source: `IMPLEMENTATION_PLAN.md` Phase 53 and `docs/decisions.md` "2026-10-30 dynamic tags and two horizons (Phase 53)" (operator decisions 2026-10-30, two ask rounds), checked against the code by three read-only scouts (`agent://TraderScout`, `agent://ResearchUiScout`, `agent://BizAppScout` in the setup session) and by the setup agent on the laptop and the Pi (`ssh pi-wired`) on 2026-10-30 20:45-21:00 UTC. This file is the loop's memory and its stop switch: the gate `~/projects/seref_omp_tools/seref_loop/bin/seref-loop-gate LOOP_TAGS.md`
 (run by `/seref_manager run LOOP_TAGS.md` or `/loop --until`) stops the loop only when the line
@@ -101,4 +101,23 @@ Rules:
 
 ## G. Close
 
-- [ ] G1 Close Phase 53: tick its remaining boxes in `IMPLEMENTATION_PLAN.md` (move the section to `docs/archive/` only if every box is ticked), rewrite `PROGRESS.md` (image tags, units, feed, rule file, sleeves, scoreboard schedule, next step: the tuning phase), confirm `AGENTS.md`/`CODEX.md` still describe the repo, run Protocol step 8. Do F3 first. Acceptance: Protocol step 8 passes and `PROGRESS.md` matches `ssh pi-wired 'docker ps -a; systemctl --user is-active biz-watch biz-feed'`.
+- [x] G1 Close Phase 53: tick its remaining boxes in `IMPLEMENTATION_PLAN.md` (move the section to `docs/archive/` only if every box is ticked), rewrite `PROGRESS.md` (image tags, units, feed, rule file, sleeves, scoreboard schedule, next step: the tuning phase), confirm `AGENTS.md`/`CODEX.md` still describe the repo, run Protocol step 8. Do F3 first. Acceptance: Protocol step 8 passes and `PROGRESS.md` matches `ssh pi-wired 'docker ps -a; systemctl --user is-active biz-watch biz-feed'`. — DONE: 2026-10-31 17:12-17:20 UTC. Phase 53 had no open box left (F3 ticked the last two), so its whole section (old `IMPLEMENTATION_PLAN.md:108-242`, 135 lines) moved verbatim to `docs/archive/implementation-plan-phase-53.md` under an archive note; `IMPLEMENTATION_PLAN.md` keeps Phase 52 (107 lines; its "Live" box stays open for the operator's go). The one live reference to the moved contract (`OPERATIONS.md:269`) now points at the archive file; no code or biz-app file referenced it (grep). `AGENTS.md` gains the Phase 53 archive row; `CODEX.md` "rules in force" already describes the rule file, sleeves, proxies, tags feed and the `sleeve_mismatch` halt (E4) and needs no change. `PROGRESS.md` rewritten (79 lines): image 1ce66703a04b and the rollback tags, the three services and their schedules, units and feed files, rule file and sleeves, Phase 53 backups, evidence, next step the tuning phase. **Protocol step 8:** `cargo test --workspace` exit 0, 232 tests in 16 result lines, all ok; `cargo clippy --workspace --all-targets -- -D warnings` exit 0; `scripts/smoke.sh` "Shell smoke checks passed."; `git diff --check` clean; the final-check grep returns only `crates/bb-trader/src/config.rs:90,94,95` (`BOT_SPOT_BIZ_FEED_PATH`, `BOT_SPOT_ALGO_WEIGHTS`, `BOT_SPOT_ALGO_MIN_POSTERS`), all inside `REMOVED_VARS` (`config.rs:27`). Pi at 17:14:26 UTC: `docker ps -a` `cryptobot-gui`, `scheduler`, `bot-spot-paper` up 2 hours on `binance-bot:latest` (= 1ce66703a04b; `pre-tags-20261031` = e9efbd3c98dc, `pre-algo-20261030` = 428220df4d0f), `bot-spot` Exited (0) 9 days ago on 428220df4d0f, `silly_swirles` exited; `biz-watch` active, `biz-feed` active; no stop file; `docker-data/scoreboard/latest.json` present: matches `PROGRESS.md`.
+
+## Summary (2026-10-31)
+
+- Done: 28 of 28 items (A1-A2, B1-B6, C1-C6, D1-D6, E1-E4, F1-F3, G1). Invalid: none. Blocked: none.
+- Built: biz-app tags pipeline (`tags-1` re-tag of October, 632 calls; tag registry with point-in-time merges and live
+  tags at 5 posters in 7 days; `tags-feed-v1` with five windows, baskets and links; incremental hourly history kept
+  by the live unit); in `binance-bot` the trader reads only `tags-feed-v1`, 24h and 7d price moves, reach and the
+  operator's proxy file (gold through PAXG and XAUT), the signal catalog, `bb tag-scoreboard`, the rule file
+  `BOT_SPOT_ALGO_RULE` with fixed and edge styles, two sleeves with holdings in the state file and the
+  `sleeve_mismatch` halt, per-sleeve sizing and decisions, bounded decision rows, the rule-file backtest, the Tags,
+  Algorithm and Scoreboard tabs, and docs.
+- Deployed 2026-10-31 15:05 UTC on the Pi: image 1ce66703a04b (rollback `binance-bot:pre-tags-20261031`),
+  `bot-spot-paper` plan-only on `algo-2026-10-29` unchanged, nightly scoreboard; `bot-spot` stayed stopped the whole
+  loop. Two hours checked (feed fresh, no error, halt or submission, scores and actions recomputed from the rule
+  file); operator review via the loop manager: keep practising plan-only.
+- Operator decisions taken in the loop are in `docs/decisions.md` (2026-10-30 and 2026-10-31 entries). Phase 53 is
+  archived in `docs/archive/implementation-plan-phase-53.md`; next is the tuning phase. This ledger and
+  `LOOP_TAGS.manager.md` move to `docs/archive/loops/` once the manager has closed the loop (the gate reads this file
+  at the root).
