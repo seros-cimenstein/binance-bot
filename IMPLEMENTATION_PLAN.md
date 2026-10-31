@@ -192,11 +192,12 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
   and proxies; market-wide signals from macro and mood; momentum per price
   horizon. Unknown names in the rule refuse to start (LOOP_TAGS C5, D1;
   the legacy `talk.6h` stays −1..3 so `algo-2026-10-29` reproduces).
-- [ ] Scoreboard `bb tag-scoreboard` (replaces the /biz/ lead study): every
+- [x] Scoreboard `bb tag-scoreboard` (replaces the /biz/ lead study): every
   tag kind and signal against its assets' (market-wide: BTC and the liquid
   basket's) moves at +1h/+24h/+7d versus random hours, after fees, older
-  and newer half, decay flagged; nightly on the Pi (`docker/crontab`),
-  written to `data/`.
+  and newer half, decay flagged; nightly on the Pi (`docker/crontab`, 00:30
+  UTC), written to `data/` (LOOP_TAGS C6, F2, F3: first Pi run 2026-10-31,
+  736 hourly feeds, 1,093 rows).
 
 ### Trader
 
@@ -233,6 +234,9 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
 
 ### Roll out
 
-- [ ] Deploy feed, scoreboard and trader together; `bot-spot-paper`
+- [x] Deploy feed, scoreboard and trader together; `bot-spot-paper`
   plan-only on the `algo-2026-10-29` rule file; its decisions match the
-  old rule; the operator reviews.
+  old rule; the operator reviews (LOOP_TAGS F2, F3: deployed 2026-10-31
+  15:05 UTC; 2 h: 220/220 scores and 11/11 actions recomputed from the rule
+  file, no error, halt or submission; operator via the loop manager: "(a)
+  Keep practising plan-only").

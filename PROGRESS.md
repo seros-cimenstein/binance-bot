@@ -11,9 +11,9 @@ The trader is a nonstop algorithm: Binance prices plus /biz/ tags from
 biz-app, no LLM, no chat, no timer, no Telegram (`docs/decisions.md`,
 "2026-10-29 algorithm trader"). Phase 53 (dynamic tags, scoreboard, rule
 file, sleeves; `IMPLEMENTATION_PLAN.md`, loop `LOOP_TAGS.md`) is deployed on
-the Pi and practising plan-only since 2026-10-31 15:05 UTC; the 2-hour
-observation and the operator's review (F3) are next. Going live stays the
-operator's go.
+the Pi and practising plan-only since 2026-10-31 15:05 UTC; the operator's
+review after two hours: keep practising. Going live stays the operator's
+go.
 
 ## On the Pi (`ssh pi-wired`, `~/binance-bot`)
 
@@ -77,14 +77,18 @@ feed older than 45 minutes as unavailable and then buys nothing. Stop:
   backtest is the candidate set only (OPERATIONS.md, "Algorithm backtest").
 - Practice run review 2026-10-30 09:41 UTC: one planned ETH buy in 42
   minutes; operator: "(a) Keep practising".
+- Phase 53 practice run 2026-10-31 15:05-17:05 UTC: feed at most 16 minutes
+  old, no error, halt or submission, 220 of 220 scores and 11 of 11 actions
+  recomputed from the rule file, core unfunded, 8 planned buys (STX and DOGE
+  alternating); first scoreboard on the Pi 1,093 rows; operator: "(a) Keep
+  practising plan-only".
 
 ## Next steps
 
-1. Phase 53 F3: observe the plan-only run for 2 hours, run the scoreboard
-   once by hand, then the operator's review (keep practising, roll back to
-   `binance-bot:pre-tags-20261031`, or start the tuning phase, where the
-   operator picks weights, rule style and the sleeve split). The pre-change
-   binaries are kept in `~/binance-bot-prechange/` (README there).
+1. Close Phase 53 (`LOOP_TAGS.md` G1). Then the tuning phase, where the
+   operator picks weights, rule style and the sleeve split from the
+   scoreboard (nightly 00:30 UTC). The pre-change binaries are kept in
+   `~/binance-bot-prechange/` (README there).
 2. Live only on the operator's go (`CODEX.md`, rollout rule): back up
    `.env.docker`, tag a rollback image, remove the dashboard's practice-run
    paths in `docker-compose.yml`, `docker compose up -d bot-spot
