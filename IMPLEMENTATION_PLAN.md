@@ -20,7 +20,8 @@ Why: the operator replaced the LLM trader with an algorithm
 - The dashboard shows wallet, trades and the algorithm's signals; Research
   backtests the rules offline. No LLM, no chat, no timer, no Telegram.
 
-Feed contract `biz-feed-v1` (one JSON file; the trader is the reader):
+Feed contract version 1 of the /biz/ feed (one JSON file; the trader was the
+reader until Phase 53 replaced it with `tags-feed-v1`):
 `schema`, `as_of` (only posts that were visible by then), `model`,
 `prompt_version`, `coins.<BASE>.<1h|6h|24h>` with `mentions` (every post, no
 AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
@@ -56,16 +57,18 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
 
 ### Build
 
-- [x] /biz/ feed reader `crate::biz` (`BOT_SPOT_BIZ_FEED_PATH`,
-  `BOT_SPOT_BIZ_MAX_AGE_MINUTES`).
-- [x] `bb biz-lead-study`: the move after each feed against the same coin's
-  random hours, older and newer half.
+- [x] /biz/ feed reader `crate::biz` with its own path and age variables
+  (replaced by `crate::tags` in Phase 53 C1; the old variables are in
+  `REMOVED_VARS`).
+- [x] The /biz/ lead study (a `bb` subcommand, replaced by `bb tag-scoreboard`
+  in Phase 53 C6): the move after each feed against the same coin's random
+  hours, older and newer half.
 - [x] biz-app, outside this repo: `biz-insights feed` writes
   `out/biz-feed.json`; `biz-insights feed --history --step 60` writes one
   feed per hour into `out/biz-feed-history/`; `feed --watch` keeps the live
   feed fresh (`docs/archive/loops/LOOP_ALGO.md` D1-D3).
-- [x] Run `bb biz-lead-study` on the real feed history and record the verdict
-  here. Verdict (2026-10-29, `reports/biz_lead_study_2026-10-29.{md,csv}`):
+- [x] Run the lead study on the real feed history and record the verdict
+  here. Verdict (2026-10-29, the lead-study report of that date in `reports/`):
   no lead. The window is short: 590 hourly feeds from 2026-10-01 to
   2026-10-25T13:00Z (24.5 days; older half to 2026-10-13T06:31Z), 30 coins,
   17,700 coin-feed samples, one AI reader (gemini-3.8-flash, `stance-1`), and
@@ -128,7 +131,7 @@ algorithm, and nothing measures which talk carries information
 - AI only reads posts and writes numbers; the rule stays the operator's;
   every order keeps every hard-safety item. Spot only.
 
-Feed contract `tags-feed-v1` (one JSON file, replaces `biz-feed-v1`; the
+Feed contract `tags-feed-v1` (one JSON file, replaces the version 1 /biz/ feed; the
 trader, the backtest, the scoreboard and the dashboard read it):
 
 - `schema`, `as_of`, `windows` (`1h`, `6h`, `24h`, `7d`, `30d`),
@@ -140,8 +143,8 @@ trader, the backtest, the scoreboard and the dashboard read it):
   `threads`, `up`, `down` (score-weighted: bullish/bearish for assets and
   baskets, rising/easing for macro, events, entities and mood), `horizon`
   (score-weighted `short`, `swing`, `long`, `unstated`) and `posts` (24h and
-  shorter only). Live Binance spot coins count AI-free mentions (as
-  `biz-feed-v1`).
+  shorter only). Live Binance spot coins count AI-free mentions (as the
+  version 1 feed did).
 - `members.<narrative>`: its assets with weights (from the AI's tags and
   co-mentions).
 - `links.<tag>.<asset>.<window>`: `posters`, `up`, `down`: posts that tie a
@@ -157,18 +160,20 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
 
 ### Feed (biz-app, outside this repo; back up first, then copy to the Pi's `~/biz-app`)
 
-- [ ] Prompt `tags-1`: per post the score and every tag of the seven kinds
+- [x] Prompt `tags-1`: per post the score and every tag of the seven kinds
   with direction, horizon, the assets it moves (with direction), the event
-  date or the claim's target and deadline; tag cache keyed on `tags-1`.
-- [ ] Tag registry: canonical ids, aliases, kinds; new names merged by one
+  date or the claim's target and deadline; tag cache keyed on `tags-1`
+  (laptop, LOOP_TAGS B2; the Pi gets it in F2).
+- [x] Tag registry: canonical ids, aliases, kinds; new names merged by one
   cached AI call per round (like the project merge); live at 5 or more
   distinct posters in 7d (setting); narrative baskets from tags and
-  co-mentions.
-- [ ] `tags-feed-v1` writer for source `biz`: tags, members and links over
+  co-mentions (LOOP_TAGS B4).
+- [x] `tags-feed-v1` writer for source `biz`: tags, members and links over
   1h/6h/24h/7d/30d, live tags only, replaced by rename; `--watch` and
-  `--history` write it.
-- [ ] Re-tag the archive since 2026-10-01 with `tags-1` (calls and time
-  logged) and write the hourly history; 30d windows full from 2026-10-31.
+  `--history` write it (LOOP_TAGS B1, B5, B6).
+- [x] Re-tag the archive since 2026-10-01 with `tags-1` (calls and time
+  logged) and write the hourly history; 30d windows full from 2026-10-31
+  (laptop, LOOP_TAGS B3, B6: 721 hourly feeds to 2026-10-31T00:00Z).
 
 ### Signals and scoreboard
 
@@ -187,7 +192,7 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
   and proxies; market-wide signals from macro and mood; momentum per price
   horizon. Unknown names in the rule refuse to start (LOOP_TAGS C5, D1;
   the legacy `talk.6h` stays −1..3 so `algo-2026-10-29` reproduces).
-- [ ] Scoreboard `bb tag-scoreboard` (replaces `bb biz-lead-study`): every
+- [ ] Scoreboard `bb tag-scoreboard` (replaces the /biz/ lead study): every
   tag kind and signal against its assets' (market-wide: BTC and the liquid
   basket's) moves at +1h/+24h/+7d versus random hours, after fees, older
   and newer half, decay flagged; nightly on the Pi (`docker/crontab`),
@@ -222,8 +227,9 @@ stocks (a separate safety phase; `CODEX.md` forbids futures today).
 - [x] Dashboard: Tags tab (live and new tags by kind, baskets, links,
   events by date, claims and their outcome); Scoreboard tab; Algorithm tab
   per sleeve with the rule's signals as columns (LOOP_TAGS E2, E3).
-- [ ] Docs (`README.md`, `OPERATIONS.md`, `.env.example`) and `CODEX.md`
-  "rules in force" describe the pipeline, the rule file and the sleeves.
+- [x] Docs (`README.md`, `OPERATIONS.md`, `.env.example`) and `CODEX.md`
+  "rules in force" describe the pipeline, the rule file and the sleeves
+  (LOOP_TAGS E4).
 
 ### Roll out
 

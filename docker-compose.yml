@@ -48,8 +48,9 @@ services:
 
   # ---------- LIVE ----------
 
-  # The nonstop algorithm trader (needs BOT_SPOT_ALGO_RULE): polls prices every 15 s and
-  # writes a decision row when the decided action changes, plus one an hour.
+  # The nonstop algorithm trader (needs BOT_SPOT_ALGO_RULE; reads data/tags-feed.json and
+  # BOT_SPOT_PROXIES): polls prices every 15 s and writes a decision row per rule sleeve when
+  # that sleeve's decided action changes, plus one an hour.
   # Live submission still requires BOT_SPOT_ENABLED=true, BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot,
   # USE_TESTNET=false, DRY_RUN=false, CONFIRM_LIVE_TRADING=yes. Emergency stop: touch data/bot-spot.stop.
   bot-spot:

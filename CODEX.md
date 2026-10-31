@@ -56,16 +56,23 @@ when the task needs them.
   levels) unless the operator chooses them as part of the rules.
 - The rules in force (operator, 2026-10-29, `docs/decisions.md` "2026-10-29
   algorithm rules"), in the rule file `config/rules/algo-2026-10-29.json`
-  (`BOT_SPOT_ALGO_RULE`): score = 0 `talk.6h` + 1 `stance.6h` + 1
-  `momentum.1h` (stances need 2 posters); buy the best-scoring coin with all
-  USDT when its score is +0.5 or more, one position at a time; sell the held
-  coin into USDT when it scores below -0.5 (fast sleeve, share 1; core sleeve
-  share 0). Without a fresh /biz/ feed nothing is bought and the held coin is
-  scored on momentum alone. Rule set name `algo-2026-10-29`.
+  (`BOT_SPOT_ALGO_RULE`, style `fixed`): sleeve `fast`, share 1: score = 0
+  `talk.6h` + 1 `stance.6h` + 1 `momentum.1h` (stances need 2 posters); buy
+  the best-scoring candidate for the sleeve's share of the portfolio (so all
+  USDT) when its score is +0.5 or more, one coin at a time; sell exactly the
+  sleeve's quantity into USDT when it scores below -0.5. Sleeve `core`: share
+  0, no weights, never active while it holds nothing. Candidates: the coins
+  the tags feed's live asset tags reach with an eligible USDT market,
+  directly or through the operator's proxy file (`BOT_SPOT_PROXIES`, gold
+  through PAXG and XAUT). Without a fresh tags feed nothing is bought and a
+  held coin is scored on momentum alone. Rule set name `algo-2026-10-29`. The
+  edge style (weights from the tag scoreboard), horizon filters, risk-off and
+  other sleeve splits exist but are not in force; choosing them is the
+  operator's (the tuning phase).
 - AI only reads supplied content. biz-app
   (`~/projects/automation/imageboards/biz-app`, outside this repo; its live
   copy runs on the Pi in `~/biz-app`) reads /biz/ threads and writes the
-  `tags-feed-v1` tags file; the trader reads that file
+  `tags-feed-v1` tags file and the tag registry; the trader reads that file
   as data, next to Binance data. A missing, unreadable or stale feed is
   recorded as unavailable, never guessed.
 - No Telegram or other phone alerts from any process. Watching is the

@@ -612,7 +612,7 @@ mod tests {
         );
         std::fs::write(
             &files.feed_path,
-            r#"{"schema":"biz-feed-v1","as_of":"2026-10-31T00:00:00Z","tags":{}}"#,
+            r#"{"schema":"tags-feed-v0","as_of":"2026-10-31T00:00:00Z","tags":{}}"#,
         )
         .unwrap();
         assert!(

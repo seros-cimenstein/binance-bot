@@ -29,9 +29,10 @@ operator's go.
   disabled. No stop file. Wallet about 17.4 USDT, mostly USDT cash, no open
   position. `silly_swirles` (exited, 4 months old, not a compose service)
   is unrelated and left alone.
-- `.env.docker` has the rule (`BOT_SPOT_ALGO_WEIGHTS=0,1,1,0.5,-0.5`,
-  `BOT_SPOT_ALGO_MIN_POSTERS=2`, `BOT_SPOT_RULES_VERSION=algo-2026-10-29`)
-  and still the old settings, which the trader ignores with one warning.
+- `.env.docker` has the Phase 52 env rule (weights `0,1,1,0.5,-0.5`, poster
+  minimum 2, `BOT_SPOT_RULES_VERSION=algo-2026-10-29`; Phase 53 F2 replaces
+  the three lines with `BOT_SPOT_ALGO_RULE`) and still the old settings,
+  which the trader ignores with one warning.
   Backups: `.env.docker.bak-20261030T082713Z-phase52`,
   `docker-data/backup-20261030T065538Z-phase52/` (the trader files before
   the rollout).

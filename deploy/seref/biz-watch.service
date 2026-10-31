@@ -1,5 +1,5 @@
 [Unit]
-Description=/biz/ scraper (biz-app biz_scraper): posts only, for the Bot Spot /biz/ feed
+Description=/biz/ scraper (biz-app biz_scraper): posts only, for the Bot Spot tags feed
 After=network-online.target
 Wants=network-online.target
 

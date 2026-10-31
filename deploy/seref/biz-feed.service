@@ -1,11 +1,12 @@
 [Unit]
-Description=/biz/ feed (biz-app biz-insights feed --watch) for the Bot Spot trader
+Description=Tags feed (biz-app biz-insights feed --watch, tags-feed-v1) for the Bot Spot trader
 After=network-online.target biz-watch.service
 Wants=network-online.target
 
 [Service]
-# systemd user unit on the Pi. Every 900 s: tags the new posts of the scraper's archive with Gemini (through omp)
-# and replaces ~/binance-bot/docker-data/biz-feed.json by rename; the trader reads it as data/biz-feed.json.
+# systemd user unit on the Pi. Every 900 s: tags the new posts of the scraper's archive with Gemini (through omp,
+# prompt tags-1), merges new tag names into the registry, and replaces ~/binance-bot/docker-data/tags-feed.json and
+# tags-registry.json by rename; the trader reads data/tags-feed.json (BOT_SPOT_TAGS_FEED_PATH), the dashboard both.
 # --out also holds the tag cache (feed.sqlite3) and the Binance asset list (binance-spot-assets.json).
 # omp uses its own agent dir, holding only the google-antigravity login.
 Type=simple

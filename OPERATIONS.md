@@ -252,7 +252,7 @@ journalctl --user -u binance-bot-spot.service -f
 The service always passes `--submit-live`; whether it trades is decided by the
 live arming variables in `.env` and the stop file.
 
-### /biz/ feed
+### Tags feed (biz-app)
 
 biz-app (`~/projects/automation/imageboards/biz-app` on the laptop, a copy in
 `~/biz-app` on the Pi) writes the tags feed `tags-feed-v1` (`tags-feed.json`)
@@ -282,10 +282,14 @@ Live, two systemd user units on the Pi keep the feed fresh (operator,
   from the Pi's network.
 - `biz-feed.service`: `biz-insights --out ~/binance-bot/docker-data feed
   --watch` in `~/biz-app/biz_insights`, a round every 900 s: it tags the new
-  posts with Gemini through omp and replaces `docker-data/biz-feed.json` by
-  rename, so the trader never reads half a file; a failed round keeps the old
-  file, which then ages. `docker-data/` also holds its tag cache
-  (`feed.sqlite3`) and Binance asset list (`binance-spot-assets.json`). omp
+  posts with Gemini through omp (prompt `tags-1`), merges new tag names into
+  the registry, and replaces `docker-data/tags-feed.json` and
+  `docker-data/tags-registry.json` by rename, so the trader and the dashboard
+  never read half a file; a failed round keeps the old files, which then age.
+  `docker-data/` also holds its tag cache (`feed.sqlite3`) and Binance asset
+  list (`binance-spot-assets.json`). The hourly history the scoreboard reads
+  goes to `docker-data/tags-history/` (`feed --history`, scheduled at the
+  Phase 53 rollout, F2). omp
   (Bun, `~/.bun/bin/omp`) uses `PI_CODING_AGENT_DIR=~/.local/share/biz-feed/omp-agent`,
   which holds only the `google-antigravity` login (re-login: `PI_CODING_AGENT_DIR=…
   omp login`, or `omp auth export | ssh pi-wired 'PI_CODING_AGENT_DIR=… ~/.bun/bin/omp auth import -'`).
@@ -312,9 +316,10 @@ tag id that is not `<kind>:<name>`, `as_of` older than
 `BOT_SPOT_TAGS_MAX_AGE_MINUTES` (45) or more than 5 minutes ahead of the
 Pi's clock). `context_hash` covers the feed by its `as_of` and digest. The
 algorithm (below) scores the asset tags. The dashboard's Algorithm tab shows
-the newest recorded feed status; its Tags tab reads the feed itself. Until the Phase 53 rollout the Pi's `biz-feed` unit
-still writes the old `biz-feed.json`, so this trader would record the feed as
-unavailable there.
+the newest recorded feed status; its Tags tab reads the feed itself. Until the
+Phase 53 rollout (F2) the Pi runs the previous biz-app, whose unit writes the
+version 1 feed file, so this trader would record the tags feed as unavailable
+there; F2 deploys the feed and the trader together.
 
 Reach (`crate::reach`): a tradable asset collects signal from its own asset
 tag, from an asset tag without a Spot market through the operator's proxy file
@@ -422,7 +427,11 @@ The rule in force (operator, 2026-10-29, `docs/decisions.md`):
 share 0, no weights. Its backtest:
 `reports/algo_backtest_2026-10-25.md` (`bb algo-backtest` on the old /biz/
 coin feed history, `--end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
-tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%).
+tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%). On the tags
+history with candidates as live (Phase 53 E1,
+`reports/phase53/algo_backtest_2026-10-25.md`, same window): -21.05%, 15
+round trips; the difference is the candidate set only (see "Algorithm
+backtest").
 
 - **Records.** Decision rows carry `algo` (sleeve, rule, levels, best candidate
   and score, held coins and scores, orders, `coins_scored`, and per listed coin
