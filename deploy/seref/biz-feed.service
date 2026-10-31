@@ -7,12 +7,14 @@ Wants=network-online.target
 # systemd user unit on the Pi. Every 900 s: tags the new posts of the scraper's archive with Gemini (through omp,
 # prompt tags-1), merges new tag names into the registry, and replaces ~/binance-bot/docker-data/tags-feed.json and
 # tags-registry.json by rename; the trader reads data/tags-feed.json (BOT_SPOT_TAGS_FEED_PATH), the dashboard both.
+# After each good round it writes the hourly history files due in docker-data/tags-history/ (all from 2026-10-01
+# into an empty dir), which the scheduler's nightly `bb tag-scoreboard` reads as data/tags-history.
 # --out also holds the tag cache (feed.sqlite3) and the Binance asset list (binance-spot-assets.json).
 # omp uses its own agent dir, holding only the google-antigravity login.
 Type=simple
 Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PI_CODING_AGENT_DIR=%h/.local/share/biz-feed/omp-agent
-ExecStart=%h/.local/bin/uv run --frozen --quiet --directory %h/biz-app/biz_insights biz-insights --out %h/binance-bot/docker-data feed --watch
+ExecStart=%h/.local/bin/uv run --frozen --quiet --directory %h/biz-app/biz_insights biz-insights --out %h/binance-bot/docker-data feed --watch --history-dir %h/binance-bot/docker-data/tags-history
 KillSignal=SIGINT
 Restart=always
 RestartSec=60

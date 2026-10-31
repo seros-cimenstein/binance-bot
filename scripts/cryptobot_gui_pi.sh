@@ -5,15 +5,16 @@
 # pulls the Pi's bot data dir into a local mirror with rsync (once, then every
 # MIRROR_SECONDS), points cryptobot-gui at the mirror and runs it in the foreground. Ctrl+C
 # stops both. Nothing is written on the Pi: the only remote commands are rsync reads and one
-# grep of the non-secret file paths in the Pi's env file. Old omp logins, the old bot
-# session and session files are not copied, nor the candle caches and the tags history
+# read of the non-secret file paths the Pi's `cryptobot-gui` container runs with (its
+# environment, filtered on the Pi; the env file when the container is absent). Old omp
+# logins, the old bot session and session files are not copied, nor the candle caches and the tags history
 # (large, and not read by the dashboard). The Tags tab reads the mirrored tags feed with
 # its registry and asset list, and this repo's proxy file (config/proxies.json).
 #
 # Extra arguments go to cryptobot-gui, e.g. `scripts/cryptobot_gui_pi.sh --open`.
 #
 # Settings (env): PI_HOST (pi-wired), PI_DATA_DIR (binance-bot/docker-data),
-# PI_ENV_FILE (binance-bot/.env.docker), MIRROR_DIR (~/.cache/binance-bot/pi-data),
+# PI_ENV_FILE (binance-bot/.env.docker, the fallback), MIRROR_DIR (~/.cache/binance-bot/pi-data),
 # MIRROR_SECONDS (30), CRYPTOBOT_GUI_BIN (target/release/cryptobot-gui of this repo),
 # RUNTIME_DIR (~/.local/share/binance-bot: its .env holds the read-only Binance keys the
 # wallet tab uses; the repo dir when missing).
@@ -53,7 +54,7 @@ port="${bind##*:}"
 if holder="$(ss -Hltnp "sport = :$port" 2>/dev/null | grep -o 'pid=[0-9]*' | head -n1 | cut -d= -f2)" \
     && [[ -n "$holder" ]] \
     && [[ "$(cat "/proc/$holder/comm" 2>/dev/null)" == "cryptobot-gui" ]] \
-    && ! tr '\0' '\n' 2>/dev/null < "/proc/$holder/environ" | grep -qxF -- "BOT_SPOT_AUDIT_PATH=$MIRROR_DIR/bot-spot-decisions.jsonl"; then
+    && ! tr '\0' '\n' 2>/dev/null < "/proc/$holder/environ" | grep -q -- "^BOT_SPOT_AUDIT_PATH=$MIRROR_DIR/"; then
     echo "cryptobot-gui-pi: stopping the old dashboard on port $port (pid $holder, not on the Pi data)" >&2
     kill "$holder"
     for _ in {1..50}; do kill -0 "$holder" 2>/dev/null || break; sleep 0.1; done
@@ -85,8 +86,11 @@ for name in "${!paths[@]}"; do
     export "$name=$MIRROR_DIR/${paths[$name]}"
 done
 export BOT_SPOT_PROXIES="${BOT_SPOT_PROXIES:-$REPO_DIR/config/proxies.json}"
+# The paths the Pi's dashboard reads: the compose file may override the env file's
+# (while the live trader is stopped it shows the practice run's audit and state).
 settings_pattern='^BOT_SPOT_(AUDIT_PATH|STOP_PATH|STATE_PATH|TAGS_FEED_PATH)='
-if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "grep -E '$settings_pattern' $PI_ENV_FILE" 2>/dev/null)"; then
+remote_read="docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cryptobot-gui 2>/dev/null | grep -E '$settings_pattern' || grep -E '$settings_pattern' $PI_ENV_FILE"
+if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "$remote_read" 2>/dev/null)"; then
     while IFS='=' read -r name value; do
         [[ "$name" =~ ^BOT_SPOT_[A-Z_]+$ ]] || continue
         value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
@@ -100,7 +104,7 @@ if remote_settings="$(ssh -o ConnectTimeout=10 "$PI_HOST" "grep -E '$settings_pa
         export "$name=$value"
     done <<< "$remote_settings"
 else
-    echo "cryptobot-gui-pi: could not read the file paths from $PI_HOST:$PI_ENV_FILE; using the trader defaults" >&2
+    echo "cryptobot-gui-pi: could not read the file paths from $PI_HOST (cryptobot-gui, $PI_ENV_FILE); using the trader defaults" >&2
 fi
 
 (

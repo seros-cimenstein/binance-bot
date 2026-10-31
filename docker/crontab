@@ -4,3 +4,7 @@
 
 # Bot Spot data (decisions audit and trader state) — 23:45 UTC, keep 14
 45  23  *  *  *      cd /app && BINANCE_BOT_BACKUP_RETENTION=14 bash scripts/backup_bot_data.sh
+
+# Tag scoreboard over the feed's hourly history (biz-feed writes data/tags-history) — 00:30 UTC,
+# clear of the backup; public klines only. Writes data/scoreboard/latest.json (dashboard, edge rules).
+30  0   *  *  *      cd /app && bb tag-scoreboard --history-dir data/tags-history --cache-dir data/scoreboard-cache --output-dir data/scoreboard

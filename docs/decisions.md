@@ -326,3 +326,14 @@ claims show "Status only": `open` until the deadline's day ends, `deadline
 passed` after (against the feed's `as_of`), with the posters' 7d lean; no
 price check ("free-text targets cannot support a reliable price-based outcome
 without guessing").
+
+## 2026-10-31 Phase 53 loop: the Pi dashboard shows the practice run (`LOOP_TAGS.md` F2)
+
+Asked through the ask tool at the rollout, answered by the loop manager for
+the operator: "Paper while live is stopped" ("Use the running paper trader's
+files so the dashboard shows current sleeves and decisions, with reversible
+compose overrides documented for removal when live trading resumes").
+`docker-compose.yml` gives `cryptobot-gui` `BOT_SPOT_AUDIT_PATH` and
+`BOT_SPOT_STATE_PATH` of `bot-spot-paper`; the going-live steps
+(OPERATIONS.md) remove them. Before, the Pi dashboard showed the live
+trader's files, last written 2026-10-22.

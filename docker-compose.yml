@@ -80,7 +80,9 @@ services:
 
   # Read-only web dashboard. Published on the host's loopback only and mounts the data
   # dir read-only: open http://localhost:8787 on the host, or from another machine
-  # tunnel it with `ssh -L 8787:localhost:8787 <host>`.
+  # tunnel it with `ssh -L 8787:localhost:8787 <host>`. While the live `bot-spot` is
+  # stopped it shows the practice run (operator 2026-10-31): drop the two paths below
+  # when going live, so it reads the live audit and state from the env file again.
   cryptobot-gui:
     <<: *base
     container_name: cryptobot-gui
@@ -91,6 +93,8 @@ services:
       TZ: UTC
       # Inside the container only; the published port below stays on 127.0.0.1.
       CRYPTOBOT_GUI_BIND: 0.0.0.0:8787
+      BOT_SPOT_AUDIT_PATH: /app/data/bot-spot-paper-decisions.jsonl
+      BOT_SPOT_STATE_PATH: /app/data/bot-spot-paper-state.json
     ports:
       - "127.0.0.1:${CRYPTOBOT_GUI_PORT:-8787}:8787"
     command: ["cryptobot-gui"]

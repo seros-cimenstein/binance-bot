@@ -123,7 +123,10 @@ asset tags marked Binance market / through a proxy / scored only, baskets,
 links with 7d posters, events by date, claims with target, deadline and status
 `open` or `deadline passed`, no price check), stop-file and
 failed-route-halt state at `http://localhost:8787` on the Docker host. It is
-published on `127.0.0.1` only and mounts the data dir read-only. From another
+published on `127.0.0.1` only and mounts the data dir read-only. On the Pi,
+while the live `bot-spot` is stopped, `docker-compose.yml` points it at the
+practice run (`bot-spot-paper-decisions.jsonl`, `bot-spot-paper-state.json`;
+operator 2026-10-31). From another
 machine: `ssh -L 8787:localhost:8787 <host>`. On a systemd host,
 `scripts/setup_user_deploy.sh` installs it next to `bb`; run
 `cd ~/.local/share/binance-bot && bin/cryptobot-gui`.
@@ -133,7 +136,8 @@ Laptop on the Pi's live data: `scripts/cryptobot_gui_pi.sh --open` (the
 `~/.cache/binance-bot/pi-data` every 30 s (old omp logins, the old bot
 session and session files, the candle caches and the tags history are not
 copied; nothing is written on the Pi), maps the trader's file paths (audit,
-stop, state, tags feed) from the Pi's `.env.docker`, points the Scoreboard
+stop, state, tags feed) from the Pi's running `cryptobot-gui` container (its
+`.env.docker` when the container is absent), points the Scoreboard
 tab at the mirrored `scoreboard/latest.json`, uses this repo's
 `config/proxies.json` for the Tags tab,
 and runs the local release build against the mirror with the laptop's
@@ -281,15 +285,17 @@ Live, two systemd user units on the Pi keep the feed fresh (operator,
   only: the feed reads post text, and `i.4cdn.org` (images) does not connect
   from the Pi's network.
 - `biz-feed.service`: `biz-insights --out ~/binance-bot/docker-data feed
-  --watch` in `~/biz-app/biz_insights`, a round every 900 s: it tags the new
+  --watch --history-dir ~/binance-bot/docker-data/tags-history` in
+  `~/biz-app/biz_insights`, a round every 900 s: it tags the new
   posts with Gemini through omp (prompt `tags-1`), merges new tag names into
   the registry, and replaces `docker-data/tags-feed.json` and
   `docker-data/tags-registry.json` by rename, so the trader and the dashboard
   never read half a file; a failed round keeps the old files, which then age.
+  After each good round it writes the hourly history files due since the
+  newest one in `docker-data/tags-history/` (into an empty dir all from
+  2026-10-01, a few minutes once), the input of the nightly scoreboard.
   `docker-data/` also holds its tag cache (`feed.sqlite3`) and Binance asset
-  list (`binance-spot-assets.json`). The hourly history the scoreboard reads
-  goes to `docker-data/tags-history/` (`feed --history`, scheduled at the
-  Phase 53 rollout, F2). omp
+  list (`binance-spot-assets.json`). omp
   (Bun, `~/.bun/bin/omp`) uses `PI_CODING_AGENT_DIR=~/.local/share/biz-feed/omp-agent`,
   which holds only the `google-antigravity` login (re-login: `PI_CODING_AGENT_DIR=…
   omp login`, or `omp auth export | ssh pi-wired 'PI_CODING_AGENT_DIR=… ~/.bun/bin/omp auth import -'`).
@@ -316,10 +322,9 @@ tag id that is not `<kind>:<name>`, `as_of` older than
 `BOT_SPOT_TAGS_MAX_AGE_MINUTES` (45) or more than 5 minutes ahead of the
 Pi's clock). `context_hash` covers the feed by its `as_of` and digest. The
 algorithm (below) scores the asset tags. The dashboard's Algorithm tab shows
-the newest recorded feed status; its Tags tab reads the feed itself. Until the
-Phase 53 rollout (F2) the Pi runs the previous biz-app, whose unit writes the
-version 1 feed file, so this trader would record the tags feed as unavailable
-there; F2 deploys the feed and the trader together.
+the newest recorded feed status; its Tags tab reads the feed itself. The
+version 1 file `docker-data/biz-feed.json` from before Phase 53 is kept, no
+longer written (the rollback to `binance-bot:pre-tags-20261031` reads it).
 
 Reach (`crate::reach`): a tradable asset collects signal from its own asset
 tag, from an asset tag without a Spot market through the operator's proxy file
@@ -330,8 +335,8 @@ share) and from links tying any tag to it. Baskets and links landing on GOLD
 follow its proxies. Only live asset tags, directly or through a proxy, make buy
 candidates; the `algo-2026-10-29` rule weights only `talk.6h`, `stance.6h` (a
 coin's own asset tag) and `momentum.1h`, so a proxy such as PAXG is scored on
-its momentum until a rule gives the new signals weight. The Pi's `.env.docker` needs
-`BOT_SPOT_PROXIES=config/proxies.json` at the Phase 53 rollout.
+its momentum until a rule gives the new signals weight. The Pi's `.env.docker`
+sets `BOT_SPOT_PROXIES=config/proxies.json` (Phase 53 rollout, 2026-10-31).
 
 Signals (`crate::signals`): the catalog of names a rule may weight. The
 legacy `talk.6h`, `stance.6h` and `momentum.1h` are the `algo-2026-10-29` terms
@@ -460,8 +465,10 @@ backtest").
   move the wallet, so it keeps deciding on the real balances.
 - **Going live** (after the practice run and the operator's go):
   `docker tag binance-bot:latest binance-bot:pre-algo-<date>`, set the
-  operator's `BOT_SPOT_ALGO_RULE` in `~/binance-bot/.env.docker`, `docker
-  compose up -d bot-spot`, watch the first decisions. Back: retag
+  operator's `BOT_SPOT_ALGO_RULE` in `~/binance-bot/.env.docker`, remove the
+  dashboard's two practice-run paths (`BOT_SPOT_AUDIT_PATH`,
+  `BOT_SPOT_STATE_PATH` under `cryptobot-gui` in `docker-compose.yml`), `docker
+  compose up -d bot-spot cryptobot-gui`, watch the first decisions. Back: retag
   the rollback image and recreate. `touch docker-data/bot-spot.stop` stops it.
 
 ### Failed-route halt
@@ -638,6 +645,12 @@ cargo run --release -p bb-cli --bin bb -- tag-scoreboard \
   --history-dir ~/biz-tags-retag/tags-history \
   --cache-dir data/scoreboard-cache --output-dir data/scoreboard
 ```
+
+On the Pi the `scheduler` runs it at 00:30 UTC (`docker/crontab`) over
+`data/tags-history` (the history `biz-feed` keeps), with the cache in
+`data/scoreboard-cache` and the output in `data/scoreboard/`; by hand:
+`docker compose run --rm scheduler bb tag-scoreboard --history-dir
+data/tags-history --cache-dir data/scoreboard-cache --output-dir data/scoreboard`.
 
 It writes `scoreboard-<as_of date>.json` and `latest.json` (schema
 `tag-scoreboard-v1`). Point in time: `--as-of` (default now) drops feeds
