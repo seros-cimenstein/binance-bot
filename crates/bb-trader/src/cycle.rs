@@ -1,7 +1,7 @@
 //! Decision runtime: route planning/execution with audit rows for each recorded decision
 //! (the [`crate::nonstop`] loop decides when).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -31,6 +31,16 @@ pub struct TurnReport {
     pub status: String,
     /// The first failed order (the remaining ones were not sent), or shutdown.
     pub error: Option<String>,
+    /// Live fills of the rule's orders, in order, for the sleeve book.
+    pub fills: Vec<Fill>,
+}
+
+/// One filled live order of the rule: for a buy, the quantity that arrived (destination
+/// free after − before on the route's last leg, so base-asset fees are counted).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Fill {
+    Bought { asset: String, qty: Decimal },
+    Sold { asset: String },
 }
 
 /// Whether `execute_route` may place orders.
@@ -68,6 +78,8 @@ pub struct CycleState {
     pub halted: Option<String>,
     /// Algo cycles (Phase 51): the rule's verdict, recorded on the cycle summary.
     pub algo: Option<Value>,
+    /// The last live route's arrival: its destination and the quantity that arrived.
+    pub last_fill: Option<(String, Decimal)>,
 }
 
 /// What a decision is recorded against: its context, the market view and the balances.
@@ -169,17 +181,18 @@ impl Runtime {
         )
     }
 
-    /// Quote `source` → `destination` for the whole free `source` balance into the active
-    /// cycle's quotes and return its route id (the algo's way to a route `execute_route`
-    /// accepts).
+    /// Quote `source` → `destination` for `amount` (`None`: the whole free `source`
+    /// balance) into the active cycle's quotes and return its route id (the algo's way to a
+    /// route `execute_route` accepts).
     async fn quote_for_cycle(
         &self,
         source: &str,
         destination: &str,
+        amount: Option<Decimal>,
     ) -> std::result::Result<String, String> {
         let mut guard = self.cycle.lock().await;
         let state = guard.as_mut().ok_or("no active cycle")?;
-        let amount = state.balances.free(source);
+        let amount = amount.unwrap_or_else(|| state.balances.free(source));
         if amount <= Decimal::ZERO {
             return Err(format!("no free {source} balance"));
         }
@@ -204,11 +217,14 @@ impl Runtime {
     /// safety check included), stopping at the first failure, and close the decision's
     /// statement. `coins` (every scored coin with its terms) is recorded with the verdict,
     /// and `edge` (an edge rule's scoreboard evidence) as `algo.edge`.
-    /// Returns the turn report the decision row is written from.
+    /// Returns the turn report the decision row is written from (with the live fills).
+    /// A sell spends exactly `owned[asset]` (the sleeve's quantity, capped at the free
+    /// balance), so an unowned remainder of the same asset is never sold.
     pub(crate) async fn run_algo_turn(
         &self,
         verdict: crate::decider::Verdict,
         sleeve: &crate::rules::Sleeve,
+        owned: &BTreeMap<String, Decimal>,
         coins: Vec<Value>,
         edge: Option<Value>,
         shutdown: &CancellationToken,
@@ -216,7 +232,7 @@ impl Runtime {
         use crate::decider::Action;
         let mut report = TurnReport {
             status: "completed".into(),
-            error: None,
+            ..TurnReport::default()
         };
         let mut traded = 0usize;
         let mut failure = None;
@@ -225,16 +241,49 @@ impl Runtime {
                 failure = Some("shutdown: the remaining orders were not sent".to_owned());
                 break;
             }
-            let (source, destination, reason) = match action {
-                Action::Sell { asset, reason } => (asset.as_str(), QUOTE_ASSET, reason.as_str()),
-                Action::Buy { asset, reason } => (QUOTE_ASSET, asset.as_str(), reason.as_str()),
+            let (source, destination, reason, spend) = match action {
+                Action::Sell { asset, reason } => {
+                    let free = match self.cycle.lock().await.as_ref() {
+                        Some(state) => state.balances.free(asset),
+                        None => Decimal::ZERO,
+                    };
+                    let qty = owned.get(asset).copied().unwrap_or_default().min(free);
+                    (asset.as_str(), QUOTE_ASSET, reason.as_str(), Some(qty))
+                }
+                Action::Buy { asset, reason } => (QUOTE_ASSET, asset.as_str(), reason.as_str(), None),
             };
-            let result = match self.quote_for_cycle(source, destination).await {
-                Ok(route_id) => self.execute_route(&route_id, reason, None).await,
-                Err(message) => Err(message),
+            let result = match spend {
+                Some(qty) if qty <= Decimal::ZERO => Err(if owned.get(source).is_some_and(|q| *q > Decimal::ZERO) {
+                    format!("no free {source} balance")
+                } else {
+                    format!("the sleeve owns no {source}")
+                }),
+                _ => match self.quote_for_cycle(source, destination, spend).await {
+                    Ok(route_id) => self.execute_route(&route_id, reason, spend).await,
+                    Err(message) => Err(message),
+                },
             };
             match result {
-                Ok(_) => traded += 1,
+                Ok(_) => {
+                    traded += 1;
+                    if self.mode == CycleMode::Live {
+                        let arrived = self
+                            .cycle
+                            .lock()
+                            .await
+                            .as_mut()
+                            .and_then(|state| state.last_fill.take());
+                        report.fills.push(match action {
+                            Action::Sell { asset, .. } => Fill::Sold { asset: asset.clone() },
+                            Action::Buy { asset, .. } => Fill::Bought {
+                                asset: asset.clone(),
+                                qty: arrived
+                                    .filter(|(to, _)| to == asset)
+                                    .map_or(Decimal::ZERO, |(_, qty)| qty),
+                            },
+                        });
+                    }
+                }
                 Err(message) => {
                     // A failed sell leaves the coin held: never buy a second one.
                     failure = Some(format!("{source}->{destination}: {message}"));
@@ -290,6 +339,7 @@ impl Runtime {
             "coins": coins,
             "blocked": verdict.blocked,
             "edge": edge,
+            "owned": owned.iter().map(|(a, q)| (a.clone(), q.normalize().to_string())).collect::<BTreeMap<_, _>>(),
         });
         report.error = failure;
         let mut guard = self.cycle.lock().await;
@@ -329,6 +379,7 @@ impl Runtime {
             end_cycle: None,
             halted: None,
             algo: None,
+            last_fill: None,
         });
         context
     }
@@ -455,6 +506,10 @@ impl Runtime {
         }
         if let Some(halt) = &state.halted {
             return Err(format!("route execution is halted for this cycle: {halt}"));
+        }
+        // Hard safety (Phase 53): no route while the sleeves are halted, in either mode.
+        if let Some(halt) = crate::sleeves::sleeve_halt(&self.audit.rows()) {
+            return Err(self.refuse(state, &quoted, reason, spend, halt).await);
         }
         if bb_core::fsutil::stop_requested(&self.config.stop_path) {
             let message = format!(
@@ -598,6 +653,12 @@ impl Runtime {
         let decision = Decision::rebalance(candidate, reason, spend);
         let (row, result) = match outcome {
             Ok(legs) => {
+                state.last_fill = legs.last().map(|leg| {
+                    (
+                        leg.destination_asset.clone(),
+                        leg.destination_free_after - leg.destination_free_before,
+                    )
+                });
                 let mut row =
                     AuditRow::new(&self.config, RowType::Route, RowStatus::Submitted, decision);
                 row.submission_attempted = true;
@@ -893,6 +954,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_standing_sleeve_halt_refuses_every_route_in_plan_only_too() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = trader_config(dir.path(), &[]);
+        let halt = crate::sleeves::halt_row(&config, "sleeves own 0.2 ETH but the wallet has 0.05 free", json!({}));
+        AuditLog::new(dir.path().join("audit.jsonl")).append(&halt).unwrap();
+        let runtime = runtime(&server, config, CycleMode::PlanOnly).await;
+        let route_id = first_route(&runtime, "SOL").await;
+        let err = runtime.execute_route(&route_id, "SOL", None).await.unwrap_err();
+        assert!(err.contains("sleeve_mismatch: sleeves own 0.2 ETH"), "{err}");
+        let rows = audit_rows(dir.path());
+        assert_eq!((rows[1]["row_type"].as_str(), rows[1]["status"].as_str()), (Some("route"), Some("blocked")));
+        assert_eq!(order_calls(&server).await, 0);
+    }
+
+    #[tokio::test]
     async fn the_algo_turn_sends_its_orders_through_execute_route_and_stops_at_a_failure() {
         use crate::decider::{Action, Verdict};
         let server = MockServer::start().await;
@@ -910,7 +987,7 @@ mod tests {
             blocked: None,
         };
         let report = first
-            .run_algo_turn(buy, &sleeve, Vec::new(), None, &CancellationToken::new())
+            .run_algo_turn(buy, &sleeve, &BTreeMap::new(), Vec::new(), None, &CancellationToken::new())
             .await;
         assert_eq!(report.error.as_deref(), None);
         let (summary, _) = first.finish_cycle(&report).await.unwrap();
@@ -944,7 +1021,7 @@ mod tests {
             blocked: None,
         };
         let report = second
-            .run_algo_turn(rotate, &sleeve, Vec::new(), None, &CancellationToken::new())
+            .run_algo_turn(rotate, &sleeve, &BTreeMap::from([("BTC".to_owned(), dec!(0.5))]), Vec::new(), None, &CancellationToken::new())
             .await;
         assert!(report.error.as_deref().unwrap().contains("no free BTC balance"), "{report:?}");
         assert_eq!(order_calls(&server).await, 0);

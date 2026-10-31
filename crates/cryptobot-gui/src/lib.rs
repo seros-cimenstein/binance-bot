@@ -240,14 +240,15 @@ fn no_store(mut response: Response) -> Response {
     response
 }
 
-/// Bot Spot state: stop file, the trader's own failed-route halt verdict, the newest cycle
+/// Bot Spot state: stop file, the trader's own halt verdict (failed route, else the Phase 53
+/// sleeve_mismatch halt), the newest cycle
 /// summaries (newest first; the page's liveness is the newest one), the tags feed summary the
 /// newest cycle that read one recorded (`tags`: its cycle time and the audit `tags` field,
 /// `null` before Phase 53), and where the data came from (`source`: a missing audit file
 /// means this host has no Bot Spot data at all).
 pub fn status_view(files: &BotSpotFiles) -> Value {
     let audit = load_audit_rows(&files.audit_path);
-    let halt = failed_route_halt(&audit);
+    let halt = failed_route_halt(&audit).or_else(|| bb_trader::sleeves::sleeve_halt(&audit));
     let cycles: Vec<Value> = audit
         .rows
         .iter()
@@ -408,6 +409,17 @@ mod tests {
         );
         assert_eq!(status_view(&files)["halt"], Value::Null);
         assert_eq!(status_view(&files)["source"]["audit_present"], json!(true));
+        // The sleeve_mismatch halt shows with its review command until the review row.
+        let mismatch = json!({"timestamp": "t3", "row_type": "cycle_summary", "status": "blocked",
+            "sleeve_check": {"kind": "sleeve_mismatch", "reason": "sleeves own 0.2 ETH"}});
+        write_lines(&files.audit_path, std::slice::from_ref(&mismatch));
+        let halt = status_view(&files)["halt"].as_str().unwrap().to_owned();
+        assert!(halt.contains("sleeves own 0.2 ETH") && halt.contains("--mark-sleeves-reviewed"), "{halt}");
+        write_lines(
+            &files.audit_path,
+            &[mismatch, json!({"timestamp": "t4", "status": "reviewed", "sleeve_check": {"kind": "sleeves_reviewed"}})],
+        );
+        assert_eq!(status_view(&files)["halt"], Value::Null);
     }
 
     #[test]

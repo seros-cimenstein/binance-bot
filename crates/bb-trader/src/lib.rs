@@ -13,7 +13,8 @@
 //! - [`memory`]: trade memory from the audit log.
 //! - [`context`]: decision context, `context_hash`, `route_id`.
 //! - [`executor`]: live route execution. [`audit`]: rows, halt, review marker.
-//! - [`state`]: the persisted cycle counter and last cycle.
+//! - [`state`]: the persisted cycle counter, last cycle and sleeve holdings (strict load).
+//!   [`sleeves`]: what each sleeve owns, migration, reconcile, the `sleeve_mismatch` halt.
 //! - [`algo_backtest`]: offline backtest of the algorithm on cached 1m candles, tuned on
 //!   the older half and judged on the newer (research only, no network, no order path).
 //! - [`tags`]: the tags feed (`tags-feed-v1`) from biz-app, read every tick and summarised
@@ -48,6 +49,7 @@ pub mod nonstop;
 pub mod reach;
 pub mod rules;
 pub mod scope;
+pub mod sleeves;
 pub mod scoreboard;
 pub mod signals;
 pub mod state;

@@ -101,27 +101,29 @@ fn float(value: Decimal) -> f64 {
     value.to_f64().unwrap_or(0.0)
 }
 
-/// The live book the rule decides on: USDT cash, the portfolio value, and every free
-/// balance worth at least its USDT market's minimum order (`min_notional`), leaving out
-/// USDT itself and cash-like coins (`assets::is_low_upside`). Dust a market order could
-/// not sell is not a position.
+/// The live book the rule decides on: USDT cash, and the sleeve's own holdings (`owned`,
+/// asset → quantity, capped at the free balance) worth at least their USDT market's
+/// minimum order (`min_notional`), leaving out USDT itself and cash-like coins
+/// (`assets::is_low_upside`). Dust a market order could not sell is not a position, and a
+/// balance the sleeves do not own is neither held nor counted (Phase 53,
+/// [`crate::sleeves`]): the portfolio value is the cash plus those holdings.
 pub fn live_book(
     t: i64,
     balances: &Balances,
-    equity: Decimal,
+    owned: &BTreeMap<String, Decimal>,
     value_usdt: impl Fn(&str, Decimal) -> Option<Decimal>,
     min_notional_usdt: impl Fn(&str) -> Option<Decimal>,
 ) -> Book {
-    let holdings = balances
-        .free
+    let holdings: BTreeMap<String, Holding> = owned
         .iter()
         .filter(|(asset, _)| *asset != "USDT" && !crate::assets::is_low_upside(asset))
         .filter_map(|(asset, qty)| {
-            let value = value_usdt(asset, *qty)?;
+            let qty = (*qty).min(balances.free(asset));
+            let value = value_usdt(asset, qty)?;
             let min = min_notional_usdt(asset)?;
             (value > Decimal::ZERO && value >= min).then(|| {
                 let holding = Holding {
-                    qty: float(*qty),
+                    qty: float(qty),
                     value: float(value),
                     entry: None,
                 };
@@ -129,10 +131,11 @@ pub fn live_book(
             })
         })
         .collect();
+    let cash = float(balances.free("USDT"));
     Book {
         t,
-        cash: float(balances.free("USDT")),
-        equity: float(equity),
+        cash,
+        equity: cash + holdings.values().map(|h| h.value).sum::<f64>(),
         holdings,
     }
 }
@@ -201,7 +204,7 @@ pub mod tests {
     }
 
     #[test]
-    fn the_live_book_skips_usdt_cash_like_coins_and_unsellable_dust() {
+    fn the_live_book_holds_only_owned_sellable_coins() {
         let balances = Balances {
             free: [
                 ("USDT".to_string(), dec!(12)),
@@ -209,6 +212,7 @@ pub mod tests {
                 ("SOL".to_string(), dec!(0.1)),
                 ("PEPE".to_string(), dec!(100)),
                 ("ODD".to_string(), dec!(1)),
+                ("BNB".to_string(), dec!(1)),
             ]
             .into(),
             ..Balances::default()
@@ -217,12 +221,21 @@ pub mod tests {
             "USDC" => Some(qty),
             "SOL" => Some(qty * dec!(180)),
             "PEPE" => Some(dec!(0.4)),
+            "BNB" => Some(qty * dec!(600)),
             _ => None,
         };
-        let book = live_book(T0, &balances, dec!(80), value, |_| Some(dec!(5)));
+        // Owned: SOL (more than the wallet has: capped), PEPE dust, USDC and ODD (no
+        // value); BNB is in the wallet but unowned.
+        let owned: BTreeMap<String, Decimal> = [("SOL", dec!(0.2)), ("PEPE", dec!(100)), ("USDC", dec!(50)), ("ODD", dec!(1))]
+            .map(|(a, q)| (a.to_owned(), q))
+            .into();
+        let book = live_book(T0, &balances, &owned, value, |_| Some(dec!(5)));
         assert_eq!(book.holdings.keys().collect::<Vec<_>>(), vec!["SOL"]);
-        assert_eq!(book.holdings["SOL"].value, 18.0);
-        assert_eq!((book.cash, book.equity), (12.0, 80.0));
+        assert_eq!((book.holdings["SOL"].qty, book.holdings["SOL"].value), (0.1, 18.0));
+        // Cash plus the owned SOL; the unowned 600 USDT of BNB is not counted.
+        assert_eq!((book.cash, book.equity), (12.0, 30.0));
+        let none = live_book(T0, &balances, &BTreeMap::new(), value, |_| Some(dec!(5)));
+        assert!(none.holdings.is_empty());
     }
 
     #[test]

@@ -670,7 +670,7 @@ function alerts() {
   if (noBotData()) items.push(["warn", "No bot data on this computer",
     "Nothing at " + st.source.audit_path + ". The live trader runs on the Pi, so History and Algorithm stay empty here. Start the dashboard with scripts/cryptobot_gui_pi.sh: it mirrors the Pi's data dir (read-only) and opens this page on it."]);
   if (st && st.stop_active) items.push(["neg", "Emergency stop is on", "The bot won't trade while " + st.stop_path + " exists. Delete it to resume."]);
-  if (st && st.halt) items.push(["neg", "Live trading halted", st.halt + ". Review, then run bb bot-spot --mark-failed-route-reviewed."]);
+  if (st && st.halt) items.push(["neg", "Trading halted", st.halt.includes("--mark-sleeves-reviewed") ? st.halt + "." : st.halt + ". Review, then run bb bot-spot --mark-failed-route-reviewed."]);
   if (st && st.audit_error) items.push(["neg", "Audit log unreadable", st.audit_error]);
   for (const [key, error] of Object.entries(ui.errors)) items.push(["warn", "Couldn't load " + key, error]);
   if (!items.length) return null;

@@ -414,6 +414,38 @@ docker compose run --rm bot-spot bb bot-spot --mark-failed-route-reviewed
 The halt is recomputed from the audit log, so the next decision sees the marker.
 Remove the stop file to resume.
 
+### Sleeve holdings and the `sleeve_mismatch` halt
+
+The state file (`BOT_SPOT_STATE_PATH`) holds what each sleeve owns
+(`sleeves.holdings.<sleeve>`: `asset`, `qty`, `opened_at`; `crate::sleeves`).
+The rule decides only on owned coins: other balances (a BNB fee balance, a
+manual buy) are unowned, never sold, never counted as held or as portfolio
+value, and never block a buy. A sell spends exactly the sleeve's quantity; a
+live buy books the quantity that arrived (destination free after − before of
+the route's last leg); plan-only books nothing.
+
+- **First start** (no state file, or one from before Phase 53 without
+  `sleeves`): a single non-USDT, non-cash-like free balance worth at least its
+  market's minimum order is adopted by the trading sleeve; several are listed
+  in `sleeves.unowned` and left alone.
+- **Every tick** the state loads strictly and each asset's sleeve quantities
+  must not exceed its free balance plus one step of its USDT market. A state
+  file that cannot be read or whose `sleeves` is malformed, or a shortfall,
+  writes a blocked decision row with `sleeve_check.kind` `sleeve_mismatch`
+  (again when the reason changes and hourly) and halts: no decisions, and
+  `execute_route` refuses every route in plan-only and live. The halt is read
+  from the audit log, so restarts keep it; the state file is never overwritten
+  while it does not load.
+- **To resume**: fix the cause (the wallet, or the state file by hand after a
+  backup), then append the review row. The command re-reads the balances and
+  is refused unless the state loads and reconciles now; it never rewrites the
+  state (operator, 2026-10-31):
+
+```bash
+bb bot-spot --mark-sleeves-reviewed --review-reason "<what you checked>"
+docker compose run --rm bot-spot-paper bb bot-spot --mark-sleeves-reviewed
+```
+
 ### Backtesting
 
 `bb bot-spot-backtest` replays Bot Spot's cost-aware momentum rule

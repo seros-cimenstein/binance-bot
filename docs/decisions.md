@@ -244,3 +244,25 @@ operator:
   hold with no orders and the reason on the row.
 
 No edge rule ships enabled; `algo-2026-10-29` stays the rule in force.
+
+## 2026-10-31 Phase 53 loop: sleeve holdings (`LOOP_TAGS.md` D3)
+
+Three answers through the ask tool, given by the loop manager for the
+operator:
+
+- Order sizing in D3, "Sells + booking in D3": a sell spends exactly the
+  sleeve's quantity (capped at the free balance), a filled live buy books
+  destination free after − before into the sleeve, a filled sell closes the
+  holding; plan-only books nothing. Share-sized buys and the
+  below-min-notional hold stay in D4.
+- Review command, "Only if it reconciles now": `--mark-sleeves-reviewed`
+  re-reads the balances and records the review only when the state loads and
+  reconciles; it never rewrites the state ("acknowledgment cannot silently
+  reduce or discard persisted sleeve ownership").
+- Scope, "Plan-only and live": both traders reconcile every tick and halt;
+  `execute_route` refuses every route while the halt stands.
+
+Manager note (iteration 19): a missing state file or one without `sleeves`
+migrates; an unreadable file or malformed `sleeves` halts; unowned balances
+never block buys and are never sold; the halt survives restarts and no tick
+clears it.

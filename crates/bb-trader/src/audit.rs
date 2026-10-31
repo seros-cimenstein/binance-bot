@@ -166,6 +166,10 @@ pub struct AuditRow {
     /// orders it asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub algo: Option<Value>,
+    /// Sleeve halt and review rows (Phase 53, [`crate::sleeves`]): `kind`
+    /// (`sleeve_mismatch` or `sleeves_reviewed`), the reason and the holdings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sleeve_check: Option<Value>,
 }
 
 impl AuditRow {
@@ -198,6 +202,7 @@ impl AuditRow {
             run_config: None,
             tags: None,
             algo: None,
+            sleeve_check: None,
         }
     }
 }

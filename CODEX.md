@@ -86,11 +86,16 @@ when the task needs them.
   of authenticated per-symbol taker fees plus slippage and rounding reserve;
   per-leg fill reconciliation that halts on anything ambiguous; operator
   scope (allow/block lists, blocked quotes, default fiat blocking); Spot
-  MARKET orders only, at most `BOT_SPOT_MAX_ROUTE_LEGS` legs; and the
-  failed-route halt. A route that submitted an order and then failed, or
-  whose submission was ambiguous, halts live trading until the operator
-  reviews it and runs `bb bot-spot --mark-failed-route-reviewed`; nothing
-  else may clear it. Never weaken or bypass any hard-safety item.
+  MARKET orders only, at most `BOT_SPOT_MAX_ROUTE_LEGS` legs; the
+  failed-route halt; and the `sleeve_mismatch` halt. A route that submitted an
+  order and then failed, or whose submission was ambiguous, halts live trading
+  until the operator reviews it and runs `bb bot-spot
+  --mark-failed-route-reviewed`. Sleeve holdings in the state file that cannot
+  be read, or that exceed the free balance by more than one step of the
+  asset's market, halt the trader (plan-only and live: no decisions, no
+  routes) until `bb bot-spot --mark-sleeves-reviewed`, which re-reads the
+  balances and is refused unless the sleeves reconcile. Nothing else may clear
+  either halt. Never weaken or bypass any hard-safety item.
 - Audit: one fsync'd JSONL row per decision and per route, written before
   anything else reports it, preserving submitted-leg truth after any partial
   route failure. Signed Binance request details stay out of logs.
@@ -105,7 +110,7 @@ when the task needs them.
 - The `cryptobot-gui` dashboard is read-only and localhost-only. It may read
   the trader's files and query Binance through signed and public GET
   endpoints, but must not write files, toggle the emergency stop, clear the
-  failed-route halt, or call any order, transfer, withdrawal, margin or
+  failed-route or sleeve halt, or call any order, transfer, withdrawal, margin or
   futures write endpoint. It keeps the loopback `Host` check and is never
   published on a non-loopback interface; adding controls needs its own
   reviewed phase with authentication.

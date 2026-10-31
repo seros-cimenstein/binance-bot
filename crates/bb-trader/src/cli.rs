@@ -38,9 +38,13 @@ pub struct BotSpotArgs {
     /// Append an operator-review audit marker that clears the failed-route halt.
     #[arg(long)]
     pub mark_failed_route_reviewed: bool,
-    /// Reason stored with --mark-failed-route-reviewed.
-    #[arg(long, default_value = DEFAULT_REVIEW_REASON)]
-    pub review_reason: String,
+    /// Append an operator-review row that clears the sleeve_mismatch halt: re-reads the
+    /// balances and is refused unless the sleeves reconcile now.
+    #[arg(long)]
+    pub mark_sleeves_reviewed: bool,
+    /// Reason stored with --mark-failed-route-reviewed or --mark-sleeves-reviewed.
+    #[arg(long)]
+    pub review_reason: Option<String>,
     /// Keep trading: poll prices and decide every 15 s until SIGTERM; a decision row only
     /// when the decided action changes, plus one an hour.
     #[arg(long)]
@@ -102,8 +106,24 @@ fn stop_guard(config: &TraderConfig, nonstop: bool) -> Result<()> {
 async fn bot_spot(args: BotSpotArgs) -> Result<ExitCode> {
     let config = Arc::new(TraderConfig::from_env()?);
     if args.mark_failed_route_reviewed {
-        let path = mark_failed_route_reviewed(&config, &args.review_reason)?;
+        let reason = args.review_reason.as_deref().unwrap_or(DEFAULT_REVIEW_REASON);
+        let path = mark_failed_route_reviewed(&config, reason)?;
         print_json(&json!({"status": "reviewed", "audit_path": path.display().to_string()}))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if args.mark_sleeves_reviewed {
+        let reason = args
+            .review_reason
+            .as_deref()
+            .unwrap_or(crate::sleeves::DEFAULT_SLEEVE_REVIEW_REASON);
+        let runtime = Arc::new(Runtime::new(
+            Arc::clone(&config),
+            CycleMode::PlanOnly,
+            binance_client(&config)?,
+        ));
+        let row = Nonstop::new(runtime).review_sleeves(reason).await?;
+        print_json(&json!({"status": "reviewed", "audit_path": config.audit_path.display().to_string(),
+            "sleeve_check": row.sleeve_check}))?;
         return Ok(ExitCode::SUCCESS);
     }
     let mode = if args.submit_live && !args.plan_only {

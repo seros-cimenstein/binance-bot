@@ -26,7 +26,8 @@ use tokio_util::sync::CancellationToken;
 use crate::audit::{AuditRow, EndCycle, RowStatus, failed_route_halt};
 use crate::book::{CoinView, coin_view_from_minutes, live_book};
 use crate::context::{DecisionContext, execution_invariants, route_scope};
-use crate::cycle::{ALGO_SESSION_ID, CycleMode, Runtime, Snapshot};
+use crate::cycle::{ALGO_SESSION_ID, CycleMode, Fill, Runtime, Snapshot};
+use crate::sleeves::{HALT_KIND, halt_row, migrate, reconcile, standing_reason};
 use crate::decider::{Action, Inputs, Verdict, decide};
 use crate::error::{Result, TraderError};
 use crate::state::{LastCycle, TraderState};
@@ -168,6 +169,13 @@ impl HourBook {
     }
 }
 
+fn iso(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms).map_or_else(
+        || ms.to_string(),
+        |d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+}
+
 fn floor_hour(ms: i64) -> i64 {
     ms - ms.rem_euclid(HOUR_MS)
 }
@@ -213,6 +221,8 @@ struct Decision {
     sleeve: crate::rules::Sleeve,
     /// Edge style: the scoreboard evidence (`algo.edge`).
     edge: Option<serde_json::Value>,
+    /// What the trading sleeve owns: its sells spend exactly this.
+    owned: BTreeMap<String, Decimal>,
 }
 
 /// The nonstop trader: the runtime plus the state kept between ticks.
@@ -285,17 +295,31 @@ impl Nonstop {
         }
     }
 
+    /// `bb bot-spot --mark-sleeves-reviewed`: re-read the balances (and the catalog, kept
+    /// when that read fails and one is loaded) and append the review row when the sleeves
+    /// reconcile now ([`crate::sleeves::mark_sleeves_reviewed`]). Places no order.
+    pub async fn review_sleeves(&mut self, reason: &str) -> Result<AuditRow> {
+        self.refresh_slow = true;
+        self.refresh(bb_core::time::now_ms()).await?;
+        let slow = self.slow_state()?;
+        crate::sleeves::mark_sleeves_reviewed(&self.runtime.config, &slow.balances, &slow.view, reason)
+    }
+
     /// The decision context the next tick would record, with the routes quotable from the
     /// wallet now (`--evidence-only`; no row, no order).
     pub async fn evidence(&mut self) -> Result<DecisionContext> {
         let now_ms = bb_core::time::now_ms();
         self.refresh(now_ms).await?;
-        let (tags, candidates, held) = self.inputs()?;
+        let state = self
+            .sleeve_check(now_ms, false)
+            .map_err(|reason| TraderError::safety(format!("{HALT_KIND}: {reason}")))?;
+        let owned = self.owned(&state);
+        let (tags, candidates, held) = self.inputs(&owned)?;
         self.poll_prices(now_ms, &candidates, &held).await;
         if let Some(book) = &mut self.edge {
             book.refresh(now_ms);
         }
-        let decision = self.decide(now_ms, tags, candidates, &held)?;
+        let decision = self.decide(now_ms, tags, candidates, &held, owned)?;
         let slow = self.slow_state()?;
         let mut context = self.context(slow, &decision);
         context.candidate_routes =
@@ -343,14 +367,27 @@ impl Nonstop {
             }
             return Err(error);
         }
-        let (tags, candidates, held) = self.inputs()?;
+        // Sleeves (Phase 53): strict load, migration, reconcile; a standing or new
+        // mismatch halts here, before anything is decided.
+        let rows = self.runtime.audit.rows();
+        let state = match (self.sleeve_check(now_ms, true), standing_reason(&rows)) {
+            (Ok(state), None) => state,
+            (Err(reason), _) | (Ok(_), Some(reason)) => {
+                return self.halt(&reason, now_ms, force);
+            }
+        };
+        if let Some(error) = &rows.error {
+            return self.halt(&format!("could not read Bot Spot audit history: {error}"), now_ms, force);
+        }
+        let owned = self.owned(&state);
+        let (tags, candidates, held) = self.inputs(&owned)?;
         if !self.poll_prices(now_ms, &candidates, &held).await && !force {
             return Ok(Tick::Unchanged);
         }
         if let Some(book) = &mut self.edge {
             book.refresh(now_ms);
         }
-        let decision = self.decide(now_ms, tags, candidates, &held)?;
+        let decision = self.decide(now_ms, tags, candidates, &held, owned)?;
         if !self.due(&decision.key, now_ms, force) {
             return Ok(Tick::Unchanged);
         }
@@ -379,6 +416,7 @@ impl Nonstop {
             .run_algo_turn(
                 decision.verdict,
                 &decision.sleeve,
+                &decision.owned,
                 decision.coins,
                 decision.edge,
                 shutdown,
@@ -393,6 +431,11 @@ impl Nonstop {
             self.refresh_slow = true;
         }
         self.remember(decision.key, now_ms, &row);
+        if let Err(reason) = self.book_fills(&report.fills, now_ms) {
+            // The wallet moved but the sleeves could not record it: halt now.
+            tracing::error!(%reason, "CRITICAL: a fill could not be booked to its sleeve");
+            self.halt(&reason, now_ms, true)?;
+        }
         tracing::info!(
             action = %row.decision.action,
             reason = %row.decision.reason,
@@ -415,7 +458,15 @@ impl Nonstop {
     fn remember(&mut self, key: String, now_ms: i64, row: &AuditRow) {
         self.last = Some((key, now_ms));
         let state_path = &self.runtime.config.state_path;
-        let mut state = TraderState::load(state_path);
+        // Never overwrite a state file that does not load: it may hold sleeves (the
+        // sleeve check halts on it).
+        let mut state = match TraderState::load_strict(state_path) {
+            Ok(state) => state,
+            Err(error) => {
+                tracing::warn!(%error, "trader state not updated");
+                return;
+            }
+        };
         state.cycle_count += 1;
         state.last_cycle = Some(LastCycle {
             cycle_id: row.cycle_id.clone(),
@@ -431,6 +482,104 @@ impl Nonstop {
         if let Err(error) = state.save(state_path) {
             tracing::warn!(%error, "trader state not saved");
         }
+    }
+
+    /// The state file with its sleeves loaded strictly, migrated when it has none (saved
+    /// when `persist`), checked against the rule and reconciled with the free balances;
+    /// the halt reason otherwise ([`crate::sleeves`]).
+    fn sleeve_check(&self, now_ms: i64, persist: bool) -> std::result::Result<TraderState, String> {
+        let slow = self.slow_state().map_err(|e| e.to_string())?;
+        let config = &self.runtime.config;
+        let mut state = TraderState::load_strict(&config.state_path)
+            .map_err(|e| format!("sleeve state unreadable: {e}"))?;
+        let sleeves = match state.sleeves.take() {
+            Some(sleeves) => sleeves,
+            None => {
+                let migrated = migrate(&config.algo_rule, &slow.balances, &slow.view, &iso(now_ms));
+                tracing::info!(
+                    holdings = ?migrated.holdings,
+                    unowned = ?migrated.unowned,
+                    "sleeve state migrated"
+                );
+                if persist {
+                    let mut saved = state.clone();
+                    saved.sleeves = Some(migrated.clone());
+                    saved
+                        .save(&config.state_path)
+                        .map_err(|e| format!("sleeve state not saved: {e}"))?;
+                }
+                migrated
+            }
+        };
+        sleeves.validate(&config.algo_rule)?;
+        reconcile(&sleeves, &slow.balances, &slow.view)?;
+        state.sleeves = Some(sleeves);
+        Ok(state)
+    }
+
+    /// What the trading sleeve owns (asset → quantity).
+    fn owned(&self, state: &TraderState) -> BTreeMap<String, Decimal> {
+        let sleeve = &self.runtime.config.algo_rule.trading_sleeve().name;
+        state
+            .sleeves
+            .as_ref()
+            .and_then(|s| s.holdings.get(sleeve))
+            .map(|h| BTreeMap::from([(h.asset.clone(), h.qty)]))
+            .unwrap_or_default()
+    }
+
+    /// Record the sleeve halt (a `sleeve_mismatch` row when the reason changes and hourly),
+    /// deciding nothing.
+    fn halt(&mut self, reason: &str, now_ms: i64, force: bool) -> Result<Tick> {
+        let key = format!("{HALT_KIND}: {reason}");
+        if !self.due(&key, now_ms, force) {
+            return Ok(Tick::Unchanged);
+        }
+        let config = &self.runtime.config;
+        let state = TraderState::load_strict(&config.state_path).ok();
+        let detail = serde_json::json!({
+            "holdings": state.and_then(|s| s.sleeves).map(|s| s.holdings),
+            "free": self.slow.as_ref().map(|slow| &slow.balances.free),
+        });
+        let mut row = halt_row(config, reason, detail);
+        row.cycle_id = uuid::Uuid::now_v7().to_string();
+        row.run_config = self.runtime.run_config.get().cloned();
+        self.runtime.audit.append(&row)?;
+        tracing::error!(%reason, "sleeve_mismatch: halted until `bb bot-spot --mark-sleeves-reviewed`");
+        self.remember(key, now_ms, &row);
+        Ok(Tick::Recorded(Box::new(row)))
+    }
+
+    /// Book live fills to the trading sleeve and save the state; the reason when that fails.
+    fn book_fills(&self, fills: &[Fill], now_ms: i64) -> std::result::Result<(), String> {
+        if fills.is_empty() {
+            return Ok(());
+        }
+        let config = &self.runtime.config;
+        let sleeve = &config.algo_rule.trading_sleeve().name;
+        let mut state = TraderState::load_strict(&config.state_path)
+            .map_err(|e| format!("sleeve state unreadable after a fill: {e}"))?;
+        let sleeves = state.sleeves.get_or_insert_with(Default::default);
+        for fill in fills {
+            match fill {
+                Fill::Bought { asset, qty } if *qty > Decimal::ZERO => {
+                    sleeves.book_buy(sleeve, asset, *qty, &iso(now_ms));
+                }
+                Fill::Bought { asset, qty } => {
+                    return Err(format!(
+                        "a filled buy of {asset} arrived as {qty}: nothing could be booked"
+                    ));
+                }
+                Fill::Sold { asset } => {
+                    if sleeves.holdings.get(sleeve).is_some_and(|h| &h.asset == asset) {
+                        sleeves.book_sell(sleeve);
+                    }
+                }
+            }
+        }
+        state
+            .save(&config.state_path)
+            .map_err(|e| format!("sleeve state not saved after a fill: {e}"))
     }
 
     fn slow_state(&self) -> Result<&Slow> {
@@ -482,7 +631,10 @@ impl Nonstop {
     /// This tick's tags feed, the coins the rule may buy (the tradable assets the fresh feed's
     /// live asset tags reach, directly or through the operator's proxies, with an eligible
     /// USDT market, cash-like coins left out) and the coins it holds.
-    fn inputs(&self) -> Result<(TagsNow, Vec<String>, BTreeSet<String>)> {
+    fn inputs(
+        &self,
+        owned: &BTreeMap<String, Decimal>,
+    ) -> Result<(TagsNow, Vec<String>, BTreeSet<String>)> {
         let slow = self.slow_state()?;
         let tags = self.runtime.tags_feed(&slow.view);
         let usdt_market = |asset: &str| {
@@ -505,7 +657,7 @@ impl Nonstop {
             TagsNow::Unavailable { .. } => Vec::new(),
         };
         let held = self
-            .book(slow, 0)
+            .book(slow, 0, owned)
             .holdings
             .into_keys()
             .filter(|asset| usdt_market(asset))
@@ -513,12 +665,12 @@ impl Nonstop {
         Ok((tags, candidates, held))
     }
 
-    fn book(&self, slow: &Slow, t: i64) -> crate::book::Book {
+    fn book(&self, slow: &Slow, t: i64, owned: &BTreeMap<String, Decimal>) -> crate::book::Book {
         let view = &slow.view;
         live_book(
             t,
             &slow.balances,
-            slow.balances.free_value_usdt(view),
+            owned,
             |asset, amount| view.usdt_value(asset, amount),
             |asset| {
                 view.markets
@@ -619,6 +771,7 @@ impl Nonstop {
         tags: TagsNow,
         candidates: Vec<String>,
         held: &BTreeSet<String>,
+        owned: BTreeMap<String, Decimal>,
     ) -> Result<Decision> {
         let slow = self.slow_state()?;
         // The 24h return is the USDT market's 24h ticker change from the catalog (reloaded
@@ -643,7 +796,7 @@ impl Nonstop {
             })
             .collect();
         let step = crate::book::Snapshot::live(now_ms, coins, candidates);
-        let book = self.book(slow, now_ms);
+        let book = self.book(slow, now_ms, &owned);
         let (assets, feed) = match &tags {
             TagsNow::Fresh(feed) => (Some(&feed.assets), Some((&feed.feed, &feed.reach))),
             TagsNow::Unavailable { .. } => (None, None),
@@ -677,6 +830,7 @@ impl Nonstop {
                 equity: slow.balances.free_value_usdt(&slow.view),
                 coins: Vec::new(),
                 sleeve,
+                owned,
                 edge,
             });
         }
@@ -716,6 +870,7 @@ impl Nonstop {
             equity: slow.balances.free_value_usdt(&slow.view),
             coins: scored.into_iter().map(|(_, coin)| coin).collect(),
             sleeve,
+            owned,
             edge,
         })
     }
@@ -1033,6 +1188,159 @@ mod tests {
         assert!(!matches!(tick, Tick::Stopped), "{tick:?}");
     }
 
+    fn set_free(trader: &mut Nonstop, free: &[(&str, Decimal)]) {
+        let free: BTreeMap<String, Decimal> = free.iter().map(|(a, q)| ((*a).to_owned(), *q)).collect();
+        let slow = trader.slow.as_mut().unwrap();
+        slow.balances = Balances { free: free.clone(), used: Default::default(), total: free };
+    }
+
+    fn own(dir: &Path, holdings: &[(&str, &str, Decimal)]) {
+        let mut sleeves = crate::sleeves::SleeveState { since: "t0".into(), ..Default::default() };
+        for (sleeve, asset, qty) in holdings {
+            sleeves.book_buy(sleeve, asset, *qty, "t0");
+        }
+        let path = dir.join("state.json");
+        let mut state = TraderState::load_strict(&path).unwrap();
+        state.sleeves = Some(sleeves);
+        state.save(&path).unwrap();
+    }
+
+    fn with_rule(dir: &Path, buy_above: f64, sell_below: f64) -> TraderConfig {
+        let mut config = trader_config(dir, buy_above);
+        let rule = crate::rules::tests::write(dir, &[("momentum.1h", 1.0)], buy_above, sell_below);
+        config.algo_rule = crate::rules::Rule::load(Path::new(&rule)).unwrap();
+        config
+    }
+
+    #[tokio::test]
+    async fn live_fills_are_booked_to_the_trading_sleeve() {
+        use rust_decimal_macros::dec;
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let now = bb_core::time::now_ms();
+        own(dir.path(), &[]);
+        let trader = nonstop(&server, trader_config(dir.path(), BUY_ETH), now);
+        let sleeves = || TraderState::load_strict(&dir.path().join("state.json")).unwrap().sleeves.unwrap();
+        // A buy books the quantity that arrived (net of a base-asset fee), not the quote.
+        trader.book_fills(&[Fill::Bought { asset: "ETH".into(), qty: dec!(0.04995) }], now).unwrap();
+        assert_eq!((sleeves().holdings["fast"].asset.as_str(), sleeves().holdings["fast"].qty), ("ETH", dec!(0.04995)));
+        // A sell of another asset leaves it; a sell of the held asset closes it.
+        trader.book_fills(&[Fill::Sold { asset: "BTC".into() }], now).unwrap();
+        assert!(sleeves().holdings.contains_key("fast"));
+        trader.book_fills(&[Fill::Sold { asset: "ETH".into() }, Fill::Bought { asset: "SOL".into(), qty: dec!(2) }], now).unwrap();
+        assert_eq!(sleeves().holdings["fast"].asset, "SOL");
+        // A filled buy whose arrival could not be measured is an error (the caller halts).
+        let err = trader.book_fills(&[Fill::Bought { asset: "ETH".into(), qty: Decimal::ZERO }], now).unwrap_err();
+        assert!(err.contains("nothing could be booked"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_rule_trades_only_what_its_sleeve_owns() {
+        use rust_decimal_macros::dec;
+        let token = CancellationToken::new();
+        let now = bb_core::time::now_ms();
+        // First start, two positions in the wallet (ETH, BTC): none adopted. ETH (+7% in
+        // 1h) is bought anyway: unowned coins do not block a buy.
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        market(&server, dir.path(), now, false).await;
+        let mut trader = nonstop(&server, trader_config(dir.path(), BUY_ETH), now);
+        set_free(&mut trader, &[("USDT", dec!(100)), ("ETH", dec!(0.05)), ("BTC", dec!(0.01))]);
+        trader.tick(now, false, &token).await.unwrap();
+        let first = rows(dir.path());
+        assert_eq!((first[0]["status"].as_str(), first[0]["decision"]["destination_asset"].as_str()), (Some("planned"), Some("ETH")));
+        let state = TraderState::load_strict(&dir.path().join("state.json")).unwrap();
+        let sleeves = state.sleeves.unwrap();
+        assert!(sleeves.holdings.is_empty());
+        assert_eq!(sleeves.unowned, ["BTC", "ETH"]);
+        assert_eq!(state.cycle_count, 1);
+
+        // The fast sleeve owns 0.02 of the wallet's 0.05 ETH and the rule sells it: the
+        // route spends exactly 0.02, the unowned 0.03 stays.
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        market(&server, dir.path(), now, true).await;
+        own(dir.path(), &[("fast", "ETH", dec!(0.02))]);
+        let mut trader = nonstop(&server, with_rule(dir.path(), 5.0, 5.0), now);
+        set_free(&mut trader, &[("USDT", dec!(100)), ("ETH", dec!(0.05))]);
+        trader.tick(now, false, &token).await.unwrap();
+        let sold = rows(dir.path());
+        let decision = &sold[0]["decision"];
+        assert_eq!((decision["source_asset"].as_str(), decision["spend_mode"].as_str()), (Some("ETH"), Some("amount")));
+        assert_eq!(decision["spend_amount"], json!(0.02));
+        assert_eq!(sold[1]["algo"]["owned"], json!({"ETH": "0.02"}));
+
+        // First start with one position: the fast sleeve adopts it and keeps it.
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        market(&server, dir.path(), now, true).await;
+        let mut trader = nonstop(&server, trader_config(dir.path(), HOLD), now);
+        set_free(&mut trader, &[("USDT", dec!(1)), ("ETH", dec!(0.05)), ("BNB", dec!(0.00001))]);
+        let Tick::Recorded(row) = trader.tick(now, false, &token).await.unwrap() else { panic!("recorded") };
+        assert!(row.decision.reason.contains("keep ETH"), "{}", row.decision.reason);
+        let adopted = TraderState::load_strict(&dir.path().join("state.json")).unwrap().sleeves.unwrap();
+        assert_eq!((adopted.holdings["fast"].asset.as_str(), adopted.holdings["fast"].qty), ("ETH", dec!(0.05)));
+    }
+
+    #[tokio::test]
+    async fn a_sleeve_mismatch_halts_across_restarts_until_a_reconciled_review() {
+        use rust_decimal_macros::dec;
+        let token = CancellationToken::new();
+        let now = bb_core::time::now_ms();
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        // The account holds 0.05 ETH; the state says the fast sleeve owns 0.2.
+        market(&server, dir.path(), now, true).await;
+        own(dir.path(), &[("fast", "ETH", dec!(0.2))]);
+        let mut trader = nonstop(&server, trader_config(dir.path(), HOLD), now);
+        set_free(&mut trader, &[("ETH", dec!(0.05))]);
+        let Tick::Recorded(halt) = trader.tick(now, false, &token).await.unwrap() else { panic!("halt row") };
+        assert_eq!(halt.status, RowStatus::Blocked);
+        assert!(halt.decision.reason.starts_with("sleeve_mismatch: sleeves own 0.2 ETH but the wallet has 0.05 free"), "{}", halt.decision.reason);
+        // Ticks decide nothing and write nothing more until the reason changes or an hour.
+        assert!(matches!(trader.tick(now + 15_000, false, &token).await.unwrap(), Tick::Unchanged));
+        // A restart does not clear it, even once the wallet matches again.
+        let mut trader = nonstop(&server, trader_config(dir.path(), HOLD), now);
+        set_free(&mut trader, &[("ETH", dec!(0.2))]);
+        trader.tick(now + 30_000, false, &token).await.unwrap();
+        let rows_now = rows(dir.path());
+        assert_eq!(rows_now.len(), 2);
+        assert!(rows_now.iter().all(|r| r["sleeve_check"]["kind"] == "sleeve_mismatch" && r["row_type"] == "cycle_summary"));
+        assert_eq!(requests(&server, "/api/v3/order/test").await, 0);
+        // The review re-reads the balances (the account still has 0.05) and is refused.
+        let accounts = requests(&server, "/api/v3/account").await;
+        let err = trader.review_sleeves("checked").await.unwrap_err().to_string();
+        assert!(requests(&server, "/api/v3/account").await > accounts);
+        assert!(err.contains("still do not reconcile: sleeves own 0.2 ETH but the wallet has 0.05"), "{err}");
+        // The operator corrects the state to the wallet: the review is recorded.
+        own(dir.path(), &[("fast", "ETH", dec!(0.05))]);
+        let review = trader.review_sleeves("checked the fills by hand").await.unwrap();
+        let check = review.sleeve_check.as_ref().unwrap();
+        assert_eq!((check["kind"].as_str(), check["free"]["ETH"].as_str()), (Some("sleeves_reviewed"), Some("0.05")));
+        assert_eq!(review.decision.reason, "checked the fills by hand");
+        // Only then does the trader decide again.
+        let Tick::Recorded(row) = trader.tick(now + 45_000, false, &token).await.unwrap() else { panic!("decision") };
+        assert!(row.decision.reason.contains("keep ETH"), "{}", row.decision.reason);
+        assert!(trader.review_sleeves("again").await.unwrap_err().to_string().contains("no sleeve_mismatch halt"));
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_sleeve_state_halts_and_is_never_overwritten() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let now = bb_core::time::now_ms();
+        market(&server, dir.path(), now, false).await;
+        let state = dir.path().join("state.json");
+        std::fs::write(&state, r#"{"cycle_count": 7, "sleeves": {"holdings": {"fast": {"asset": "ETH"}}, "since": "t"}}"#).unwrap();
+        let mut trader = nonstop(&server, trader_config(dir.path(), BUY_ETH), now);
+        let Tick::Recorded(halt) = trader.tick(now, false, &CancellationToken::new()).await.unwrap() else { panic!("halt row") };
+        assert!(halt.decision.reason.contains("sleeve state unreadable") && halt.decision.reason.contains("missing field `qty`"), "{}", halt.decision.reason);
+        assert_eq!(rows(dir.path()).len(), 1, "no route row");
+        assert!(std::fs::read_to_string(&state).unwrap().contains("\"cycle_count\": 7"));
+        let err = trader.review_sleeves("x").await.unwrap_err().to_string();
+        assert!(err.contains("fix or restore the state file first"), "{err}");
+    }
+
     #[tokio::test]
     async fn an_edge_rule_holds_without_valid_evidence_and_trades_on_the_scoreboard() {
         use crate::edge::tests::{edge_rule_text, fixture_available_at};
@@ -1117,8 +1425,14 @@ mod tests {
         assert!((eth["ret_7d_pct"].as_f64().unwrap() - 50.0).abs() < 1e-9);
         let accounts = requests(&server, "/api/v3/account").await;
 
+        // The buy was planned, not filled, so nothing is booked: the wallet's ETH is
+        // unowned. Book it to the fast sleeve as a live fill would.
+        let state_path = dir.path().join("state.json");
+        let mut state = TraderState::load_strict(&state_path).unwrap();
+        state.sleeves.as_mut().unwrap().book_buy("fast", "ETH", rust_decimal_macros::dec!(0.05), "t");
+        state.save(&state_path).unwrap();
         // The next tick reloads the balances (the catalog reload fails here and is kept) and
-        // decides on them: ETH is held, so the decision changes to keeping it.
+        // decides on them: the sleeve holds ETH, so the decision changes to keeping it.
         let Tick::Recorded(keep) = trader.tick(now + 15_000, false, &token).await.unwrap() else {
             panic!("the changed decision is recorded");
         };

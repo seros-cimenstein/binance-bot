@@ -96,6 +96,7 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
   - exchange filters, with orders sized from live balances net of a fee, slippage and rounding reserve;
   - per-leg fill reconciliation, halting on anything ambiguous;
   - a failed-route halt, cleared only by `bb bot-spot --mark-failed-route-reviewed`;
+  - sleeve holdings in the state file (strict load) reconciled with the free balances every tick: a mismatch or unreadable state halts plan-only and live (`sleeve_mismatch`), cleared only by `bb bot-spot --mark-sleeves-reviewed` once they reconcile; balances no sleeve owns are never sold or counted;
   - operator scope (allow/block lists, blocked quotes, fiat blocking);
   - Spot MARKET orders only, at most `BOT_SPOT_MAX_ROUTE_LEGS` legs.
 - **Audit.** Each route and each recorded decision is one fsync'd row in
@@ -110,6 +111,7 @@ bb bot-spot --evidence-only                 # decision context and quotable rout
 bb bot-spot --plan-only                     # one decision; execute_route only records plans
 bb bot-spot --submit-live --nonstop         # the nonstop trader, live (a tick every 15 s)
 bb bot-spot --mark-failed-route-reviewed    # clear the failed-route halt after review
+bb bot-spot --mark-sleeves-reviewed         # clear the sleeve_mismatch halt once the sleeves reconcile
 bb algo-backtest --end 2026-10-18T10:43:00Z   # the algorithm, offline backtest (no orders)
 ```
 
