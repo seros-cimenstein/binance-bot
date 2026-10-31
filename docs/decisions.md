@@ -188,3 +188,17 @@ tag value, market-wide risk-off). Answers through the ask tool:
   its rule says risk-off.
 - Sources: "Source-neutral, /biz/ only": the format accepts any source;
   only /biz/ is wired in this phase.
+
+## 2026-10-31 Phase 53 loop: laptop disk (`LOOP_TAGS.md` A1)
+
+The laptop's root disk had 32M free, so nothing could build. After the
+default cleanup (`cargo clean`, dangling docker images: 7.7G free), two
+answers through the ask tool, given by the loop manager for the operator:
+
+- "Pause scraper + uv clean + unused images": the laptop `biz watch` was
+  paused for `uv cache clean` (4.5GiB) and restarted; `docker image prune
+  -a` removed unused tagged images (4.98GB).
+- "Stale Playwright + Camoufox + puccinialin": removed Playwright 1208 and
+  1217 (newest 1223 kept), the Camoufox browser (re-download with `camoufox
+  fetch`) and `~/.cache/puccinialin`. Docker volumes, archive data and the
+  dashboard mirror kept. Result: 16G free with the debug build present.
