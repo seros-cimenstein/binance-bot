@@ -56,7 +56,11 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
 - The Phase 52 lead study on 2026-10-01..25: no /biz/ lead (`IMPLEMENTATION_PLAN.md`);
   `bb tag-scoreboard` (Phase 53 C6) replaces it.
 - The chosen rule's backtest: +18.42% on the tuning half, -11.18% on the
-  judging half (`reports/algo_backtest_2026-10-25.md`).
+  judging half (`reports/algo_backtest_2026-10-25.md`, the old /biz/ feed).
+- The same rule on the tags history (Phase 53 E1, candidates as live):
+  -21.05% over 2026-10-01T14:00Z..10-25T14:00Z, 15 round trips
+  (`reports/phase53/algo_backtest_2026-10-25.md`); the difference to the old
+  backtest is the candidate set only (OPERATIONS.md, "Algorithm backtest").
 - Practice run review 2026-10-30 09:41 UTC: one planned ETH buy in 42
   minutes; operator: "(a) Keep practising".
 
@@ -85,8 +89,10 @@ Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
    has share 0 and writes nothing), and bounded decision rows (D6: top 20
    candidates, market-wide signals, 10 loudest tags per kind, rule file
    sha256 in `run_config.rule`, 32 KB budget trimming detail, never the
-   decision). Next: backtest, dashboard, plan-only rollout. The pre-change binary
-   for E1's comparison is kept in `~/binance-bot-prechange/` (README there).
+   decision), and the backtest of the rule file (E1: every sleeve, candidates
+   from the tags history, edge rules walk-forward; the grid and `--biz-*`
+   flags are gone). Next: dashboard, plan-only rollout. The pre-change
+   binaries are kept in `~/binance-bot-prechange/` (README there).
    Then a tuning phase where the operator picks weights, rule style and the
    sleeve split.
 2. Live only on the operator's go (`CODEX.md`, rollout rule): back up

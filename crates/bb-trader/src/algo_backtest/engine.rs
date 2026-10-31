@@ -1,11 +1,16 @@
-//! The backtest engine: one USDT account per rule, stepped on a fixed clock over cached 1m
-//! bars.
+//! The backtest engine: one USDT account shared by the rule's sleeves, each with its own
+//! holdings (its sub-account), stepped on a fixed clock over cached 1m bars.
 //!
 //! - Every `step_minutes` the rule sees a point-in-time [`Snapshot`] (only bars closed
-//!   by the step time `T`) and its [`Book`], and returns [`Intent`]s.
-//! - Intents fill at the open of the 1m bar that opens at `T`: sells first, then buys. A buy
-//!   pays `price × (1 + slippage)` plus the fee; a sell receives `price × (1 − slippage)`
-//!   minus the fee. Buys under `min_notional` USDT are skipped.
+//!   by the step time `T`, and the candidates it names, [`StepRule::candidates`]) and the
+//!   [`Books`], and returns [`Intent`]s, each for one sleeve.
+//! - Intents fill at the open of the 1m bar that opens at `T`: sells first, then buys, in
+//!   the order given. A sell sells exactly the sleeve's own quantity of the asset (another
+//!   sleeve's holding of the same asset stays); a buy spends `equity_fraction` of the
+//!   step's portfolio value (cash plus every sleeve's holdings, before the step's orders),
+//!   capped by the cash left, as the live trader sizes a sleeve's buy (`cycle::Sizing`). A
+//!   buy pays `price × (1 + slippage)` plus the fee; a sell receives `price × (1 −
+//!   slippage)` minus the fee. Buys under `min_notional` USDT are skipped.
 //! - Equity (cash plus holdings at their last close, no exit costs) is marked at every 1m
 //!   close; open positions at the window end are marked the same way.
 //!
@@ -14,17 +19,19 @@
 use std::collections::BTreeMap;
 
 use super::data::{Bar, MINUTE_MS, Market};
-use crate::error::{Result, TraderError};
 use crate::book::{Book, CoinView, Holding, Snapshot};
+use crate::error::{Result, TraderError};
 
 /// The 20-coin liquid universe: the `bb entry-study` top 20 by quote volume on 2026-10-18
-/// (the Phase 47 basket). Fixed, so the backtest has survivorship bias.
+/// (the Phase 47 basket). The cache must cover it (with the gold proxies, [`COVERAGE`]);
+/// `bb tag-scoreboard` measures market-wide names against it.
 pub const LIQUID: [&str; 20] = [
     "BTC", "ETH", "ZEC", "SOL", "NEAR", "XRP", "BNB", "WLD", "HYPE", "DOGE", "SUI", "SAND", "TRX",
     "UNI", "ENA", "STRK", "TAO", "HBAR", "TIA", "LINK",
 ];
-/// Candidates per step, as the live `BOT_SPOT_CANDIDATE_LIMIT=10`.
-pub const CANDIDATE_LIMIT: usize = 10;
+/// Coins the cache must hold besides [`LIQUID`]: the gold proxies of the shipped proxy file
+/// (`config/proxies.json`), the defensive assets a risk-off sleeve moves to.
+pub const COVERAGE: [&str; 2] = ["PAXG", "XAUT"];
 const MINUTES_PER_YEAR: f64 = 525_600.0;
 const DAY_MINUTES: i64 = 1_440;
 
@@ -74,63 +81,80 @@ impl Config {
     }
 }
 
-impl Snapshot {
-    /// Build the view at `t` from bars closed by `t` only.
-    pub fn at(market: &Market, t: i64) -> Self {
-        let coins: BTreeMap<String, CoinView> = market
-            .iter()
-            .filter(|s| s.close_at(t).is_some())
-            .map(|s| {
-                let view = CoinView {
-                    ret_15m: s.return_pct(t, 15),
-                    ret_1h: s.return_pct(t, 60),
-                    ret_4h: s.return_pct(t, 240),
-                    ret_24h: s.return_pct(t, DAY_MINUTES),
-                    ret_7d: s.return_pct(t, 7 * DAY_MINUTES),
-                    quote_volume_24h: s.quote_volume(t, DAY_MINUTES),
-                };
-                (s.asset().to_string(), view)
-            })
-            .collect();
-        let mut liquid: Vec<(&str, f64)> = LIQUID
-            .iter()
-            .filter_map(|a| coins.get(*a).map(|c| (*a, c.quote_volume_24h)))
-            .collect();
-        liquid.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        let liquid_top = liquid
-            .into_iter()
-            .take(CANDIDATE_LIMIT)
-            .map(|(a, _)| a.to_string())
-            .collect();
-        Self {
-            t,
-            coins,
-            liquid_top,
-        }
-    }
+/// Every cached coin with a bar closing at `t`, from bars closed by `t` only.
+pub fn coins_at(market: &Market, t: i64) -> BTreeMap<String, CoinView> {
+    market
+        .iter()
+        .filter(|s| s.close_at(t).is_some())
+        .map(|s| {
+            let view = CoinView {
+                ret_15m: s.return_pct(t, 15),
+                ret_1h: s.return_pct(t, 60),
+                ret_4h: s.return_pct(t, 240),
+                ret_24h: s.return_pct(t, DAY_MINUTES),
+                ret_7d: s.return_pct(t, 7 * DAY_MINUTES),
+                quote_volume_24h: s.quote_volume(t, DAY_MINUTES),
+            };
+            (s.asset().to_string(), view)
+        })
+        .collect()
 }
 
-/// What a rule asks for at a step.
+/// What a rule asks for at a step, for one sleeve.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Intent {
-    /// Spend `equity_fraction` of the step's equity (capped by cash) on `asset`.
-    Buy { asset: String, equity_fraction: f64 },
-    /// Sell all of `asset`; `reason` goes to the trade list.
-    Sell { asset: String, reason: &'static str },
+    /// Spend `equity_fraction` of the step's portfolio value (capped by cash) on `asset`.
+    Buy {
+        sleeve: String,
+        asset: String,
+        equity_fraction: f64,
+    },
+    /// Sell the sleeve's whole holding of `asset`; `reason` goes to the trade list.
+    Sell {
+        sleeve: String,
+        asset: String,
+        reason: &'static str,
+    },
+}
+
+/// The account as a rule sees it at a step: the shared cash, the portfolio value and each
+/// sleeve's holdings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Books {
+    pub t: i64,
+    pub cash: f64,
+    pub equity: f64,
+    /// Sleeve → asset → holding.
+    pub sleeves: BTreeMap<String, BTreeMap<String, Holding>>,
+}
+
+impl Books {
+    /// The [`Book`] one sleeve decides on: the shared cash and portfolio value, its own
+    /// holdings.
+    pub fn sleeve(&self, name: &str) -> Book {
+        Book {
+            t: self.t,
+            cash: self.cash,
+            equity: self.equity,
+            holdings: self.sleeves.get(name).cloned().unwrap_or_default(),
+        }
+    }
 }
 
 /// A deterministic trading rule set.
 pub trait StepRule {
     fn name(&self) -> &str;
-    /// Intents at `snap.t`. Must use only `snap` and `book`.
-    fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent>;
+    /// The coins the rule may buy at `t`, in order, given the coins priced at `t`.
+    fn candidates(&mut self, t: i64, coins: &BTreeMap<String, CoinView>) -> Vec<String>;
+    /// Intents at `snap.t`. Must use only `snap` and `books`.
+    fn decide(&mut self, snap: &Snapshot, books: &Books) -> Vec<Intent>;
     /// Lines for the report about how the rule behaved.
     fn notes(&self) -> Vec<String> {
         Vec::new()
     }
-    /// A per-step CSV the report writes next to the trades (e.g. `biz_algo`'s scores).
-    fn trace(&self) -> Option<Trace> {
-        None
+    /// Per-sleeve per-step CSVs the report writes next to the trades.
+    fn traces(&self) -> Vec<(String, Trace)> {
+        Vec::new()
     }
 }
 
@@ -141,9 +165,10 @@ pub struct Trace {
     pub rows: Vec<String>,
 }
 
-/// One round trip (or a position still open at the window end).
+/// One round trip (or a position still open at the window end) of one sleeve.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trade {
+    pub sleeve: String,
     pub asset: String,
     pub entry_ms: i64,
     /// Buy fill price (open plus slippage).
@@ -162,6 +187,21 @@ pub struct Trade {
     /// Sell reasons in order, joined by `+` (`open_at_end` when still held).
     pub reason: String,
     pub open_at_end: bool,
+}
+
+/// One sleeve's part of a run: its trades' totals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SleeveResult {
+    pub name: String,
+    /// Net of its trades (closed and marked open), after fees and slippage.
+    pub net_pnl_usdt: f64,
+    pub round_trips: usize,
+    pub wins: usize,
+    pub win_rate_pct: f64,
+    pub fees_usdt: f64,
+    /// Positions still open at the window end.
+    pub open: usize,
+    pub skipped_orders: usize,
 }
 
 /// Result of one rule over the window.
@@ -184,11 +224,13 @@ pub struct RunResult {
     /// `buy_no_bar`, `sell_no_bar`, `unknown_asset`).
     pub skipped_orders: usize,
     pub skip_reasons: BTreeMap<&'static str, usize>,
+    /// Every sleeve that traded or was asked to, by name.
+    pub sleeves: Vec<SleeveResult>,
     pub trades: Vec<Trade>,
     /// [`StepRule::notes`] at the end of the run.
     pub notes: Vec<String>,
-    /// [`StepRule::trace`] at the end of the run.
-    pub trace: Option<Trace>,
+    /// [`StepRule::traces`] at the end of the run.
+    pub traces: Vec<(String, Trace)>,
 }
 
 struct Position {
@@ -206,18 +248,23 @@ struct Position {
     reasons: Vec<&'static str>,
 }
 
+/// A position's key: (sleeve, asset).
+type Key = (String, String);
+
 /// One rule's account, advanced step by step and minute by minute.
 pub struct Account {
     rule: Box<dyn StepRule>,
     cfg: Config,
     cash: f64,
-    positions: BTreeMap<String, Position>,
+    positions: BTreeMap<Key, Position>,
     trades: Vec<Trade>,
     step_equity: Vec<(i64, f64)>,
     peak_equity: f64,
     max_drawdown_pct: f64,
     steps: usize,
     skips: BTreeMap<&'static str, usize>,
+    /// Skipped orders per sleeve.
+    sleeve_skips: BTreeMap<String, usize>,
 }
 
 impl Account {
@@ -233,6 +280,7 @@ impl Account {
             max_drawdown_pct: 0.0,
             steps: 0,
             skips: BTreeMap::new(),
+            sleeve_skips: BTreeMap::new(),
         }
     }
 
@@ -240,7 +288,7 @@ impl Account {
         self.rule.name()
     }
 
-    /// Cash plus holdings at their last close.
+    /// Cash plus every sleeve's holdings at their last close.
     pub fn equity(&self) -> f64 {
         self.cash
             + self
@@ -255,50 +303,64 @@ impl Account {
         &self.step_equity
     }
 
-    pub fn book(&self, t: i64) -> Book {
-        Book {
+    pub fn books(&self, t: i64) -> Books {
+        let mut sleeves: BTreeMap<String, BTreeMap<String, Holding>> = BTreeMap::new();
+        for ((sleeve, asset), p) in &self.positions {
+            let holding = Holding {
+                qty: p.qty,
+                value: p.qty * p.last_close,
+                entry: Some((p.entry_price, p.entry_ms)),
+            };
+            sleeves
+                .entry(sleeve.clone())
+                .or_default()
+                .insert(asset.clone(), holding);
+        }
+        Books {
             t,
             cash: self.cash,
             equity: self.equity(),
-            holdings: self
-                .positions
-                .iter()
-                .map(|(asset, p)| {
-                    let holding = Holding {
-                        qty: p.qty,
-                        value: p.qty * p.last_close,
-                        entry: Some((p.entry_price, p.entry_ms)),
-                    };
-                    (asset.clone(), holding)
-                })
-                .collect(),
+            sleeves,
         }
     }
 
-    /// Run the step at `snap.t`: record equity, ask the rule, fill its intents at the
-    /// open of the bar that opens at `snap.t`. Returns the intents (for tests and votes).
-    pub fn step(&mut self, market: &Market, snap: &Snapshot) -> Vec<Intent> {
-        let t = snap.t;
+    /// Run the step at `t`: record equity, ask the rule for its candidates and intents,
+    /// fill them at the open of the bar that opens at `t`. Returns the snapshot and the
+    /// intents (for tests).
+    pub fn step(&mut self, market: &Market, t: i64) -> (Snapshot, Vec<Intent>) {
         self.steps += 1;
         let equity = self.equity();
         self.step_equity.push((t, equity));
-        let book = self.book(t);
-        let intents = self.rule.decide(snap, &book);
+        let coins = coins_at(market, t);
+        let candidates = self.rule.candidates(t, &coins);
+        let snap = Snapshot {
+            t,
+            coins,
+            candidates,
+        };
+        let books = self.books(t);
+        let intents = self.rule.decide(&snap, &books);
         for intent in &intents {
-            if let Intent::Sell { asset, reason } = intent {
-                self.sell_intent(market, asset, t, reason);
+            if let Intent::Sell {
+                sleeve,
+                asset,
+                reason,
+            } = intent
+            {
+                self.sell_intent(market, sleeve, asset, t, reason);
             }
         }
         for intent in &intents {
             if let Intent::Buy {
+                sleeve,
                 asset,
                 equity_fraction,
             } = intent
             {
-                self.buy(market, asset, t, equity * equity_fraction);
+                self.buy(market, sleeve, asset, t, equity * equity_fraction);
             }
         }
-        intents
+        (snap, intents)
     }
 
     fn fill_bar<'m>(market: &'m Market, asset: &str, t: i64) -> Option<&'m Bar> {
@@ -308,41 +370,50 @@ impl Account {
             .filter(|bar| bar.open_ms == t)
     }
 
-    fn sell_intent(&mut self, market: &Market, asset: &str, t: i64, reason: &'static str) {
-        if !self.positions.contains_key(asset) {
+    fn sell_intent(
+        &mut self,
+        market: &Market,
+        sleeve: &str,
+        asset: &str,
+        t: i64,
+        reason: &'static str,
+    ) {
+        let key = (sleeve.to_owned(), asset.to_owned());
+        if !self.positions.contains_key(&key) {
             return;
         }
         let Some(bar) = Self::fill_bar(market, asset, t) else {
-            self.skip("sell_no_bar");
+            self.skip(sleeve, "sell_no_bar");
             return;
         };
         let price = bar.open;
-        if let Some(position) = self.positions.get_mut(asset) {
+        if let Some(position) = self.positions.get_mut(&key) {
             let qty = position.qty;
             Self::sell_qty(&mut self.cash, &self.cfg, position, qty, price, t, reason);
         }
-        self.close_if_done(asset);
+        self.close_if_done(&key);
     }
 
-    fn buy(&mut self, market: &Market, asset: &str, t: i64, wanted: f64) {
-        if self.positions.contains_key(asset) {
+    fn buy(&mut self, market: &Market, sleeve: &str, asset: &str, t: i64, wanted: f64) {
+        let key = (sleeve.to_owned(), asset.to_owned());
+        if self.positions.contains_key(&key) {
             return;
         }
         let notional = wanted.min(self.cash);
         if market.get(asset).is_none() {
-            self.skip("unknown_asset");
+            self.skip(sleeve, "unknown_asset");
             return;
         }
         let Some(bar) = Self::fill_bar(market, asset, t) else {
-            self.skip("buy_no_bar");
+            self.skip(sleeve, "buy_no_bar");
             return;
         };
         if notional <= 0.0 {
-            self.skip("no_cash");
+            self.skip(sleeve, "no_cash");
             return;
         }
         if notional < self.cfg.min_notional {
-            self.skip("under_min_notional");
+            self.skip(sleeve, "under_min_notional");
             return;
         }
         let fill = bar.open * (1.0 + self.cfg.slippage);
@@ -350,7 +421,7 @@ impl Account {
         let fee = qty * fill * self.cfg.fee_rate;
         self.cash -= notional;
         self.positions.insert(
-            asset.to_string(),
+            key,
             Position {
                 qty,
                 original_qty: qty,
@@ -368,8 +439,9 @@ impl Account {
         );
     }
 
-    fn skip(&mut self, reason: &'static str) {
+    fn skip(&mut self, sleeve: &str, reason: &'static str) {
         *self.skips.entry(reason).or_default() += 1;
+        *self.sleeve_skips.entry(sleeve.to_owned()).or_default() += 1;
     }
 
     fn sell_qty(
@@ -400,18 +472,18 @@ impl Account {
         }
     }
 
-    fn close_if_done(&mut self, asset: &str) {
+    fn close_if_done(&mut self, key: &Key) {
         let done = self
             .positions
-            .get(asset)
+            .get(key)
             .is_some_and(|p| p.qty <= p.original_qty * 1e-12);
-        if done && let Some(mut position) = self.positions.remove(asset) {
+        if done && let Some(mut position) = self.positions.remove(key) {
             position.qty = 0.0;
-            self.trades.push(Self::trade(asset, &position, false));
+            self.trades.push(Self::trade(key, &position, false));
         }
     }
 
-    fn trade(asset: &str, p: &Position, open: bool) -> Trade {
+    fn trade((sleeve, asset): &Key, p: &Position, open: bool) -> Trade {
         let marked = if open { p.qty * p.last_close } else { 0.0 };
         let proceeds = p.proceeds + marked;
         let exit_price = if open || p.sold_qty <= 0.0 {
@@ -427,7 +499,8 @@ impl Account {
             p.reasons.join("+")
         };
         Trade {
-            asset: asset.to_string(),
+            sleeve: sleeve.clone(),
+            asset: asset.clone(),
             entry_ms: p.entry_ms,
             entry_price: p.entry_price,
             exit_ms: p.last_ms,
@@ -444,19 +517,19 @@ impl Account {
 
     /// Process the 1m bar that opens at `m`: the mark at its close.
     pub fn minute(&mut self, market: &Market, m: i64) {
-        let assets: Vec<String> = self.positions.keys().cloned().collect();
-        for asset in assets {
-            let Some(bar) = Self::fill_bar(market, &asset, m) else {
+        let keys: Vec<Key> = self.positions.keys().cloned().collect();
+        for key in keys {
+            let Some(bar) = Self::fill_bar(market, &key.1, m) else {
                 continue;
             };
-            let Some(position) = self.positions.get_mut(&asset) else {
+            let Some(position) = self.positions.get_mut(&key) else {
                 continue;
             };
             position.last_close = bar.close;
             if position.qty > 0.0 {
                 position.last_ms = bar.open_ms + MINUTE_MS;
             }
-            self.close_if_done(&asset);
+            self.close_if_done(&key);
         }
         let equity = self.equity();
         self.peak_equity = self.peak_equity.max(equity);
@@ -471,8 +544,8 @@ impl Account {
         let open: Vec<Trade> = self
             .positions
             .iter()
-            .map(|(asset, p)| {
-                let mut trade = Self::trade(asset, p, true);
+            .map(|(key, p)| {
+                let mut trade = Self::trade(key, p, true);
                 trade.exit_ms = end_ms;
                 trade
             })
@@ -486,10 +559,12 @@ impl Account {
         trades.sort_by(|a, b| {
             a.entry_ms
                 .cmp(&b.entry_ms)
+                .then_with(|| a.sleeve.cmp(&b.sleeve))
                 .then_with(|| a.asset.cmp(&b.asset))
         });
         let start = self.cfg.starting_balance;
         let equities: Vec<f64> = self.step_equity.iter().map(|(_, e)| *e).collect();
+        let sleeves = sleeve_results(&trades, &self.sleeve_skips);
         RunResult {
             name: self.rule.name().to_string(),
             starting_balance: start,
@@ -499,21 +574,55 @@ impl Account {
             max_drawdown_pct: self.max_drawdown_pct,
             round_trips: closed,
             wins,
-            win_rate_pct: if closed == 0 {
-                0.0
-            } else {
-                wins as f64 / closed as f64 * 100.0
-            },
+            win_rate_pct: rate(wins, closed),
             sharpe: sharpe(&equities, self.cfg.step_minutes),
             fees_usdt: trades.iter().map(|t| t.fees_usdt).sum(),
             steps: self.steps,
             skipped_orders: self.skips.values().sum(),
             skip_reasons: self.skips,
+            sleeves,
             trades,
             notes: self.rule.notes(),
-            trace: self.rule.trace(),
+            traces: self.rule.traces(),
         }
     }
+}
+
+fn rate(wins: usize, closed: usize) -> f64 {
+    if closed == 0 {
+        0.0
+    } else {
+        wins as f64 / closed as f64 * 100.0
+    }
+}
+
+/// Per sleeve: the totals of its trades and its skipped orders.
+fn sleeve_results(trades: &[Trade], skips: &BTreeMap<String, usize>) -> Vec<SleeveResult> {
+    let mut names: Vec<&str> = trades.iter().map(|t| t.sleeve.as_str()).collect();
+    names.extend(skips.keys().map(String::as_str));
+    names.sort_unstable();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| {
+            let own: Vec<&Trade> = trades.iter().filter(|t| t.sleeve == name).collect();
+            let closed = own.iter().filter(|t| !t.open_at_end).count();
+            let wins = own
+                .iter()
+                .filter(|t| !t.open_at_end && t.net_pnl_usdt > 0.0)
+                .count();
+            SleeveResult {
+                name: name.to_owned(),
+                net_pnl_usdt: own.iter().map(|t| t.net_pnl_usdt).sum(),
+                round_trips: closed,
+                wins,
+                win_rate_pct: rate(wins, closed),
+                fees_usdt: own.iter().map(|t| t.fees_usdt).sum(),
+                open: own.len() - closed,
+                skipped_orders: skips.get(name).copied().unwrap_or(0),
+            }
+        })
+        .collect()
 }
 
 /// Largest peak-to-trough fall of an equity path, in percent of the peak.
@@ -557,8 +666,7 @@ pub fn run(market: &Market, cfg: &Config, rule: Box<dyn StepRule>) -> Result<Run
     let mut m = cfg.start_ms;
     while m < cfg.end_ms {
         if cfg.is_step(m) {
-            let snap = Snapshot::at(market, m);
-            account.step(market, &snap);
+            account.step(market, m);
         }
         account.minute(market, m);
         m += MINUTE_MS;
@@ -612,7 +720,10 @@ pub(crate) mod tests {
         fn name(&self) -> &str {
             "script"
         }
-        fn decide(&mut self, snap: &Snapshot, _book: &Book) -> Vec<Intent> {
+        fn candidates(&mut self, _t: i64, _coins: &BTreeMap<String, CoinView>) -> Vec<String> {
+            Vec::new()
+        }
+        fn decide(&mut self, snap: &Snapshot, _books: &Books) -> Vec<Intent> {
             self.script
                 .iter()
                 .filter(|(t, _)| *t == snap.t)
@@ -621,18 +732,28 @@ pub(crate) mod tests {
         }
     }
 
-    fn buy(asset: &str, fraction: f64) -> Intent {
+    fn buy_for(sleeve: &str, asset: &str, fraction: f64) -> Intent {
         Intent::Buy {
+            sleeve: sleeve.into(),
             asset: asset.into(),
             equity_fraction: fraction,
         }
     }
 
-    fn sell(asset: &str) -> Intent {
+    fn sell_for(sleeve: &str, asset: &str) -> Intent {
         Intent::Sell {
+            sleeve: sleeve.into(),
             asset: asset.into(),
             reason: "rule",
         }
+    }
+
+    fn buy(asset: &str, fraction: f64) -> Intent {
+        buy_for("fast", asset, fraction)
+    }
+
+    fn sell(asset: &str) -> Intent {
+        sell_for("fast", asset)
     }
 
     fn near(a: f64, b: f64, tol: f64) -> bool {
@@ -666,7 +787,10 @@ pub(crate) mod tests {
         assert!(near(r.fees_usdt, fees, 1e-9));
         assert_eq!((r.round_trips, r.wins), (1, 1));
         assert!(near(r.win_rate_pct, 100.0, 1e-12));
-        assert_eq!(r.trades[0].reason, "rule");
+        assert_eq!(
+            (r.trades[0].reason.as_str(), r.trades[0].sleeve.as_str()),
+            ("rule", "fast")
+        );
         assert_eq!(r.steps, 2);
     }
 
@@ -680,13 +804,111 @@ pub(crate) mod tests {
         let r = run(&market, &c, Box::new(tiny)).unwrap();
         assert_eq!((r.trades.len(), r.skipped_orders), (0, 1));
         assert_eq!(r.skip_reasons.get("under_min_notional"), Some(&1));
+        assert_eq!(
+            (r.sleeves[0].name.as_str(), r.sleeves[0].skipped_orders),
+            ("fast", 1)
+        );
         // The first buy spends all cash, so the second one in the same step has none.
         let all_in = Script {
-            script: vec![(c.start_ms, vec![buy("ETH", 1.0), buy("SOL", 1.0)])],
+            script: vec![(
+                c.start_ms,
+                vec![buy("ETH", 1.0), buy_for("core", "SOL", 1.0)],
+            )],
         };
         let r = run(&market, &c, Box::new(all_in)).unwrap();
         assert_eq!(r.trades.len(), 1);
         assert_eq!(r.skip_reasons.get("no_cash"), Some(&1));
+        let skipped: Vec<(&str, usize)> = r
+            .sleeves
+            .iter()
+            .map(|s| (s.name.as_str(), s.skipped_orders))
+            .collect();
+        assert_eq!(skipped, [("core", 1), ("fast", 0)]);
+    }
+
+    #[test]
+    fn two_sleeves_hold_the_same_asset_apart_and_sell_only_their_own() {
+        // ETH 100, then 120 from minute 85, then 90 from minute 105.
+        let market = Market::from_series([coin("ETH", 200, |m| match m {
+            0..85 => 100.0,
+            85..105 => 120.0,
+            _ => 90.0,
+        })]);
+        let c = cfg(60, 140, 20);
+        let rule = Script {
+            script: vec![
+                // fast spends 60% of the portfolio, core 40%: both on ETH at 100.
+                (
+                    c.start_ms,
+                    vec![buy_for("fast", "ETH", 0.6), buy_for("core", "ETH", 0.4)],
+                ),
+                // core sells at 120 (its own 40%); fast keeps its ETH.
+                (c.start_ms + 40 * MINUTE_MS, vec![sell_for("core", "ETH")]),
+                // core buys again at 90 with 40% of the portfolio then; a second buy by
+                // fast is ignored (it already holds ETH).
+                (
+                    c.start_ms + 60 * MINUTE_MS,
+                    vec![buy_for("core", "ETH", 0.4), buy_for("fast", "ETH", 0.6)],
+                ),
+            ],
+        };
+        let mut account = Account::new(Box::new(rule), c);
+        let mut seen = Vec::new();
+        let mut m = c.start_ms;
+        while m < c.end_ms {
+            if c.is_step(m) {
+                account.step(&market, m);
+                seen.push(account.books(m));
+            }
+            account.minute(&market, m);
+            m += MINUTE_MS;
+        }
+        let fill = 100.0 * 1.0005;
+        let qty = |spend: f64, price: f64| spend / (price * 1.0005 * 1.00075);
+        let first = &seen[0].sleeves;
+        assert!(near(first["fast"]["ETH"].qty, qty(600.0, 100.0), 1e-9));
+        assert!(near(first["core"]["ETH"].qty, qty(400.0, 100.0), 1e-9));
+        assert_eq!(first["core"]["ETH"].entry, Some((fill, c.start_ms)));
+        // After core's sale: fast's quantity is untouched.
+        let sold = &seen[2];
+        assert!(!sold.sleeves.contains_key("core"));
+        assert!(near(
+            sold.sleeves["fast"]["ETH"].qty,
+            qty(600.0, 100.0),
+            1e-9
+        ));
+        let r = account.finish(c.end_ms);
+        let core: Vec<&Trade> = r.trades.iter().filter(|t| t.sleeve == "core").collect();
+        assert_eq!(core.len(), 2);
+        assert!(!core[0].open_at_end && core[1].open_at_end);
+        assert!(near(core[0].qty, qty(400.0, 100.0), 1e-9));
+        // core's second buy: 40% of the portfolio at the step (cash plus fast's ETH at 90).
+        let fast_qty = qty(600.0, 100.0);
+        let cash = 1000.0 - 600.0 - 400.0 + qty(400.0, 100.0) * 120.0 * 0.9995 * 0.99925;
+        let equity = cash + fast_qty * 90.0;
+        assert!(
+            near(core[1].cost_usdt, 0.4 * equity, 1e-9),
+            "{} vs {}",
+            core[1].cost_usdt,
+            0.4 * equity
+        );
+        let fast: Vec<&Trade> = r.trades.iter().filter(|t| t.sleeve == "fast").collect();
+        assert_eq!(fast.len(), 1);
+        assert!(fast[0].open_at_end && near(fast[0].qty, fast_qty, 1e-9));
+        // Per sleeve: core closed one trade at a profit; the trades sum to the portfolio.
+        let by: BTreeMap<&str, &SleeveResult> =
+            r.sleeves.iter().map(|s| (s.name.as_str(), s)).collect();
+        assert_eq!(
+            (by["core"].round_trips, by["core"].wins, by["core"].open),
+            (1, 1, 1)
+        );
+        assert_eq!((by["fast"].round_trips, by["fast"].open), (0, 1));
+        let sum: f64 = r.sleeves.iter().map(|s| s.net_pnl_usdt).sum();
+        assert!(
+            near(sum, r.net_pnl_usdt, 1e-9),
+            "{sum} vs {}",
+            r.net_pnl_usdt
+        );
     }
 
     #[test]
@@ -727,7 +949,11 @@ pub(crate) mod tests {
         fn name(&self) -> &str {
             "recorder"
         }
-        fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+        fn candidates(&mut self, _t: i64, coins: &BTreeMap<String, CoinView>) -> Vec<String> {
+            coins.keys().cloned().collect()
+        }
+        fn decide(&mut self, snap: &Snapshot, books: &Books) -> Vec<Intent> {
+            let book = books.sleeve("fast");
             let mut intents = Vec::new();
             for asset in book.holdings.keys() {
                 if snap
@@ -740,7 +966,7 @@ pub(crate) mod tests {
             }
             if book.is_flat()
                 && let Some(best) = snap
-                    .liquid_top
+                    .candidates
                     .iter()
                     .filter_map(|a| Some((a, snap.coin(a)?.ret_1h?)))
                     .max_by(|a, b| a.1.total_cmp(&b.1))
@@ -810,11 +1036,19 @@ pub(crate) mod tests {
             fn name(&self) -> &str {
                 "churn"
             }
-            fn decide(&mut self, snap: &Snapshot, book: &Book) -> Vec<Intent> {
+            fn candidates(&mut self, t: i64, coins: &BTreeMap<String, CoinView>) -> Vec<String> {
+                self.inner.candidates(t, coins)
+            }
+            fn decide(&mut self, snap: &Snapshot, books: &Books) -> Vec<Intent> {
                 if snap.t == self.last_step {
-                    return book.holdings.keys().map(|a| sell(a)).collect();
+                    return books
+                        .sleeve("fast")
+                        .holdings
+                        .keys()
+                        .map(|a| sell(a))
+                        .collect();
                 }
-                self.inner.decide(snap, book)
+                self.inner.decide(snap, books)
             }
         }
         let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -852,47 +1086,28 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn snapshot_ranks_the_liquid_top_by_quote_volume_and_skips_missing_coins() {
-        let thin = coin("ETH", 200, |_| 10.0);
-        let big = Series::new(
-            "ETH",
-            thin.bars()
-                .iter()
-                .map(|b| Bar {
-                    volume: 1000.0,
-                    ..*b
-                })
-                .collect(),
-        );
-        let market = Market::from_series([
-            coin("BTC", 200, |_| 100.0),
-            big,
-            coin("SOL", 100, |_| 20.0),
-            coin("INJ", 200, |_| 1.0),
-        ]);
-        let snap = Snapshot::at(&market, T0 + 150 * MINUTE_MS);
-        // ETH 10 × 1000 per minute beats BTC 100 × 1; SOL has no bar at 150; INJ is not liquid.
-        assert_eq!(snap.liquid_top, vec!["ETH", "BTC"]);
-        assert!(snap.coin("INJ").is_some());
-        assert!(snap.coin("SOL").is_none());
+    fn the_coins_at_a_step_are_those_with_a_bar_closing_then() {
+        let market = Market::from_series([coin("BTC", 200, |_| 100.0), coin("SOL", 100, |_| 20.0)]);
+        let coins = coins_at(&market, T0 + 150 * MINUTE_MS);
+        // SOL has no bar at 150: left out, not forward filled.
+        assert_eq!(coins.keys().collect::<Vec<_>>(), ["BTC"]);
     }
 
     #[test]
     fn snapshot_returns_cover_24h_and_7d_from_the_1m_closes() {
         let market = Market::from_series([coin("BTC", 10_200, |m| 100.0 + m as f64)]);
         // At minute 1500 the close is bar 1499's (1599); 24h earlier it is bar 59's (159).
-        let snap = Snapshot::at(&market, T0 + 1500 * MINUTE_MS);
-        let btc = snap.coin("BTC").unwrap();
+        let coins = coins_at(&market, T0 + 1500 * MINUTE_MS);
+        let btc = &coins["BTC"];
         assert!((btc.ret_24h.unwrap() - (1599.0 / 159.0 - 1.0) * 100.0).abs() < 1e-9);
         assert!((btc.ret_1h.unwrap() - (1599.0 / 1539.0 - 1.0) * 100.0).abs() < 1e-9);
         // Less than a week of bars: the 7d return is unknown, not 0.
         assert_eq!(btc.ret_7d, None);
         // At minute 10 100 the close is 10 199; 7 days (10 080 minutes) earlier, bar 19's 119.
-        let week = Snapshot::at(&market, T0 + 10_100 * MINUTE_MS);
-        let btc = week.coin("BTC").unwrap();
-        assert!((btc.ret_7d.unwrap() - (10_199.0 / 119.0 - 1.0) * 100.0).abs() < 1e-9);
+        let week = coins_at(&market, T0 + 10_100 * MINUTE_MS);
+        assert!((week["BTC"].ret_7d.unwrap() - (10_199.0 / 119.0 - 1.0) * 100.0).abs() < 1e-9);
         // Less than a day of bars: the 24h return is unknown too.
-        let early = Snapshot::at(&market, T0 + 1000 * MINUTE_MS);
-        assert_eq!(early.coin("BTC").unwrap().ret_24h, None);
+        let early = coins_at(&market, T0 + 1000 * MINUTE_MS);
+        assert_eq!(early["BTC"].ret_24h, None);
     }
 }

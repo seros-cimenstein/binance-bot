@@ -29,8 +29,9 @@ pub struct CoinView {
 pub struct Snapshot {
     pub t: i64,
     pub coins: BTreeMap<String, CoinView>,
-    /// The [`LIQUID`] coins present at `T`, top [`CANDIDATE_LIMIT`] by 24h quote volume.
-    pub liquid_top: Vec<String>,
+    /// The coins the rule may buy, in order (live and in the backtest: the tradable assets
+    /// the visible tags feed's live asset tags reach, directly or through a proxy).
+    pub candidates: Vec<String>,
 }
 
 impl Snapshot {
@@ -39,7 +40,7 @@ impl Snapshot {
         Self {
             t,
             coins,
-            liquid_top: candidates,
+            candidates,
         }
     }
 
@@ -171,7 +172,7 @@ pub mod tests {
                     (a.to_string(), view)
                 })
                 .collect(),
-            liquid_top: rows.iter().map(|r| r.0.to_string()).collect(),
+            candidates: rows.iter().map(|r| r.0.to_string()).collect(),
         }
     }
 

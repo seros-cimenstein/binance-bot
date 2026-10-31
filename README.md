@@ -84,9 +84,9 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
 - **No added trading limits.** No stop-loss, take-profit, cooldown or caps
   beyond the rule the operator chose. Old guardrail env vars are ignored with
   one warning listing them.
-- **Backtest.** `bb algo-backtest --tags-history <history dir>` tunes the
-  weights on the older half of the window and judges them on the newer
-  (OPERATIONS.md, "Algorithm backtest"). The compose profile
+- **Backtest.** `bb algo-backtest --rule <rule file> --tags-history <history
+  dir>` runs the rule file's sleeves over the window as the trader would, with
+  candidates from the tags history (OPERATIONS.md, "Algorithm backtest"). The compose profile
   `paper` runs the nonstop trader plan-only.
 - **Rule in force:** `config/rules/algo-2026-10-29.json` (fast sleeve, share 1:
   `talk.6h` 0, `stance.6h` 1, `momentum.1h` 1, buy at +0.5, sell below -0.5,
@@ -122,12 +122,13 @@ bb algo-backtest --end 2026-10-18T10:43:00Z   # the algorithm, offline backtest 
 ```
 
 `bb algo-backtest` is research only and runs offline: it reads only the
-cached 1m candles in `--cache-dir` (default `data/entry-study-cache`), makes
-no network call, has no order path and never touches the live trader. It
-tunes the algorithm (`biz_algo`) on the older half of `--days` (60) before
-`--end` and judges it on the newer half. It writes
-`reports/algo_backtest_<end-date>.md`, `.csv`, `_trades.csv` and
-`_biz_algo@<half>_trace.csv`. See OPERATIONS.md, "Algorithm backtest".
+cached 1m candles in `--cache-dir` (default `data/entry-study-cache`), the tags
+history and the rule file, makes no network call, has no order path and never
+touches the live trader. It runs every sleeve of `--rule` over `--days` (24)
+before `--end` (an edge rule walk-forward on `--scoreboards`) and writes
+`reports/algo_backtest_<end-date>.md`, `.csv` (portfolio and per sleeve),
+`_trades.csv` and `_<sleeve>_trace.csv`. See OPERATIONS.md, "Algorithm
+backtest".
 
 ## Dashboard (`cryptobot-gui`)
 

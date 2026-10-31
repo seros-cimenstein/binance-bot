@@ -1,6 +1,6 @@
 //! The trader's algorithm: buy, sell or hold from the operator's rule file, no LLM.
 //!
-//! One plain function, [`decide`], used by the `biz_algo` backtest rule and by every
+//! One plain function, [`decide`], used by the backtest (`algo_backtest::rule`) and by every
 //! trader cycle (`Runtime::algo_verdict`). It reads the step's market
 //! [`Snapshot`], the account [`Book`] and the tags feed visible at that time
 //! ([`crate::tags`]), and scores each coin with a sleeve of the operator's rule
@@ -26,7 +26,7 @@
 //! sold; with nothing held after that, the candidate (the step's buy candidates in order;
 //! live: the feed's asset tags with a USDT market) with the highest score is bought when
 //! its score reaches `buy_above` (live, for the sleeve's share of the portfolio:
-//! `cycle::Sizing`; the backtest buys with all cash). One coin at a time per sleeve; a sleeve's `horizon` filters its candidates and below
+//! `cycle::Sizing`; the backtest sizes the same way). One coin at a time per sleeve; a sleeve's `horizon` filters its candidates and below
 //! its `risk_off_below` it moves to a defensive asset ([`decide`]); no stop-loss,
 //! take-profit or exit plan, only the score.
 
@@ -46,7 +46,7 @@ pub struct Inputs<'a> {
     /// Asset tags of the tags feed visible at `snap.t`, by asset; `None` without a feed.
     pub tags: Option<&'a BTreeMap<String, Windows>>,
     /// The whole visible feed and its reach, for the tag and market names; `None` without
-    /// a feed and in the backtest (its history keeps the asset windows only).
+    /// a feed.
     pub feed: Option<(&'a Feed, &'a Reach)>,
 }
 
@@ -273,7 +273,7 @@ pub fn decide(inputs: &Inputs<'_>, sleeve: &Sleeve) -> Verdict {
     }
     let mut best: Option<(String, Scored)> = None;
     if kept == 0 {
-        for asset in &inputs.snap.liquid_top {
+        for asset in &inputs.snap.candidates {
             if inputs.snap.coin(asset).is_none() || !fits(inputs, sleeve, asset) {
                 continue;
             }
@@ -441,7 +441,7 @@ mod tests {
         }
         let mut best: Option<(String, f64)> = None;
         if kept == 0 {
-            for asset in &inputs.snap.liquid_top {
+            for asset in &inputs.snap.candidates {
                 if inputs.snap.coin(asset).is_none() {
                     continue;
                 }

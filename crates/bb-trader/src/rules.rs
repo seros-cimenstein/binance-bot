@@ -342,8 +342,9 @@ impl Rule {
         Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// The first sleeve holding a share: the sleeve the offline backtest runs (single-sleeve
-    /// until Phase 53 E1). The live trader decides every active sleeve ([`Sleeve::active`]).
+    /// The first sleeve holding a share: the sleeve `--evidence-only` reports and the one a
+    /// lone pre-sleeve holding migrates to. The trader and the backtest decide every active
+    /// sleeve ([`Sleeve::active`]).
     pub fn trading_sleeve(&self) -> &Sleeve {
         self.sleeves
             .iter()

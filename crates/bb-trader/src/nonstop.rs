@@ -907,7 +907,7 @@ impl Nonstop {
         let verdict = decide(&inputs, sleeve_ref);
         let scorer = crate::decider::Scorer::new(inputs, sleeve_ref);
         let mut scored: Vec<(f64, serde_json::Value)> = step
-            .liquid_top
+            .candidates
             .iter()
             .filter(|asset| !held.contains(*asset))
             .chain(&held)

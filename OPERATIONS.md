@@ -522,56 +522,74 @@ bb entry-study --audit docker-data/bot-spot-decisions.jsonl \
 
 #### Algorithm backtest
 
-`bb algo-backtest` backtests the trader's algorithm (`crate::decider`, as
-`biz_algo`) on the same 1m cache. It is offline and research only: it reads
-only `--cache-dir` (and `--tags-history`), never fetches or calls Binance, has
-no order path, and leaves the live `bot-spot` untouched. If the cache is
-missing a liquid coin, ends before `--end`, or lacks 7 days of history before
-the window start (the first step's 7d move), it exits 1 with `missing cache`.
-Each step's 1h, 24h and 7d moves come from the cached 1m closes.
+`bb algo-backtest` runs the operator's rule file (`crate::rules`, as the live
+trader reads it) over the same 1m cache and the tags feed history, every
+sleeve as the trader runs it (Phase 53 E1). It is offline and research only:
+it reads only `--cache-dir`, `--tags-history`, `--rule`, `--proxies` and
+`--scoreboards`, never fetches or calls Binance, has no order path, and
+leaves the live `bot-spot` untouched. If the cache is missing a liquid coin or
+a gold proxy (PAXG, XAUT; `engine::COVERAGE`), one ends before `--end`, or
+none has 7 days of history before the window start (the first step's 7d move),
+it exits 1 with `missing cache`. Each step's 1h, 24h and 7d moves come from the
+cached 1m closes.
 
 ```bash
 cargo run --release -p bb-cli --bin bb -- algo-backtest \
-  --cache-dir data/entry-study-cache --tags-history <history dir> \
-  --end 2026-10-18T10:43:00Z --days 60
+  --rule config/rules/algo-2026-10-29.json \
+  --tags-history <history dir> --cache-dir data/entry-study-cache \
+  --end 2026-10-25T14:00:00Z --days 24
 ```
 
-The other flags are `--starting-balance` (1000), `--fee-bps` (7.5),
-`--slippage-bps` (5), `--step-minutes` (20) and `--output-dir` (`reports`).
+The other flags are `--proxies` (`config/proxies.json`), `--scoreboards`
+(edge rules only), `--starting-balance` (1000), `--fee-bps` (7.5),
+`--slippage-bps` (5), `--step-minutes` (20), `--tags-max-age-minutes` (90)
+and `--output-dir` (`reports`). Add missing coins to the cache with
+`bb entry-study --symbols PAXG/USDT,XAUT/USDT --end <end> --days <n>` (public
+klines).
 
-The rule: each liquid-top coin scores
-`w_talk·talk.6h + w_stance·stance.6h + w_momentum·momentum.1h` (a one-sleeve
-fixed rule; the backtest does not read the rule file yet, Phase 53 E1)
-(talk: /biz/ 6h mention rate over its 24h rate − 1, from 4 mentions in 24h,
-capped −1..3; stance: (up − down) / tagged of the 6h AI tags with
-`--biz-min-posters` (2) posters; momentum: 1h return / 5%, capped), read from
-the coin's asset tag. A held
-coin scoring below the sell level is sold; with nothing held the best coin at
-or above the buy level is bought with all cash. `--tags-history <dir>` is the
-hourly `tags-feed-v1` history from biz-app (a feed counts at a step from its
-`as_of` on, for `--tags-max-age-minutes`, 90); without it the /biz/ terms are
-0. The window is split: the weights are picked on the older half from a grid
-(talk and stance −1/0/+1, momentum 0/1, buy at 0.5/1, sell below −0.5/0; 72
-sets with feeds) by net %, or given with
-`--biz-weights talk,stance,momentum,buy,sell` (e.g. from the tag
-scoreboard below). The rule then runs on both halves as `biz_algo@older`
-and `biz_algo@newer`; the `@newer` row is the out-of-sample result. The
-report has a `biz_algo` rule section with the best grid rows, and
-`_biz_algo@<half>_trace.csv` (time, feed `as_of`, best coin and score, held
-coin and score, action).
+At each step the newest feed with `as_of` at or before the step is visible
+(for `--tags-max-age-minutes`; none after that, as a stale feed live). As
+live: the candidates are the cached coins its live asset tags reach, directly
+or through the proxy file (a tag without a cached market or proxy is
+scored-only; the report lists the most frequent ones); every sleeve with a
+share or a holding decides with `crate::decider` on its own holdings (horizon
+filter, risk-off and every signal name of the rule, the whole feed and its
+reach); a sell sells exactly the sleeve's quantity and a buy spends its share
+of the portfolio value at the step (cash plus every sleeve's holdings), capped
+by the cash left. An edge rule needs `--scoreboards <dir>`: point-in-time
+scoreboards (`bb tag-scoreboard --as-of T`); each step uses the newest whose
+outcomes all closed by then (`available_at`), and a sleeve without one holds
+with no orders. Nothing is tuned (the next phase does that).
 
 Cost model: fills happen at the next 1m open, with the fee plus slippage
 charged on each side (25 bps per round trip by default, against the measured
 live 14.8 bps). Buys under 5 USDT are skipped. Equity is marked at the last
 close with no exit costs.
 
-Output: `reports/algo_backtest_<end-date>.md` (settings, results,
-per-half exit and skip reasons, assumptions, caveats), `.csv` (one row per
-half), `_trades.csv` (one row per trade) and `_biz_algo@<half>_trace.csv`
-(one row per step). The files are byte-identical
-across reruns. The cache comes from `bb entry-study` (`data/` is gitignored).
-The liquid universe is the 2026-10-18 top 20, so results carry survivorship
-bias.
+Output: `reports/algo_backtest_<end-date>.md` (settings with the rule file's
+path, `rules_version`, style, sha256 and sleeves; results for the portfolio
+and per sleeve; skip reasons, notes, assumptions, caveats), `.csv` (rows
+`portfolio` and `sleeve:<name>`; a sleeve's net is the sum of its trades, its
+% of the starting balance), `_trades.csv` (one row per trade with its sleeve)
+and `_<sleeve>_trace.csv` per sleeve that decided (time, feed `as_of`,
+candidates, scoreboard `available_at`, best coin and score, held coin and
+score, market score, risk-off, action). The files are byte-identical across
+reruns. The cache comes from `bb entry-study` (`data/` is gitignored); the
+candidates are limited to the cached coins (survivorship).
+
+Comparison with the pre-change backtest (E1, 2026-10-31): the binary before
+this rewrite (`~/binance-bot-prechange/bb-pre-e1-84e3a01`, README there)
+picked candidates from the fixed `LIQUID` 20 (top 10 by 24h volume), split the
+window into halves and held one coin with all cash. On its halves of
+2026-10-01T14:00Z..10-25T14:00Z with the shipped rule, a throwaway build of
+the new engine with those candidates restored gives the same trades and the
+same action at every step (864 + 864). The shipped rule's differences are
+therefore the candidate set only: tags-reached coins with a cached market
+(16.7 per step, e.g. QNT, CVX, LINK, DOGE) instead of the liquid top 10 (SUI,
+WLD, NEAR, STRK, ...). Same action at 841 and 850 of 864 steps; 2 of 12 and 4
+of 8 trades identical; net -140.63 and -81.32 USDT against +75.18 and -52.99.
+The whole window: `reports/phase53/algo_backtest_2026-10-25.md` (-21.05%,
+15 round trips).
 
 #### Tag scoreboard
 

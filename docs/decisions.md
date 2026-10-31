@@ -300,3 +300,21 @@ sleeve's action and reason survive every trim; `run_config.rule` records the
 rule file's `rules_version`, style and content hash; the shipped rule file is
 unchanged. Defaults from the ledger: 32 KB, top 20 candidates, top 10 tags per
 kind by posters.
+
+## 2026-10-31 Phase 53 loop: the rule-file backtest (`LOOP_TAGS.md` E1)
+
+Manager note (iteration 23): keep a runnable pre-E1 binary with its
+invocation and baseline on the comparison window
+(`~/binance-bot-prechange/bb-pre-e1-84e3a01`, README there; the older
+`bb-3eb390c` reads the v1 feed and is no tags-input baseline); compare on the
+same tags history with the unchanged shipped rule, separating candidate-set
+differences from behavioral regressions; exercise two sleeves sharing an
+asset and edge walk-forward on scoreboards whose outcomes are available by
+each decision time.
+
+Implementation choices (no trading parameter): no tuning and no
+older/newer split (the next phase tunes); sleeves share the USDT and size as
+live (a buy spends its share of the portfolio value, capped by the cash
+left); an edge rule reads a directory of point-in-time scoreboards
+(`--scoreboards`), the newest usable at each step; the cache must hold PAXG
+and XAUT besides the liquid 20.

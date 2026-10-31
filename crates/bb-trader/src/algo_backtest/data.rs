@@ -1,6 +1,6 @@
 //! Offline 1m candles for the algorithm backtest, read from the `bb entry-study` cache
 //! (`data/entry-study-cache/1m_<BASE>_USDT_<start>_<end>.json`, rows `{t,o,h,l,c,v}`), and
-//! the tags feed history the `biz_algo` rule reads ([`TagsHistory`]).
+//! the tags feed history the rule file reads ([`TagsHistory`]).
 //!
 //! Point-in-time access only: every reader takes a time `t` and sees just the bars that
 //! closed by `t` (and the feeds whose `as_of` is at or before `t`). A coin without a bar
@@ -15,7 +15,8 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::{Result, TraderError};
-use crate::tags::Windows;
+use crate::reach::{Proxies, Reach};
+use crate::tags::{Feed, Windows};
 
 pub const MINUTE_MS: i64 = 60_000;
 /// The only quote the cache files are read for.
@@ -242,13 +243,46 @@ fn cache_file_asset(name: &str) -> Option<&str> {
         .then_some(base)
 }
 
-/// One tags feed of the history: its asset tags (what the rule reads).
+/// One tags feed of the history, as the live trader reads a fresh feed: the whole feed, its
+/// reach (the tradable assets its tags lead to, [`crate::reach`]) and the asset tags with a
+/// cached market.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TagsAt {
     /// The newest moment whose posts the feed includes (biz-app's visibility rule).
     pub as_of_ms: i64,
-    /// Asset tags by asset name.
+    /// Asset tags with a cached market of their own, by name (the own-tag names read these).
     pub assets: BTreeMap<String, Windows>,
+    pub feed: Feed,
+    pub reach: Reach,
+}
+
+impl TagsAt {
+    /// `tradable`: whether an asset has a cached USDT market (the backtest's stand-in for an
+    /// eligible Binance market); `proxies`: the operator's proxy file.
+    pub fn new(feed: Feed, proxies: &Proxies, tradable: impl Fn(&str) -> bool) -> Self {
+        let reach = crate::reach::build(&feed, proxies, &tradable);
+        let assets = feed
+            .assets()
+            .filter(|(name, _)| tradable(name))
+            .map(|(name, w)| (name.to_owned(), *w))
+            .collect();
+        Self {
+            as_of_ms: feed.as_of_ms,
+            assets,
+            feed,
+            reach,
+        }
+    }
+
+    /// The coins a sleeve may buy from this feed, in order: the tradable assets its live
+    /// asset tags reach (directly or through a proxy), USDT and cash-like coins left out, as
+    /// the live trader's candidates.
+    pub fn candidates(&self) -> impl Iterator<Item = &String> {
+        self.reach
+            .candidates
+            .iter()
+            .filter(|a| a.as_str() != QUOTE && !crate::assets::is_low_upside(a))
+    }
 }
 
 /// `tags-feed-v1` files rebuilt for past times by biz-app (`biz-insights feed --history`,
@@ -275,14 +309,26 @@ impl TagsHistory {
         }
     }
 
-    /// Every `*.json` in `dir` (by file name). Fails on a missing directory, an empty one,
+    /// Every `*.json` in `dir` (by file name) with `as_of` in `[from_ms, to_ms]`, read as
+    /// [`TagsAt::new`] does. Fails on a missing directory, one without feeds in that span,
     /// or any file that is not a `tags-feed-v1` feed.
-    pub fn load_dir(dir: &Path, max_age_minutes: i64) -> Result<Self> {
+    pub fn load_dir(
+        dir: &Path,
+        max_age_minutes: i64,
+        (from_ms, to_ms): (i64, i64),
+        proxies: &Proxies,
+        tradable: impl Fn(&str) -> bool,
+    ) -> Result<Self> {
         if max_age_minutes <= 0 {
-            return Err(TraderError::config("the tags feed age limit must be positive"));
+            return Err(TraderError::config(
+                "the tags feed age limit must be positive",
+            ));
         }
         let entries = std::fs::read_dir(dir).map_err(|e| {
-            TraderError::config(format!("missing tags history directory {}: {e}", dir.display()))
+            TraderError::config(format!(
+                "missing tags history directory {}: {e}",
+                dir.display()
+            ))
         })?;
         let mut paths = Vec::new();
         for entry in entries {
@@ -292,24 +338,24 @@ impl TagsHistory {
             }
         }
         paths.sort();
-        if paths.is_empty() {
-            return Err(TraderError::config(format!(
-                "no tags feeds (*.json) in {}",
-                dir.display()
-            )));
-        }
-        let mut feeds = Vec::with_capacity(paths.len());
+        let mut feeds = Vec::new();
         let mut readers = BTreeSet::new();
         for path in &paths {
             let text = std::fs::read_to_string(path)?;
             let feed = crate::tags::parse_raw(&text).map_err(|e| {
                 TraderError::config(format!("bad tags feed {}: {e}", path.display()))
             })?;
+            if feed.as_of_ms < from_ms || feed.as_of_ms > to_ms {
+                continue;
+            }
             readers.extend(feed.readers());
-            feeds.push(TagsAt {
-                as_of_ms: feed.as_of_ms,
-                assets: feed.assets().map(|(name, w)| (name.to_owned(), *w)).collect(),
-            });
+            feeds.push(TagsAt::new(feed, proxies, &tradable));
+        }
+        if feeds.is_empty() {
+            return Err(TraderError::config(format!(
+                "no tags feeds (*.json) in {} for the window",
+                dir.display()
+            )));
         }
         Ok(Self::new(feeds, readers, max_age_minutes))
     }
@@ -494,15 +540,33 @@ mod tests {
         assert!(err.contains("missing cache"), "{err}");
     }
 
+    /// A feed at `T0 + minute` naming SOL, gold and USDC.
+    fn feed_at(minute: i64) -> Feed {
+        let as_of = chrono::DateTime::from_timestamp_millis(T0 + minute * MINUTE_MS)
+            .unwrap()
+            .to_rfc3339();
+        crate::tags::parse_raw(&format!(
+            r#"{{"schema":"tags-feed-v1","as_of":"{as_of}","tags":{{
+                "asset:SOL":{{"kind":"asset","name":"SOL"}},
+                "asset:GOLD":{{"kind":"asset","name":"GOLD"}},
+                "asset:USDC":{{"kind":"asset","name":"USDC"}},
+                "asset:NVDA":{{"kind":"asset","name":"NVDA"}}}}}}"#
+        ))
+        .unwrap()
+    }
+
     #[test]
     fn a_feed_is_visible_from_its_as_of_until_it_is_too_old() {
-        let feed = |minute: i64| TagsAt {
-            as_of_ms: T0 + minute * MINUTE_MS,
-            assets: BTreeMap::new(),
-        };
+        let gold = Proxies::parse(r#"{"GOLD": ["PAXG", "XAUT"]}"#).unwrap();
+        let cached = |a: &str| matches!(a, "SOL" | "PAXG" | "XAUT" | "USDC");
+        let feed = |minute: i64| TagsAt::new(feed_at(minute), &gold, cached);
         // Hourly feeds at 0 and 60, then a gap until 300; 90 minutes of age allowed.
         let history = TagsHistory::new(vec![feed(60), feed(0), feed(300)], BTreeSet::new(), 90);
-        let at = |minute: i64| history.at(T0 + minute * MINUTE_MS).map(|f| (f.as_of_ms - T0) / MINUTE_MS);
+        let at = |minute: i64| {
+            history
+                .at(T0 + minute * MINUTE_MS)
+                .map(|f| (f.as_of_ms - T0) / MINUTE_MS)
+        };
         assert_eq!(at(-1), None);
         assert_eq!(at(0), Some(0));
         assert_eq!(at(59), Some(0));
@@ -510,10 +574,49 @@ mod tests {
         assert_eq!(at(150), Some(60));
         assert_eq!(at(151), None);
         assert_eq!(at(300), Some(300));
+        // Candidates as live: own cached markets and gold's proxies; the cash-like USDC and
+        // NVDA (no market, no proxy) are not bought.
+        let f = feed(0);
+        assert_eq!(f.candidates().collect::<Vec<_>>(), ["PAXG", "SOL", "XAUT"]);
+        assert_eq!(f.assets.keys().collect::<Vec<_>>(), ["SOL", "USDC"]);
+        assert_eq!(f.reach.scored_only, ["NVDA"]);
 
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.json"), r#"{"schema":"tags-feed-v2","as_of":"2026-07-19T08:00:00Z","tags":{}}"#).unwrap();
-        let err = TagsHistory::load_dir(dir.path(), 90).unwrap_err().to_string();
-        assert!(err.contains("bad tags feed") && err.contains("tags-feed-v1"), "{err}");
+        let write = |name: &str, minute: i64| {
+            let as_of = chrono::DateTime::from_timestamp_millis(T0 + minute * MINUTE_MS)
+                .unwrap()
+                .to_rfc3339();
+            std::fs::write(
+                dir.path().join(name),
+                format!(r#"{{"schema":"tags-feed-v1","as_of":"{as_of}","tags":{{}}}}"#),
+            )
+            .unwrap();
+        };
+        write("a.json", 0);
+        write("b.json", 60);
+        write("c.json", 120);
+        // Only the window's feeds are kept.
+        let window = (T0 + 30 * MINUTE_MS, T0 + 120 * MINUTE_MS);
+        let loaded = TagsHistory::load_dir(dir.path(), 90, window, &gold, cached).unwrap();
+        assert_eq!(
+            (loaded.first_ms(), loaded.len()),
+            (Some(T0 + 60 * MINUTE_MS), 2)
+        );
+        let err = TagsHistory::load_dir(dir.path(), 90, (0, T0 - 1), &gold, cached)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no tags feeds"), "{err}");
+        std::fs::write(
+            dir.path().join("d.json"),
+            r#"{"schema":"tags-feed-v2","as_of":"2026-07-19T08:00:00Z","tags":{}}"#,
+        )
+        .unwrap();
+        let err = TagsHistory::load_dir(dir.path(), 90, window, &gold, cached)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("bad tags feed") && err.contains("tags-feed-v1"),
+            "{err}"
+        );
     }
 }

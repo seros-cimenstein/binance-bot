@@ -15,8 +15,8 @@
 //! - [`executor`]: live route execution. [`audit`]: rows, halt, review marker.
 //! - [`state`]: the persisted cycle counter, last cycle and sleeve holdings (strict load).
 //!   [`sleeves`]: what each sleeve owns, migration, reconcile, the `sleeve_mismatch` halt.
-//! - [`algo_backtest`]: offline backtest of the algorithm on cached 1m candles, tuned on
-//!   the older half and judged on the newer (research only, no network, no order path).
+//! - [`algo_backtest`]: offline backtest of the operator's rule file (every sleeve) on
+//!   cached 1m candles and the tags history (research only, no network, no order path).
 //! - [`tags`]: the tags feed (`tags-feed-v1`) from biz-app, read every tick and summarised
 //!   on each decision row. [`reach`]: how tags reach tradable assets (own tag, the
 //!   operator's proxies, baskets, links). [`signals`]: the signal catalog a rule weights,
@@ -24,7 +24,7 @@
 //!   market-wide macro and mood, momentum per horizon). [`rules`]: the operator's rule
 //!   file (`BOT_SPOT_ALGO_RULE`: sleeves, levels, weights by signal name; style `fixed`
 //!   or `edge`). [`edge`]: edge-style weights from a point-in-time tag scoreboard.
-//! - [`decider`]: the operator's rule (no LLM); backtested as `biz_algo`.
+//! - [`decider`]: the operator's rule (no LLM), live and in the backtest.
 //! - [`book`]: the snapshot and book the rule decides on, from live balances and prices.
 //! - [`nonstop`]: the trader loop (a tick every 15 s, rows on change plus an hourly
 //!   heartbeat). [`cycle`]: the decision runtime (routes, audit rows). [`cli`]: `bot-spot`,
