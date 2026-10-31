@@ -73,6 +73,18 @@ pub struct LegResult {
     pub status: String,
 }
 
+/// What a completed route delivered: its last leg's destination asset and the quantity that
+/// arrived (destination free after − before), net of any fee Binance took in that asset.
+/// Sleeves book this, never the quoted or ordered amount.
+pub fn arrival(legs: &[LegResult]) -> Option<(String, Decimal)> {
+    legs.last().map(|leg| {
+        (
+            leg.destination_asset.clone(),
+            leg.destination_free_after - leg.destination_free_before,
+        )
+    })
+}
+
 /// A route stopped. `legs` holds every leg that reached the exchange.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionFailure {
@@ -482,6 +494,8 @@ pub(crate) mod tests {
         pub fail_order_on_call: Option<(usize, BinanceError)>,
         pub stop_file_after_first_order: Option<PathBuf>,
         pub can_trade: bool,
+        /// Commission Binance takes from the bought asset on a buy (fraction of the fill).
+        pub buy_fee_in_base: Decimal,
     }
 
     impl FakeExchange {
@@ -500,6 +514,7 @@ pub(crate) mod tests {
                 fail_order_on_call: None,
                 stop_file_after_first_order: None,
                 can_trade: true,
+                buy_fee_in_base: Decimal::ZERO,
             }
         }
     }
@@ -565,7 +580,7 @@ pub(crate) mod tests {
             if self.status == OrderStatus::Filled {
                 let mut balances = self.balances.lock();
                 let (spend_asset, spend, get_asset, get) = match order.side {
-                    bb_binance::Side::Buy => (quote, qty * price, base, qty),
+                    bb_binance::Side::Buy => (quote, qty * price, base, qty * (Decimal::ONE - self.buy_fee_in_base)),
                     bb_binance::Side::Sell => (base, qty, quote, qty * price),
                 };
                 *balances.entry(spend_asset.to_owned()).or_default() -= spend;
@@ -867,5 +882,33 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(exchange.orders.lock()[0].quantity, Some(dec!(0.0248)));
+    }
+
+    #[tokio::test]
+    async fn the_arrival_is_the_fill_net_of_a_base_asset_fee() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut exchange = exchange();
+        exchange.buy_fee_in_base = dec!(0.001); // 0.1% of the bought ETH
+        let fees = fees(&["ETH/USDT"]);
+        let config = armed(&dir.path().join("stop"));
+        let legs = Executor {
+            exchange: &exchange,
+            fees: &fees,
+            config: &config,
+            poll_interval: Duration::ZERO,
+        }
+        .execute(
+            &route("USDT", "ETH", vec![leg("ETH/USDT", LegSide::Buy, "USDT", "ETH")]),
+            &markets(),
+            Some(dec!(50)),
+        )
+        .await
+        .unwrap();
+        // 50 USDT ordered 0.0248 ETH; 0.0000248 went to the fee, and the wallet already held
+        // 1 ETH, which is not part of the arrival.
+        assert_eq!(exchange.orders.lock()[0].quantity, Some(dec!(0.0248)));
+        assert_eq!(arrival(&legs), Some(("ETH".to_owned(), dec!(0.0247752))));
+        assert_eq!(legs[0].destination_free_after, dec!(1.0247752));
+        assert_eq!(arrival(&[]), None);
     }
 }

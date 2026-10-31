@@ -73,9 +73,12 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
   start. Until sleeves are booked separately it runs the one sleeve holding a
   share and refuses a second funded sleeve, a horizon filter or a risk-off
   level.
-- **Orders.** A held coin scoring below the sell level is sold into USDT; with
-  nothing held, the best coin at or above the buy level is bought with all
-  USDT. Every order goes through `execute_route` and every hard-safety check
+- **Orders.** A held coin scoring below the sell level is sold into USDT (exactly
+  the sleeve's quantity); with nothing held, the best coin at or above the buy
+  level is bought for the sleeve's share of the portfolio value (USDT plus what
+  the sleeves own), capped at the free USDT. An order under its market's
+  minimum order is not sent (`below_min_notional`, the sleeve holds). Every
+  order goes through `execute_route` and every hard-safety check
   below. Without a fresh feed it buys nothing.
 - **No added trading limits.** No stop-loss, take-profit, cooldown or caps
   beyond the rule the operator chose. Old guardrail env vars are ignored with

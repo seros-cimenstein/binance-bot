@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use crate::audit::{AuditRow, EndCycle, RowStatus, failed_route_halt};
 use crate::book::{CoinView, coin_view_from_minutes, live_book};
 use crate::context::{DecisionContext, execution_invariants, route_scope};
-use crate::cycle::{ALGO_SESSION_ID, CycleMode, Fill, Runtime, Snapshot};
+use crate::cycle::{ALGO_SESSION_ID, CycleMode, Fill, QUOTE_ASSET as QUOTE, Runtime, Sizing, Snapshot};
 use crate::sleeves::{HALT_KIND, halt_row, migrate, reconcile, standing_reason};
 use crate::decider::{Action, Inputs, Verdict, decide};
 use crate::error::{Result, TraderError};
@@ -221,8 +221,8 @@ struct Decision {
     sleeve: crate::rules::Sleeve,
     /// Edge style: the scoreboard evidence (`algo.edge`).
     edge: Option<serde_json::Value>,
-    /// What the trading sleeve owns: its sells spend exactly this.
-    owned: BTreeMap<String, Decimal>,
+    /// The trading sleeve's sizing: its sells spend exactly what it owns, its buys its share.
+    sizing: Sizing,
 }
 
 /// The nonstop trader: the runtime plus the state kept between ticks.
@@ -313,13 +313,13 @@ impl Nonstop {
         let state = self
             .sleeve_check(now_ms, false)
             .map_err(|reason| TraderError::safety(format!("{HALT_KIND}: {reason}")))?;
-        let owned = self.owned(&state);
-        let (tags, candidates, held) = self.inputs(&owned)?;
+        let sizing = self.sizing(&state)?;
+        let (tags, candidates, held) = self.inputs(&sizing.owned)?;
         self.poll_prices(now_ms, &candidates, &held).await;
         if let Some(book) = &mut self.edge {
             book.refresh(now_ms);
         }
-        let decision = self.decide(now_ms, tags, candidates, &held, owned)?;
+        let decision = self.decide(now_ms, tags, candidates, &held, sizing)?;
         let slow = self.slow_state()?;
         let mut context = self.context(slow, &decision);
         context.candidate_routes =
@@ -379,15 +379,15 @@ impl Nonstop {
         if let Some(error) = &rows.error {
             return self.halt(&format!("could not read Bot Spot audit history: {error}"), now_ms, force);
         }
-        let owned = self.owned(&state);
-        let (tags, candidates, held) = self.inputs(&owned)?;
+        let sizing = self.sizing(&state)?;
+        let (tags, candidates, held) = self.inputs(&sizing.owned)?;
         if !self.poll_prices(now_ms, &candidates, &held).await && !force {
             return Ok(Tick::Unchanged);
         }
         if let Some(book) = &mut self.edge {
             book.refresh(now_ms);
         }
-        let decision = self.decide(now_ms, tags, candidates, &held, owned)?;
+        let decision = self.decide(now_ms, tags, candidates, &held, sizing)?;
         if !self.due(&decision.key, now_ms, force) {
             return Ok(Tick::Unchanged);
         }
@@ -416,7 +416,7 @@ impl Nonstop {
             .run_algo_turn(
                 decision.verdict,
                 &decision.sleeve,
-                &decision.owned,
+                &decision.sizing,
                 decision.coins,
                 decision.edge,
                 shutdown,
@@ -517,15 +517,30 @@ impl Nonstop {
         Ok(state)
     }
 
-    /// What the trading sleeve owns (asset → quantity).
-    fn owned(&self, state: &TraderState) -> BTreeMap<String, Decimal> {
-        let sleeve = &self.runtime.config.algo_rule.trading_sleeve().name;
-        state
-            .sleeves
-            .as_ref()
-            .and_then(|s| s.holdings.get(sleeve))
-            .map(|h| BTreeMap::from([(h.asset.clone(), h.qty)]))
-            .unwrap_or_default()
+    /// The trading sleeve's sizing: what it owns, its share, and the portfolio value (free
+    /// USDT plus every sleeve's holdings, capped at the free balance, at market; balances
+    /// no sleeve owns are left out).
+    fn sizing(&self, state: &TraderState) -> Result<Sizing> {
+        let slow = self.slow_state()?;
+        let sleeve = self.runtime.config.algo_rule.trading_sleeve();
+        let sleeves = state.sleeves.clone().unwrap_or_default();
+        let held: Decimal = sleeves
+            .owned()
+            .iter()
+            .filter_map(|(asset, qty)| {
+                slow.view
+                    .usdt_value(asset, (*qty).min(slow.balances.free(asset)))
+            })
+            .sum();
+        Ok(Sizing {
+            owned: sleeves
+                .holdings
+                .get(&sleeve.name)
+                .map(|h| BTreeMap::from([(h.asset.clone(), h.qty)]))
+                .unwrap_or_default(),
+            share: Decimal::try_from(sleeve.share).unwrap_or_default(),
+            portfolio_value: slow.balances.free(QUOTE) + held,
+        })
     }
 
     /// Record the sleeve halt (a `sleeve_mismatch` row when the reason changes and hourly),
@@ -771,7 +786,7 @@ impl Nonstop {
         tags: TagsNow,
         candidates: Vec<String>,
         held: &BTreeSet<String>,
-        owned: BTreeMap<String, Decimal>,
+        sizing: Sizing,
     ) -> Result<Decision> {
         let slow = self.slow_state()?;
         // The 24h return is the USDT market's 24h ticker change from the catalog (reloaded
@@ -796,7 +811,7 @@ impl Nonstop {
             })
             .collect();
         let step = crate::book::Snapshot::live(now_ms, coins, candidates);
-        let book = self.book(slow, now_ms, &owned);
+        let book = self.book(slow, now_ms, &sizing.owned);
         let (assets, feed) = match &tags {
             TagsNow::Fresh(feed) => (Some(&feed.assets), Some((&feed.feed, &feed.reach))),
             TagsNow::Unavailable { .. } => (None, None),
@@ -830,7 +845,7 @@ impl Nonstop {
                 equity: slow.balances.free_value_usdt(&slow.view),
                 coins: Vec::new(),
                 sleeve,
-                owned,
+                sizing,
                 edge,
             });
         }
@@ -870,7 +885,7 @@ impl Nonstop {
             equity: slow.balances.free_value_usdt(&slow.view),
             coins: scored.into_iter().map(|(_, coin)| coin).collect(),
             sleeve,
-            owned,
+            sizing,
             edge,
         })
     }
@@ -1003,7 +1018,7 @@ mod tests {
             })
             .collect();
         let balances = if eth_held {
-            json!([{"asset": "ETH", "free": "0.05", "locked": "0"}])
+            json!([{"asset": "ETH", "free": "0.05", "locked": "0"}, {"asset": "USDT", "free": "100", "locked": "0"}])
         } else {
             json!([{"asset": "USDT", "free": "100", "locked": "0"}])
         };
@@ -1249,6 +1264,11 @@ mod tests {
         trader.tick(now, false, &token).await.unwrap();
         let first = rows(dir.path());
         assert_eq!((first[0]["status"].as_str(), first[0]["decision"]["destination_asset"].as_str()), (Some("planned"), Some("ETH")));
+        // Share 1 of a portfolio of 100 USDT: the unowned ETH and BTC (150 + 600 USDT) are
+        // not part of it, so the buy spends exactly the free 100 USDT.
+        assert_eq!(first[0]["decision"]["spend_amount"].as_f64(), Some(100.0));
+        assert_eq!(first[1]["algo"]["sizing"], json!({"share": "1", "portfolio_value_usdt": "100"}));
+        assert_eq!(first[1]["algo"]["orders"][0]["spend"], "100");
         let state = TraderState::load_strict(&dir.path().join("state.json")).unwrap();
         let sleeves = state.sleeves.unwrap();
         assert!(sleeves.holdings.is_empty());

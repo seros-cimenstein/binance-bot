@@ -368,8 +368,15 @@ stablecoins left out) and for the coins it holds (operator decision
 `Σ weight · signal` over the sleeve's weighted names (stances need the
 sleeve's `min_posters`), sells a held coin
 scoring below the sell level into USDT and, with nothing held, buys the best
-coin with all USDT at or above the buy level. Every order is quoted for the
-whole free balance and sent through `execute_route`, so the stop file,
+coin at or above the buy level. Orders are sized per sleeve (Phase 53 D4): a
+sell spends exactly the sleeve's quantity, a buy spends the sleeve's `share` ×
+the portfolio value (free USDT plus what the sleeves own; unowned balances
+left out), capped at the free USDT (with `algo-2026-10-29`'s fast share 1 and
+nothing held: the whole free USDT, as before). An order worth less than its
+USDT market's minimum order is not sent: the sleeve holds and the decision row
+says `below_min_notional` (`algo.below_min_notional`; the planned spend of each
+order is in `algo.orders[].spend`, the route row's `spend_amount`). Every
+order is sent through `execute_route`, so the stop file,
 arming, scope, `order/test`, reconciliation and the failed-route halt apply;
 the first failed order ends that decision's orders. Without a fresh feed
 nothing is a buy candidate, so it can only hold or sell; a coin without a

@@ -43,6 +43,26 @@ pub enum Fill {
     Sold { asset: String },
 }
 
+/// How a sleeve's orders are sized (Phase 53 D4): what it owns (its sells spend exactly
+/// that), its share of the portfolio and the portfolio value (USDT plus what the sleeves
+/// own, unowned balances left out) at the decision.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Sizing {
+    pub owned: BTreeMap<String, Decimal>,
+    pub share: Decimal,
+    pub portfolio_value: Decimal,
+}
+
+impl Sizing {
+    /// A buy spends `share × portfolio value`, capped at `free_usdt`, in whole 1e-8 USDT.
+    pub fn buy_spend(&self, free_usdt: Decimal) -> Decimal {
+        (self.share * self.portfolio_value)
+            .min(free_usdt)
+            .max(Decimal::ZERO)
+            .round_dp_with_strategy(8, rust_decimal::RoundingStrategy::ToZero)
+    }
+}
+
 /// Whether `execute_route` may place orders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CycleMode {
@@ -218,13 +238,17 @@ impl Runtime {
     /// statement. `coins` (every scored coin with its terms) is recorded with the verdict,
     /// and `edge` (an edge rule's scoreboard evidence) as `algo.edge`.
     /// Returns the turn report the decision row is written from (with the live fills).
-    /// A sell spends exactly `owned[asset]` (the sleeve's quantity, capped at the free
-    /// balance), so an unowned remainder of the same asset is never sold.
+    /// Order sizes come from `sizing` ([`Sizing`]): a sell spends exactly the sleeve's
+    /// quantity (capped at the free balance), so an unowned remainder of the same asset is
+    /// never sold; a buy spends `share × portfolio value`, capped at the free USDT when it is
+    /// sent (after a sell in the same turn). An order worth less than its USDT market's
+    /// minimum order is not sent: the sleeve holds and the row records
+    /// `below_min_notional`.
     pub(crate) async fn run_algo_turn(
         &self,
         verdict: crate::decider::Verdict,
         sleeve: &crate::rules::Sleeve,
-        owned: &BTreeMap<String, Decimal>,
+        sizing: &Sizing,
         coins: Vec<Value>,
         edge: Option<Value>,
         shutdown: &CancellationToken,
@@ -234,34 +258,78 @@ impl Runtime {
             status: "completed".into(),
             ..TurnReport::default()
         };
+        let owned = &sizing.owned;
         let mut traded = 0usize;
         let mut failure = None;
-        for action in &verdict.actions {
+        // Per action: the amount it spends (sell: base asset, buy: USDT), once sized.
+        let mut spends: Vec<Option<Decimal>> = vec![None; verdict.actions.len()];
+        let mut below: Vec<Value> = Vec::new();
+        for (i, action) in verdict.actions.iter().enumerate() {
             if shutdown.is_cancelled() || self.shutting_down() {
                 failure = Some("shutdown: the remaining orders were not sent".to_owned());
                 break;
             }
-            let (source, destination, reason, spend) = match action {
-                Action::Sell { asset, reason } => {
-                    let free = match self.cycle.lock().await.as_ref() {
-                        Some(state) => state.balances.free(asset),
-                        None => Decimal::ZERO,
-                    };
-                    let qty = owned.get(asset).copied().unwrap_or_default().min(free);
-                    (asset.as_str(), QUOTE_ASSET, reason.as_str(), Some(qty))
-                }
-                Action::Buy { asset, reason } => (QUOTE_ASSET, asset.as_str(), reason.as_str(), None),
+            let (asset, reason, sell) = match action {
+                Action::Sell { asset, reason } => (asset.as_str(), reason.as_str(), true),
+                Action::Buy { asset, reason } => (asset.as_str(), reason.as_str(), false),
             };
-            let result = match spend {
-                Some(qty) if qty <= Decimal::ZERO => Err(if owned.get(source).is_some_and(|q| *q > Decimal::ZERO) {
-                    format!("no free {source} balance")
-                } else {
-                    format!("the sleeve owns no {source}")
-                }),
-                _ => match self.quote_for_cycle(source, destination, spend).await {
-                    Ok(route_id) => self.execute_route(&route_id, reason, spend).await,
-                    Err(message) => Err(message),
-                },
+            // Size the order on the balances as they are now, and value it in USDT.
+            let sized = {
+                let guard = self.cycle.lock().await;
+                guard.as_ref().map(|state| {
+                    let min = state
+                        .view
+                        .markets
+                        .get(&format!("{asset}/USDT"))
+                        .map(|m| m.min_notional);
+                    if sell {
+                        let qty = owned
+                            .get(asset)
+                            .copied()
+                            .unwrap_or_default()
+                            .min(state.balances.free(asset));
+                        (qty, state.view.usdt_value(asset, qty), min)
+                    } else {
+                        let spend = sizing.buy_spend(state.balances.free(QUOTE_ASSET));
+                        (spend, Some(spend), min)
+                    }
+                })
+            };
+            let Some((amount, notional, min)) = sized else {
+                failure = Some("no active cycle".to_owned());
+                break;
+            };
+            spends[i] = Some(amount);
+            if amount <= Decimal::ZERO {
+                failure = Some(match (sell, owned.get(asset)) {
+                    (true, Some(q)) if *q > Decimal::ZERO => format!("{asset}->{QUOTE_ASSET}: no free {asset} balance"),
+                    (true, _) => format!("{asset}->{QUOTE_ASSET}: the sleeve owns no {asset}"),
+                    (false, _) => format!("{QUOTE_ASSET}->{asset}: no free {QUOTE_ASSET} balance"),
+                });
+                break;
+            }
+            if let (Some(notional), Some(min)) = (notional, min)
+                && notional < min
+            {
+                // Too small for one market order: the sleeve holds (nothing after it runs).
+                below.push(json!({
+                    "sleeve": sleeve.name,
+                    "side": if sell { "sell" } else { "buy" },
+                    "asset": asset,
+                    "amount": amount.normalize().to_string(),
+                    "notional_usdt": notional.round_dp(8).normalize().to_string(),
+                    "min_notional_usdt": min.normalize().to_string(),
+                }));
+                break;
+            }
+            let (source, destination) = if sell {
+                (asset, QUOTE_ASSET)
+            } else {
+                (QUOTE_ASSET, asset)
+            };
+            let result = match self.quote_for_cycle(source, destination, Some(amount)).await {
+                Ok(route_id) => self.execute_route(&route_id, reason, Some(amount)).await,
+                Err(message) => Err(message),
             };
             match result {
                 Ok(_) => {
@@ -273,14 +341,15 @@ impl Runtime {
                             .await
                             .as_mut()
                             .and_then(|state| state.last_fill.take());
-                        report.fills.push(match action {
-                            Action::Sell { asset, .. } => Fill::Sold { asset: asset.clone() },
-                            Action::Buy { asset, .. } => Fill::Bought {
-                                asset: asset.clone(),
+                        report.fills.push(if sell {
+                            Fill::Sold { asset: asset.to_owned() }
+                        } else {
+                            Fill::Bought {
+                                asset: asset.to_owned(),
                                 qty: arrived
                                     .filter(|(to, _)| to == asset)
                                     .map_or(Decimal::ZERO, |(_, qty)| qty),
-                            },
+                            }
                         });
                     }
                 }
@@ -295,9 +364,13 @@ impl Runtime {
         let orders: Vec<Value> = verdict
             .actions
             .iter()
-            .map(|a| match a {
-                Action::Sell { asset, reason } => json!({"side": "sell", "asset": asset, "reason": reason}),
-                Action::Buy { asset, reason } => json!({"side": "buy", "asset": asset, "reason": reason}),
+            .zip(&spends)
+            .map(|(a, spend)| {
+                let spend = spend.map(|s| s.normalize().to_string());
+                match a {
+                    Action::Sell { asset, reason } => json!({"side": "sell", "asset": asset, "reason": reason, "spend": spend}),
+                    Action::Buy { asset, reason } => json!({"side": "buy", "asset": asset, "reason": reason, "spend": spend}),
+                }
             })
             .collect();
         let said: Vec<&str> = verdict
@@ -327,6 +400,26 @@ impl Runtime {
         } else {
             format!("rule-based decider: {}", said.join("; "))
         };
+        let summary = match below.first() {
+            None => summary,
+            Some(b) => {
+                let s = |key: &str| b[key].as_str().unwrap_or_default().to_owned();
+                let order = if s("side") == "buy" {
+                    format!("buy {} for {} USDT", s("asset"), s("notional_usdt"))
+                } else {
+                    format!("sell {} {} worth {} USDT", s("amount"), s("asset"), s("notional_usdt"))
+                };
+                let note = format!(
+                    "below_min_notional: {order} < min notional {} USDT, the sleeve holds",
+                    s("min_notional_usdt"),
+                );
+                if traded == 0 {
+                    format!("rule-based decider: hold, {note} ({})", said.join("; "))
+                } else {
+                    format!("{summary}; {note}")
+                }
+            }
+        };
         let record = json!({
             "sleeve": sleeve.name,
             "rule": sleeve.to_string(),
@@ -340,6 +433,11 @@ impl Runtime {
             "blocked": verdict.blocked,
             "edge": edge,
             "owned": owned.iter().map(|(a, q)| (a.clone(), q.normalize().to_string())).collect::<BTreeMap<_, _>>(),
+            "sizing": {
+                "share": sizing.share.normalize().to_string(),
+                "portfolio_value_usdt": sizing.portfolio_value.round_dp(8).normalize().to_string(),
+            },
+            "below_min_notional": below,
         });
         report.error = failure;
         let mut guard = self.cycle.lock().await;
@@ -653,12 +751,7 @@ impl Runtime {
         let decision = Decision::rebalance(candidate, reason, spend);
         let (row, result) = match outcome {
             Ok(legs) => {
-                state.last_fill = legs.last().map(|leg| {
-                    (
-                        leg.destination_asset.clone(),
-                        leg.destination_free_after - leg.destination_free_before,
-                    )
-                });
+                state.last_fill = crate::executor::arrival(&legs);
                 let mut row =
                     AuditRow::new(&self.config, RowType::Route, RowStatus::Submitted, decision);
                 row.submission_attempted = true;
@@ -969,15 +1062,42 @@ mod tests {
         assert_eq!(order_calls(&server).await, 0);
     }
 
+    async fn mount_account(server: &MockServer, free_usdt: &str) {
+        Mock::given(method("GET"))
+            .and(path("/api/v3/time"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"serverTime": bb_core::time::now_ms()})))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v3/account"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "canTrade": true, "balances": [{"asset": "USDT", "free": free_usdt, "locked": "0"}]})))
+            .mount(server)
+            .await;
+    }
+
+    fn sizing(share: Decimal, portfolio_value: Decimal) -> Sizing {
+        Sizing {
+            owned: BTreeMap::new(),
+            share,
+            portfolio_value,
+        }
+    }
+
+    #[test]
+    fn a_buy_spends_its_share_of_the_portfolio_capped_by_free_usdt() {
+        assert_eq!(sizing(dec!(0.4), dec!(100)).buy_spend(dec!(100)), dec!(40));
+        assert_eq!(sizing(dec!(1), dec!(150)).buy_spend(dec!(100)), dec!(100));
+        assert_eq!(sizing(dec!(0.3333333333), dec!(17.4)).buy_spend(dec!(17.4)), dec!(5.79999999));
+        assert_eq!(sizing(dec!(0), dec!(100)).buy_spend(dec!(100)), dec!(0));
+    }
+
     #[tokio::test]
-    async fn the_algo_turn_sends_its_orders_through_execute_route_and_stops_at_a_failure() {
+    async fn the_algo_turn_sends_sized_orders_through_execute_route_and_stops_at_a_failure() {
         use crate::decider::{Action, Verdict};
         let server = MockServer::start().await;
-        let dir = tempfile::tempdir().unwrap();
-        let config = trader_config(dir.path(), &[]);
-        let sleeve = config.algo_rule.trading_sleeve().clone();
-        let first = runtime(&server, config, CycleMode::PlanOnly).await;
-        let buy = Verdict {
+        mount_account(&server, "100").await;
+        let buy_sol = || Verdict {
             actions: vec![Action::Buy {
                 asset: "SOL".into(),
                 reason: "SOL score +0.600 ≥ buy level +0.5".into(),
@@ -986,8 +1106,15 @@ mod tests {
             held: Vec::new(),
             blocked: None,
         };
+        let token = CancellationToken::new();
+        // A 0.4 share of a 100 USDT portfolio: the plan is quoted, re-quoted and recorded for
+        // exactly 40 USDT.
+        let dir = tempfile::tempdir().unwrap();
+        let config = trader_config(dir.path(), &[]);
+        let sleeve = config.algo_rule.trading_sleeve().clone();
+        let first = runtime(&server, config, CycleMode::PlanOnly).await;
         let report = first
-            .run_algo_turn(buy, &sleeve, &BTreeMap::new(), Vec::new(), None, &CancellationToken::new())
+            .run_algo_turn(buy_sol(), &sleeve, &sizing(dec!(0.4), dec!(100)), Vec::new(), None, &token)
             .await;
         assert_eq!(report.error.as_deref(), None);
         let (summary, _) = first.finish_cycle(&report).await.unwrap();
@@ -996,13 +1123,35 @@ mod tests {
         let rows = audit_rows(dir.path());
         assert_eq!(rows[0]["decision"]["destination_asset"], "SOL");
         assert_eq!(rows[0]["decision"]["reason"], "SOL score +0.600 ≥ buy level +0.5");
+        assert_eq!((rows[0]["decision"]["spend_mode"].as_str(), rows[0]["decision"]["spend_amount"].as_f64()), (Some("amount"), Some(40.0)));
+        assert_eq!(rows[0]["selected_route"]["input_amount"].as_f64(), Some(40.0));
         assert_eq!(rows[1]["decision"]["action"], "traded");
-        assert_eq!(rows[1]["algo"]["best"]["asset"], "SOL");
-        assert_eq!(rows[1]["session_id"], "session-1");
+        assert_eq!(rows[1]["algo"]["orders"][0]["spend"], "40");
+        assert_eq!(rows[1]["algo"]["sizing"], json!({"share": "0.4", "portfolio_value_usdt": "100"}));
         assert_eq!(rows[1]["rules_version"], "algo-2026-10-29");
         assert_eq!(rows[1]["algo"]["sleeve"], "fast");
 
-        // A sell that cannot be quoted stops the turn: no buy of a second coin.
+        // A share worth less than the market's minimum order holds: no route row, no order
+        // call, the reason on the decision row.
+        let dir = tempfile::tempdir().unwrap();
+        let tiny = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
+        let buy_eth = Verdict {
+            actions: vec![Action::Buy { asset: "ETH".into(), reason: "ETH score +0.6".into() }],
+            ..buy_sol()
+        };
+        let report = tiny
+            .run_algo_turn(buy_eth, &sleeve, &sizing(dec!(0.0000001), dec!(100)), Vec::new(), None, &token)
+            .await;
+        assert_eq!(report.error, None);
+        let (summary, _) = tiny.finish_cycle(&report).await.unwrap();
+        assert_eq!((summary.status, summary.decision.action.as_str()), (RowStatus::Held, "hold"));
+        assert!(summary.decision.reason.starts_with("rule-based decider: hold, below_min_notional: buy ETH for 0.00001 USDT < min notional 0.0001 USDT, the sleeve holds"), "{}", summary.decision.reason);
+        let rows = audit_rows(dir.path());
+        assert_eq!(rows.len(), 1, "no route row");
+        assert_eq!(rows[0]["algo"]["below_min_notional"][0]["sleeve"], "fast");
+        assert_eq!(order_calls(&server).await, 0);
+
+        // A sell that cannot be sent stops the turn: no buy of a second coin.
         let dir = tempfile::tempdir().unwrap();
         let second = runtime(&server, trader_config(dir.path(), &[]), CycleMode::PlanOnly).await;
         let rotate = Verdict {
@@ -1020,8 +1169,12 @@ mod tests {
             held: vec![("BTC".into(), -0.5)],
             blocked: None,
         };
+        let owns_btc = Sizing {
+            owned: BTreeMap::from([("BTC".to_owned(), dec!(0.5))]),
+            ..sizing(dec!(1), dec!(100))
+        };
         let report = second
-            .run_algo_turn(rotate, &sleeve, &BTreeMap::from([("BTC".to_owned(), dec!(0.5))]), Vec::new(), None, &CancellationToken::new())
+            .run_algo_turn(rotate, &sleeve, &owns_btc, Vec::new(), None, &token)
             .await;
         assert!(report.error.as_deref().unwrap().contains("no free BTC balance"), "{report:?}");
         assert_eq!(order_calls(&server).await, 0);

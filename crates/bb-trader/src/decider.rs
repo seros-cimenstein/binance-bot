@@ -24,8 +24,9 @@
 //! Without a feed every tag signal is 0. Weights may be negative (a negative `talk.6h`
 //! weight fades /biz/ hype). Rules: a held coin whose score falls below `sell_below` is
 //! sold; with nothing held after that, the candidate (the step's buy candidates in order;
-//! live: the feed's asset tags with a USDT market) with the highest score is bought with
-//! all cash when its score reaches `buy_above`. One coin at a time; no stop-loss,
+//! live: the feed's asset tags with a USDT market) with the highest score is bought when
+//! its score reaches `buy_above` (live, for the sleeve's share of the portfolio:
+//! `cycle::Sizing`; the backtest buys with all cash). One coin at a time; no stop-loss,
 //! take-profit or exit plan, only the score.
 
 use std::collections::BTreeMap;
