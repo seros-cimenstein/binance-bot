@@ -43,16 +43,16 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
 
 - [x] LLM path: omp session, host tools, prompts, journal, model failover,
   LLM cost control, `BOT_SPOT_DECIDER`, crate `bb-omp`, `omp` and Bun in the
-  Docker image (`LOOP_ALGO.md` C3-C7).
+  Docker image (`docs/archive/loops/LOOP_ALGO.md` C3-C7).
 - [x] Alerts and social input: Telegram alerts and their cooldown file, crate
-  `bb-social` (Telegram and X evidence) (`LOOP_ALGO.md` C1-C2).
+  `bb-social` (Telegram and X evidence) (`docs/archive/loops/LOOP_ALGO.md` C1-C2).
 - [x] LLM-era features: GCP2 schizo state, Markov value voice
   (`bot-spot-mdp-fit`), personas and the persona backtest, exit plans
   (`set_exit_plan`, exit watch and replay, the `bot-spot-exit-watch`
   service), the market-evidence service, the 20-coin market breadth read
   and the dashboard's market-mood gauge, the Sessions tab, the 20-minute
   cycle (`--interval-seconds`). A piece the operator later picks for the
-  rules comes back from git history (`LOOP_ALGO.md` C8-C13, D7).
+  rules comes back from git history (`docs/archive/loops/LOOP_ALGO.md` C8-C13, D7).
 
 ### Build
 
@@ -63,7 +63,7 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
 - [x] biz-app, outside this repo: `biz-insights feed` writes
   `out/biz-feed.json`; `biz-insights feed --history --step 60` writes one
   feed per hour into `out/biz-feed-history/`; `feed --watch` keeps the live
-  feed fresh (`LOOP_ALGO.md` D1-D3).
+  feed fresh (`docs/archive/loops/LOOP_ALGO.md` D1-D3).
 - [x] Run `bb biz-lead-study` on the real feed history and record the verdict
   here. Verdict (2026-10-29, `reports/biz_lead_study_2026-10-29.{md,csv}`):
   no lead. The window is short: 590 hourly feeds from 2026-10-01 to
@@ -81,11 +81,11 @@ AI), `posters` (distinct), `bullish` / `bearish` (AI tags weighted by the
 - [x] Nonstop trader: reacts to new prices and new feeds, runs the chosen
   rules, orders only through the route path with every hard-safety item,
   writes an audit row per decision and per route (`bb bot-spot --nonstop`,
-  `LOOP_ALGO.md` D7: 15 s ticks, a decision row on change plus hourly).
+  `docs/archive/loops/LOOP_ALGO.md` D7: 15 s ticks, a decision row on change plus hourly).
 - [x] Backtest of the chosen rules on the feed history and Binance candles,
   report in `reports/` (`reports/algo_backtest_2026-10-25.md`, D6).
 - [x] Dashboard: show the algorithm's signals and decisions; drop the LLM
-  bot, journal and exit-plan views (Algorithm tab, `LOOP_ALGO.md` C11-C12,
+  bot, journal and exit-plan views (Algorithm tab, `docs/archive/loops/LOOP_ALGO.md` C11-C12,
   D8).
 - [x] Docs and config describe only the algorithm trader: `README.md`,
   `OPERATIONS.md`, `.env.example`, `docker-compose.yml` (no

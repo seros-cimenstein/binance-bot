@@ -60,7 +60,7 @@ trader era are superseded and archived in
   and the 2026-10-29 prune's "what stays" for `bb-omp` and `bb-social`,
   which Phase 52 removes.
 
-## 2026-10-29 Phase 52 loop decisions (`LOOP_ALGO.md` section A)
+## 2026-10-29 Phase 52 loop decisions (`docs/archive/loops/LOOP_ALGO.md` section A)
 
 Answers the operator gave through the ask tool on 2026-10-29:
 
@@ -88,7 +88,7 @@ Answers the operator gave through the ask tool on 2026-10-29:
   market, plus the coin held; each coin's 1h move comes from the trader's own
   15 s price polls, seeded at start from 1m candles.
 
-## 2026-10-29 algorithm rules (`LOOP_ALGO.md` D6)
+## 2026-10-29 algorithm rules (`docs/archive/loops/LOOP_ALGO.md` D6)
 
 Shown to the operator: `reports/algo_backtest_2026-10-25.md`, the 2026-10-01
 to 2026-10-25 /biz/ feed history and 1m candles, tuned on the older half
@@ -111,7 +111,7 @@ Answers the operator gave through the ask tool on 2026-10-29:
   coin is still scored (talk and stance count 0, momentum only) and sold when
   it falls below the sell level.
 
-## 2026-10-30 feed pipeline on the laptop (`LOOP_ALGO.md` E3)
+## 2026-10-30 feed pipeline on the laptop (`docs/archive/loops/LOOP_ALGO.md` E3)
 
 Answers the operator gave through the ask tool on 2026-10-30:
 
@@ -136,7 +136,7 @@ run as systemd user units on the Pi (`deploy/seref/biz-watch.service`,
 directly. The laptop feed watcher and `scripts/biz_feed_to_pi.sh` are
 stopped and the copier removed. This supersedes "feed pipeline on the laptop".
 
-## 2026-10-30 practice run review (`LOOP_ALGO.md` E5, E6)
+## 2026-10-30 practice run review (`docs/archive/loops/LOOP_ALGO.md` E5, E6)
 
 Shown to the operator at 09:41 UTC: the Pi's plan-only practice run
 (`bot-spot-paper`, rule `algo-2026-10-29`) had run 42 minutes with one
