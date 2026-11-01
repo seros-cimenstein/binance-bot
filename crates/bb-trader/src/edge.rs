@@ -71,9 +71,10 @@ pub fn weights(
             .name
             .parse()
             .map_err(|e| format!("scoreboard row: {e}"))?;
-        let target = match name {
-            Name::Market { .. } => Target::Basket,
-            _ => Target::Assets,
+        let target = if name.is_market() {
+            Target::Basket
+        } else {
+            Target::Assets
         };
         if row.target != target || row.decayed || row.all.t.abs() < edge.min_t {
             continue;

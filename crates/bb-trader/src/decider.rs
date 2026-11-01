@@ -141,7 +141,7 @@ impl<'a> Scorer<'a> {
             .values
             .iter()
             .zip(&scored.terms)
-            .filter(|((name, _), _)| matches!(name, Name::Market { .. }))
+            .filter(|((name, _), _)| name.is_market())
             .map(|(_, term)| term)
             .sum();
         scored.score - market
@@ -156,7 +156,7 @@ impl<'a> Scorer<'a> {
         self.sleeve
             .weights
             .iter()
-            .filter(|(name, _)| matches!(name, Name::Market { .. }))
+            .filter(|(name, _)| name.is_market())
             .map(|(name, weight)| weight * signals.value(name, "", None, None))
             .sum::<f64>()
             + 0.0 // an empty sum is −0.0; record 0
@@ -170,7 +170,7 @@ impl<'a> Scorer<'a> {
         };
         Name::all()
             .into_iter()
-            .filter(|name| matches!(name, Name::Market { .. }))
+            .filter(|name| name.is_market())
             .map(|name| (name.to_string(), signals.value(&name, "", None, None) + 0.0))
             .collect()
     }

@@ -430,3 +430,21 @@ Operator, 2026-11-01: "I keen on testing it further anyways it's okay". The
 tags feed, scoreboard and paper rule keep running; no cut date is set. Round 2
 adds the agent-proposed attention test (talk surge as a filter for snap-back
 candidates) to the frozen grid.
+
+## 2026-11-01 fear/greed signal
+
+Shown to the operator: a check of the tagging (30 hand-read posts, about 25
+sensible; poster IDs on 23% of posts) and the finding that a mood or macro
+tag's `direction` means "growing", so `market.mood.direction` counts fear and
+euphoria alike (+0.73..+1.00 all October), with a throwaway fear/greed index
+tracking BTC (correlation +0.23 with the past 24h, −0.23 with the next 24h;
+about 30 independent readings). Operator, 2026-11-01, on the proposed fix
+(add a fear/greed signal, retest risk-off and fading the fear): "implement
+these aight nice catches".
+
+- Signal `market.mood.tone.<window>` in `crate::signals`: posters of bullish
+  moods (bullish, euphoria, fomo, greed, hopium, optimism) against bearish ones
+  (bearish, capitulation, despair, doom, fear, panic), the sets of the check;
+  other moods left out. The nightly scoreboard measures it; no rule weights it.
+- Retest: `reports/phase54/fear_greed_2026-11-01.md`: no variant passes the
+  round-1 bar; scoreboard |t| at most 1.35.

@@ -1483,14 +1483,15 @@ mod tests {
         let scores: Vec<f64> = algo["coins"].as_array().unwrap().iter().map(|c| c["score"].as_f64().unwrap()).collect();
         assert!(scores.windows(2).all(|w| w[0] >= w[1]), "best first: {scores:?}");
         assert_eq!(algo["coins"][0]["asset"], algo["best"]["asset"]);
-        // Every market-wide signal (2 kinds × 31), the live tags per kind and their loudest.
-        assert_eq!(algo["market_signals"].as_object().unwrap().len(), 62);
+        // Every market-wide signal (2 kinds × 31, plus the 5 mood tones), the live tags per
+        // kind and their loudest.
+        assert_eq!(algo["market_signals"].as_object().unwrap().len(), 67);
         assert_eq!(row["tags"]["kinds"]["asset"], 230);
         assert_eq!(row["tags"]["top"]["asset"].as_array().unwrap().len(), crate::tags::TOP_TAGS_PER_KIND);
         assert_eq!(row["run_config"]["rule"]["rules_version"], "algo-2026-10-29");
         assert_eq!(row["run_config"]["rule"]["sha256"].as_str().unwrap().len(), 64);
 
-        // Two funded sleeves weighting every signal name (305 per sleeve, in run_config and
+        // Two funded sleeves weighting every signal name (310 per sleeve, in run_config and
         // on every listed coin): the rows are trimmed to the budget, keeping each sleeve's
         // decision, orders and the rule's identity.
         let weights: serde_json::Map<String, Value> =
@@ -1511,7 +1512,7 @@ mod tests {
             assert!(row["algo"]["best"]["asset"].is_string() && row["algo"]["sizing"]["share"] == "0.5");
             // The best candidates stay listed, best first, with the market-wide signals.
             assert_eq!(row["algo"]["coins"][0]["asset"], row["algo"]["best"]["asset"]);
-            assert_eq!(row["algo"]["market_signals"].as_object().unwrap().len(), 62);
+            assert_eq!(row["algo"]["market_signals"].as_object().unwrap().len(), 67);
         }
         let (fast, core) = (&rows[0], &rows[1]);
         let best = fast["algo"]["best"]["asset"].as_str().unwrap();

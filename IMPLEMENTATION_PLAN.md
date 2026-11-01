@@ -33,7 +33,11 @@ live"). Phase 52 (the nonstop algorithm trader) is archived in
   - [x] Paper rule (operator 2026-11-01, "Tags + snap-back"):
     `config/rules/tagsnap-2026-11-01.json` with its test, practised plan-only
     by `bot-spot-paper` on the Pi.
-  - [ ] Round 2 around 2026-11-08: the same frozen grid plus an attention test
-    (talk surge as a filter for snap-back candidates; operator 2026-11-01
-    "keep testing"), judged only on data after 2026-11-01T02:00Z; the
-    operator picks.
+  - [x] Fear/greed signal (operator 2026-11-01, "implement these"):
+    `market.mood.tone.<window>` in `crate::signals` with its test, measured by
+    the nightly scoreboard; retest `reports/phase54/fear_greed_2026-11-01.md`:
+    no variant passes the bar.
+  - [ ] Round 2 around 2026-11-08: the round-1 grid, the fear/greed grid and an
+    attention test (talk surge as a filter for snap-back candidates; operator
+    2026-11-01 "keep testing"), judged only on data after 2026-11-01T02:00Z;
+    the operator picks.

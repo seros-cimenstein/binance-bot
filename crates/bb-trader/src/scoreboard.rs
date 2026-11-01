@@ -491,7 +491,7 @@ impl<'a> Study<'a> {
     pub fn new(candles: &'a Candles, params: Params) -> Self {
         let (market_names, asset_names) = Name::all()
             .into_iter()
-            .partition(|n| matches!(n, Name::Market { .. }));
+            .partition(|n| n.is_market());
         Self {
             candles,
             mid_ms: params.from_ms + (params.to_ms - params.from_ms) / 2,

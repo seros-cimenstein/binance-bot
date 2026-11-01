@@ -1,0 +1,9 @@
+family,rule,older_net_pct,older_rt,newer_net_pct,newer_rt,whole_net_pct,whole_rt,judge_net_pct,judge_rt,passes_bar
+fade the fear,fg-fade-24h-0.5,-13.562745,1,9.034549,4,-8.270279,4,-2.903327,2,False
+fade the fear,fg-fade-24h-1,-4.983196,1,-0.86685,3,-9.598776,1,-0.598147,2,False
+fade the fear,fg-fade-7d-0.5,-12.624138,1,4.834032,4,-10.84643,4,-2.933167,2,False
+fade the fear,fg-fade-7d-1,-2.162046,0,53.543416,4,-5.559576,0,-0.598147,2,False
+risk-off on greed,fg-offgreed-24h-l-0.2,-4.983196,1,-0.86685,3,-9.598776,1,-0.598147,2,False
+risk-off on greed,fg-offgreed-24h-l0,-6.380044,1,-0.86685,3,-10.92777,1,-0.598147,2,False
+risk-off on fear,fg-offfear-24h-l-0.4,0.0,0,0.0,0,0.0,0,-5.028146,1,False
+risk-off on fear,fg-offfear-24h-l-0.6,0.0,0,0.0,0,0.0,0,-3.634429,1,False

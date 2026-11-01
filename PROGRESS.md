@@ -18,11 +18,12 @@ snap-back rule `tagsnap-2026-11-01`. Round 2 runs around 2026-11-08
 
 ## On the Pi (`ssh pi-wired`, `~/binance-bot`)
 
-- Image `binance-bot:latest` = eb660f6cc305 (2026-11-01, adds the paper rule
-  file and `algo-backtest --candidates`), run by `bot-spot-paper` only.
-  `bot-spot` and `cryptobot-gui` run 093b478c3eff (tagged
-  `binance-bot:pre-tagsnap-20261101`); recreating them picks up `latest`,
-  which holds the same trader code. Rollback tags: `pre-algo-20261031` =
+- Image `binance-bot:latest` = 1f6647c1b187 (2026-11-01, adds
+  `market.mood.tone`), run by `scheduler` (nightly scoreboard now measures the
+  tone; run by hand at 13:00 UTC: 1,123 rows). `bot-spot-paper` runs
+  eb660f6cc305 (`pre-tone-20261101`), `bot-spot` and `cryptobot-gui` run
+  093b478c3eff (`pre-tagsnap-20261101`); the trader code they run is the same
+  apart from the new signal name. Rollback tags: `pre-algo-20261031` =
   1ce66703a04b (Phase 53, live stopped), `pre-tags-20261031` = e9efbd3c98dc
   (Phase 52), `pre-algo-20261030` = 428220df4d0f (the old LLM trader).
 - LIVE: `bot-spot` (`bb bot-spot --submit-live --nonstop`, since 2026-10-31
@@ -42,8 +43,8 @@ snap-back rule `tagsnap-2026-11-01`. Round 2 runs around 2026-11-08
   `tagsnap-2026-11-01` since 2026-11-01 07:58 UTC; first row 07:58:50: hold,
   best ZEC +0.697 under +1.0; 20 of 20 listed scores recomputed from the file.
 - `cryptobot-gui` (dashboard, `ssh -L 8787:localhost:8787 pi-wired`) reads
-  the live audit and state again. `scheduler` (23:45 UTC backup, 00:30 UTC
-  `bb tag-scoreboard`) still runs image 1ce66703a04b (no change it needs).
+  the live audit and state. `scheduler`: 23:45 UTC backup, 00:30 UTC
+  `bb tag-scoreboard` into `docker-data/scoreboard/`.
 - Never `docker compose up -d` without service names. The boot unit
   `binance-bot-compose.service` is disabled. `silly_swirles` (exited, not a
   compose service) is unrelated and left alone.
@@ -77,15 +78,19 @@ than 45 minutes. Details and stop: OPERATIONS.md, "Tags feed (biz-app)".
   the liquid 20). The judging window 10-26..11-01 (information only): BTC
   −2.66%, liquid 20 −2.60%, snap-back −2.96%, the tag rule +15.73% from one
   HYPE hold.
-- Scoreboard on the Pi (2026-11-01, 745 hourly feeds, 1,093 rows): 1 row with
-  |t| ≥ 2 and a positive net (`mood.agreement.24h`, n 145); `momentum.24h` at
-  +24h t −2.14.
+- Fear/greed signal `market.mood.tone` (2026-11-01,
+  `reports/phase54/fear_greed_2026-11-01.md`): the old `market.mood.direction`
+  counts fear and euphoria alike; the new tone has scoreboard |t| at most 1.35
+  (contrarian at +24h in the older half only), and none of 8 snap-back variants
+  with it passes the bar. Scoreboard on the Pi (2026-11-01, 745 hourly feeds):
+  1 row with |t| ≥ 2 and a positive net; `momentum.24h` at +24h t −2.14.
 
 ## Next steps
 
 1. Review the first live snap-back sell: fill, sleeve closed, audit rows, no
    halt (Phase 54 box 2).
-2. Tuning round 2 around 2026-11-08: rerun the frozen grid
-   (`reports/phase54/tag_rule_tuning_2026-11-01_grid.json`), judged only on
-   data after 2026-11-01T02:00Z, plus the paper trader's own record; the
+2. Tuning round 2 around 2026-11-08: rerun the frozen grids
+   (`reports/phase54/tag_rule_tuning_2026-11-01_grid.json`,
+   `fear_greed_2026-11-01_grid.json`) plus the attention test, judged only on
+   data after 2026-11-01T02:00Z, with the paper trader's own record; the
    operator picks (Phase 54 box 3).
