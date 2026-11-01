@@ -33,5 +33,7 @@ live"). Phase 52 (the nonstop algorithm trader) is archived in
   - [x] Paper rule (operator 2026-11-01, "Tags + snap-back"):
     `config/rules/tagsnap-2026-11-01.json` with its test, practised plan-only
     by `bot-spot-paper` on the Pi.
-  - [ ] Round 2 around 2026-11-08: the same frozen grid, judged only on data
-    after 2026-11-01T02:00Z; the operator picks.
+  - [ ] Round 2 around 2026-11-08: the same frozen grid plus an attention test
+    (talk surge as a filter for snap-back candidates; operator 2026-11-01
+    "keep testing"), judged only on data after 2026-11-01T02:00Z; the
+    operator picks.

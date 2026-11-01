@@ -420,3 +420,13 @@ the snap-back rule). Answers through the ask tool:
   2 posters; `core` share 0) plan-only, instead of `algo-2026-10-29`.
 - Round 2: "Around 11-08": the same frozen grid, judged only on data after
   2026-11-01T02:00Z.
+
+## 2026-11-01 tag pipeline: keep testing, no cut date
+
+Shown to the operator: an agent assessment (pipeline sound; tag direction as
+a signal unlikely to beat fees; coin selection and talk-as-attention the
+likelier uses) and a proposed keep-or-cut checkpoint at about 2026-12-01.
+Operator, 2026-11-01: "I keen on testing it further anyways it's okay". The
+tags feed, scoreboard and paper rule keep running; no cut date is set. Round 2
+adds the agent-proposed attention test (talk surge as a filter for snap-back
+candidates) to the frozen grid.
