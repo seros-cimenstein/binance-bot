@@ -1,0 +1,391 @@
+{
+ "frozen_at": "2026-11-01",
+ "bar": "tuning: net>0 in older and newer halves, >=10 round trips on whole; finalist = best whole net per family; judge once vs max(cash, BTC, liquid20, snapback)",
+ "contrarian_source": "scoreboard as-of 2026-10-25T14:00Z: narrative.direction.6h t-2.30, macro.direction.24h t-2.09",
+ "grids": {
+  "fade-narr-b0.3-s-0.3": {
+   "family": "fade",
+   "w": {
+    "narrative.direction.6h": -1
+   },
+   "buy": 0.3,
+   "sell": -0.3
+  },
+  "fade-stance-b0.3-s-0.3": {
+   "family": "fade",
+   "w": {
+    "stance.6h": -1
+   },
+   "buy": 0.3,
+   "sell": -0.3
+  },
+  "fade-narr-b0.3-s0.0": {
+   "family": "fade",
+   "w": {
+    "narrative.direction.6h": -1
+   },
+   "buy": 0.3,
+   "sell": 0.0
+  },
+  "fade-stance-b0.3-s0.0": {
+   "family": "fade",
+   "w": {
+    "stance.6h": -1
+   },
+   "buy": 0.3,
+   "sell": 0.0
+  },
+  "fade-narr-b0.6-s-0.3": {
+   "family": "fade",
+   "w": {
+    "narrative.direction.6h": -1
+   },
+   "buy": 0.6,
+   "sell": -0.3
+  },
+  "fade-stance-b0.6-s-0.3": {
+   "family": "fade",
+   "w": {
+    "stance.6h": -1
+   },
+   "buy": 0.6,
+   "sell": -0.3
+  },
+  "fade-narr-b0.6-s0.0": {
+   "family": "fade",
+   "w": {
+    "narrative.direction.6h": -1
+   },
+   "buy": 0.6,
+   "sell": 0.0
+  },
+  "fade-stance-b0.6-s0.0": {
+   "family": "fade",
+   "w": {
+    "stance.6h": -1
+   },
+   "buy": 0.6,
+   "sell": 0.0
+  },
+  "fade-3-b0.5-s-0.3": {
+   "family": "fade",
+   "w": {
+    "narrative.direction.6h": -1,
+    "macro.direction.24h": -1,
+    "stance.6h": -1
+   },
+   "buy": 0.5,
+   "sell": -0.3
+  },
+  "fade-3-b0.5-s0.0": {
+   "family": "fade",
+   "w": {
+    "narrative.direction.6h": -1,
+    "macro.direction.24h": -1,
+    "stance.6h": -1
+   },
+   "buy": 0.5,
+   "sell": 0.0
+  },
+  "fade-3-b1.0-s-0.3": {
+   "family": "fade",
+   "w": {
+    "narrative.direction.6h": -1,
+    "macro.direction.24h": -1,
+    "stance.6h": -1
+   },
+   "buy": 1.0,
+   "sell": -0.3
+  },
+  "fade-3-b1.0-s0.0": {
+   "family": "fade",
+   "w": {
+    "narrative.direction.6h": -1,
+    "macro.direction.24h": -1,
+    "stance.6h": -1
+   },
+   "buy": 1.0,
+   "sell": 0.0
+  },
+  "snap+stance.6h+0.5-b0.8": {
+   "family": "tags+snap",
+   "w": {
+    "momentum.24h": -1,
+    "stance.6h": 0.5
+   },
+   "buy": 0.8,
+   "sell": -0.3
+  },
+  "snap+stance.6h+0.5-b1.0": {
+   "family": "tags+snap",
+   "w": {
+    "momentum.24h": -1,
+    "stance.6h": 0.5
+   },
+   "buy": 1.0,
+   "sell": -0.3
+  },
+  "snap+stance.6h-0.5-b0.8": {
+   "family": "tags+snap",
+   "w": {
+    "momentum.24h": -1,
+    "stance.6h": -0.5
+   },
+   "buy": 0.8,
+   "sell": -0.3
+  },
+  "snap+stance.6h-0.5-b1.0": {
+   "family": "tags+snap",
+   "w": {
+    "momentum.24h": -1,
+    "stance.6h": -0.5
+   },
+   "buy": 1.0,
+   "sell": -0.3
+  },
+  "snap+narrative.direction.6h-0.5-b0.8": {
+   "family": "tags+snap",
+   "w": {
+    "momentum.24h": -1,
+    "narrative.direction.6h": -0.5
+   },
+   "buy": 0.8,
+   "sell": -0.3
+  },
+  "snap+narrative.direction.6h-0.5-b1.0": {
+   "family": "tags+snap",
+   "w": {
+    "momentum.24h": -1,
+    "narrative.direction.6h": -0.5
+   },
+   "buy": 1.0,
+   "sell": -0.3
+  },
+  "snap+asset.direction.24h+0.5-b0.8": {
+   "family": "tags+snap",
+   "w": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5
+   },
+   "buy": 0.8,
+   "sell": -0.3
+  },
+  "snap+asset.direction.24h+0.5-b1.0": {
+   "family": "tags+snap",
+   "w": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5
+   },
+   "buy": 1.0,
+   "sell": -0.3
+  },
+  "edge-1h-t2.0-b0.3": {
+   "family": "edge",
+   "w": {},
+   "buy": 0.3,
+   "sell": -0.3,
+   "edge": {
+    "edge_scoreboard": "unused.json",
+    "edge_scale": 10.0,
+    "edge_cap": 1.0,
+    "edge_refresh_hours": 24.0,
+    "edge_min_t": 2.0
+   },
+   "edge_h": "1h"
+  },
+  "edge-1h-t2.0-b0.6": {
+   "family": "edge",
+   "w": {},
+   "buy": 0.6,
+   "sell": -0.3,
+   "edge": {
+    "edge_scoreboard": "unused.json",
+    "edge_scale": 10.0,
+    "edge_cap": 1.0,
+    "edge_refresh_hours": 24.0,
+    "edge_min_t": 2.0
+   },
+   "edge_h": "1h"
+  },
+  "edge-1h-t3.0-b0.3": {
+   "family": "edge",
+   "w": {},
+   "buy": 0.3,
+   "sell": -0.3,
+   "edge": {
+    "edge_scoreboard": "unused.json",
+    "edge_scale": 10.0,
+    "edge_cap": 1.0,
+    "edge_refresh_hours": 24.0,
+    "edge_min_t": 3.0
+   },
+   "edge_h": "1h"
+  },
+  "edge-1h-t3.0-b0.6": {
+   "family": "edge",
+   "w": {},
+   "buy": 0.6,
+   "sell": -0.3,
+   "edge": {
+    "edge_scoreboard": "unused.json",
+    "edge_scale": 10.0,
+    "edge_cap": 1.0,
+    "edge_refresh_hours": 24.0,
+    "edge_min_t": 3.0
+   },
+   "edge_h": "1h"
+  },
+  "edge-24h-t2.0-b0.3": {
+   "family": "edge",
+   "w": {},
+   "buy": 0.3,
+   "sell": -0.3,
+   "edge": {
+    "edge_scoreboard": "unused.json",
+    "edge_scale": 1.0,
+    "edge_cap": 1.0,
+    "edge_refresh_hours": 24.0,
+    "edge_min_t": 2.0
+   },
+   "edge_h": "24h"
+  },
+  "edge-24h-t2.0-b0.6": {
+   "family": "edge",
+   "w": {},
+   "buy": 0.6,
+   "sell": -0.3,
+   "edge": {
+    "edge_scoreboard": "unused.json",
+    "edge_scale": 1.0,
+    "edge_cap": 1.0,
+    "edge_refresh_hours": 24.0,
+    "edge_min_t": 2.0
+   },
+   "edge_h": "24h"
+  },
+  "edge-24h-t3.0-b0.3": {
+   "family": "edge",
+   "w": {},
+   "buy": 0.3,
+   "sell": -0.3,
+   "edge": {
+    "edge_scoreboard": "unused.json",
+    "edge_scale": 1.0,
+    "edge_cap": 1.0,
+    "edge_refresh_hours": 24.0,
+    "edge_min_t": 3.0
+   },
+   "edge_h": "24h"
+  },
+  "edge-24h-t3.0-b0.6": {
+   "family": "edge",
+   "w": {},
+   "buy": 0.6,
+   "sell": -0.3,
+   "edge": {
+    "edge_scoreboard": "unused.json",
+    "edge_scale": 1.0,
+    "edge_cap": 1.0,
+    "edge_refresh_hours": 24.0,
+    "edge_min_t": 3.0
+   },
+   "edge_h": "24h"
+  },
+  "riskoff-mood+1-l-0.3": {
+   "family": "risk-off",
+   "w": {
+    "talk.6h": 0,
+    "stance.6h": 1,
+    "momentum.1h": 1,
+    "market.mood.direction.24h": 1
+   },
+   "buy": 0.5,
+   "sell": -0.5,
+   "risk": -0.3
+  },
+  "riskoff-mood+1-l0.0": {
+   "family": "risk-off",
+   "w": {
+    "talk.6h": 0,
+    "stance.6h": 1,
+    "momentum.1h": 1,
+    "market.mood.direction.24h": 1
+   },
+   "buy": 0.5,
+   "sell": -0.5,
+   "risk": 0.0
+  },
+  "riskoff-mood-1-l-0.3": {
+   "family": "risk-off",
+   "w": {
+    "talk.6h": 0,
+    "stance.6h": 1,
+    "momentum.1h": 1,
+    "market.mood.direction.24h": -1
+   },
+   "buy": 0.5,
+   "sell": -0.5,
+   "risk": -0.3
+  },
+  "riskoff-mood-1-l0.0": {
+   "family": "risk-off",
+   "w": {
+    "talk.6h": 0,
+    "stance.6h": 1,
+    "momentum.1h": 1,
+    "market.mood.direction.24h": -1
+   },
+   "buy": 0.5,
+   "sell": -0.5,
+   "risk": 0.0
+  },
+  "riskoff-macro+1-l-0.3": {
+   "family": "risk-off",
+   "w": {
+    "talk.6h": 0,
+    "stance.6h": 1,
+    "momentum.1h": 1,
+    "market.macro.direction.24h": 1
+   },
+   "buy": 0.5,
+   "sell": -0.5,
+   "risk": -0.3
+  },
+  "riskoff-macro+1-l0.0": {
+   "family": "risk-off",
+   "w": {
+    "talk.6h": 0,
+    "stance.6h": 1,
+    "momentum.1h": 1,
+    "market.macro.direction.24h": 1
+   },
+   "buy": 0.5,
+   "sell": -0.5,
+   "risk": 0.0
+  },
+  "riskoff-macro-1-l-0.3": {
+   "family": "risk-off",
+   "w": {
+    "talk.6h": 0,
+    "stance.6h": 1,
+    "momentum.1h": 1,
+    "market.macro.direction.24h": -1
+   },
+   "buy": 0.5,
+   "sell": -0.5,
+   "risk": -0.3
+  },
+  "riskoff-macro-1-l0.0": {
+   "family": "risk-off",
+   "w": {
+    "talk.6h": 0,
+    "stance.6h": 1,
+    "momentum.1h": 1,
+    "market.macro.direction.24h": -1
+   },
+   "buy": 0.5,
+   "sell": -0.5,
+   "risk": 0.0
+  }
+ }
+}

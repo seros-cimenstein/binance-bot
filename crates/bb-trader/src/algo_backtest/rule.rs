@@ -2,9 +2,10 @@
 //! with the trader's algorithm ([`crate::decider`]) on the tags feed visible at the step,
 //! as the live trader does.
 //!
-//! - Candidates: the tradable (cached) assets the visible feed's live asset tags reach,
-//!   directly or through the operator's proxies ([`TagsAt::candidates`]); none without a
-//!   visible feed.
+//! - Candidates ([`CandidateSet`]): as live, the tradable (cached) assets the visible
+//!   feed's live asset tags reach, directly or through the operator's proxies
+//!   ([`TagsAt::candidates`]); or, to measure what the tag pick adds, the liquid 20
+//!   ([`super::engine::LIQUID`]) that are priced. None without a visible feed either way.
 //! - Sleeves: a sleeve decides when it has a share or holds something
 //!   ([`crate::rules::Sleeve::active`]), on its own holdings; its sells sell exactly its
 //!   quantity and its buys spend its share of the portfolio value ([`super::engine`]).
@@ -16,7 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::data::{TagsAt, TagsHistory};
-use super::engine::{Books, Intent, StepRule, Trace};
+use super::engine::{Books, Intent, LIQUID, StepRule, Trace};
 use crate::book::{CoinView, Snapshot};
 use crate::decider::{Action, Inputs, Verdict, decide};
 use crate::rules::{Rule, Sleeve};
@@ -28,10 +29,21 @@ pub const TRACE_HEADER: &str = "time,feed_as_of,candidates,scoreboard,best_coin,
 /// The reason a sleeve's sell is listed with in the trade list.
 const SELL_REASON: &str = "rule";
 
+/// Which coins a step may buy (`bb algo-backtest --candidates`).
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CandidateSet {
+    /// As live: the coins the visible feed's live asset tags reach.
+    #[default]
+    Tags,
+    /// The liquid 20 that are priced at the step (still none without a visible feed).
+    Liquid,
+}
+
 /// The rule file stepped over the tags history (see the module docs).
 pub struct RuleFile {
     rule: Rule,
     tags: Arc<TagsHistory>,
+    candidate_set: CandidateSet,
     /// Edge style: the point-in-time scoreboards.
     boards: Arc<Vec<Scoreboard>>,
     steps: usize,
@@ -53,7 +65,12 @@ struct SleeveLog {
 
 impl RuleFile {
     /// `boards`: the point-in-time scoreboards an edge rule reads (empty for a fixed rule).
-    pub fn new(rule: Rule, tags: Arc<TagsHistory>, boards: Arc<Vec<Scoreboard>>) -> Self {
+    pub fn new(
+        rule: Rule,
+        tags: Arc<TagsHistory>,
+        boards: Arc<Vec<Scoreboard>>,
+        candidate_set: CandidateSet,
+    ) -> Self {
         let sleeves = rule
             .sleeves
             .iter()
@@ -62,6 +79,7 @@ impl RuleFile {
         Self {
             rule,
             tags,
+            candidate_set,
             boards,
             steps: 0,
             steps_with_feed: 0,
@@ -115,10 +133,18 @@ impl StepRule for RuleFile {
         for name in &feed.reach.scored_only {
             *self.scored_only.entry(name.clone()).or_default() += 1;
         }
-        feed.candidates()
-            .filter(|a| coins.contains_key(*a))
-            .cloned()
-            .collect()
+        match self.candidate_set {
+            CandidateSet::Tags => feed
+                .candidates()
+                .filter(|a| coins.contains_key(*a))
+                .cloned()
+                .collect(),
+            CandidateSet::Liquid => LIQUID
+                .iter()
+                .filter(|a| coins.contains_key(**a))
+                .map(|a| (*a).to_owned())
+                .collect(),
+        }
     }
 
     fn decide(&mut self, snap: &Snapshot, books: &Books) -> Vec<Intent> {

@@ -585,9 +585,11 @@ cargo run --release -p bb-cli --bin bb -- algo-backtest \
 ```
 
 The other flags are `--proxies` (`config/proxies.json`), `--scoreboards`
-(edge rules only), `--starting-balance` (1000), `--fee-bps` (7.5),
-`--slippage-bps` (5), `--step-minutes` (20), `--tags-max-age-minutes` (90)
-and `--output-dir` (`reports`). Add missing coins to the cache with
+(edge rules only), `--candidates` (`tags`, as live; `liquid`: the liquid 20
+priced at the step instead of the tag pick, still nothing without a visible
+feed, to measure what the tag pick adds), `--starting-balance` (1000),
+`--fee-bps` (7.5), `--slippage-bps` (5), `--step-minutes` (20),
+`--tags-max-age-minutes` (90) and `--output-dir` (`reports`). Add missing coins to the cache with
 `bb entry-study --symbols PAXG/USDT,XAUT/USDT --end <end> --days <n>` (public
 klines).
 

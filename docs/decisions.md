@@ -383,3 +383,26 @@ the levels.
   `bot-spot-paper` keeps running `algo-2026-10-29` plan-only (its own
   `BOT_SPOT_ALGO_RULE` in `docker-compose.yml`) as the base for tuning the
   tag rule; the dashboard reads the live files again.
+
+## 2026-11-01 tag-rule tuning: scope and judging
+
+Shown to the operator: the live snap-back's first trade (49.3 TRX at 0.303
+on 2026-10-31 23:20 UTC, open), the scoreboard of 2026-11-01 (745 feeds; tag
+direction signals of narrative, macro and event negative at |t| ≥ 2, only 10
+of 1,093 rows at |t| ≥ 2) and a tuning process: search on 10-01..10-25, judge
+finalists once on later data, the winner practises plan-only, the operator
+decides live. Answers through the ask tool:
+
+- Families, all five ("lets test them all basically"): fade the board
+  (contrarian tag weights), tags + snap-back, edge style, risk-off from
+  macro/mood, candidate set (tag-picked coins against the liquid 20).
+- Judging: "Now, 10-25 to today".
+- Snap-back: "No, leave it alone": the live rule is not tuned.
+
+Pass bar, fixed before any judging run (agent proposal shown with the
+process): on the tuning window 2026-10-01T14:00Z..10-25T14:00Z, net > 0 in
+both 12-day halves and at least 10 round trips, 25 bps per round trip; then,
+once, on the judging window 2026-10-26T02:00Z..11-01T02:00Z, net above cash,
+holding BTC, holding the liquid 20 equally and the live snap-back rule on the
+same window. Signals for fade-the-board and edge weights come only from
+scoreboards usable by the decision time (`--as-of`), never from later data.

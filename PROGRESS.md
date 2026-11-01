@@ -3,7 +3,7 @@
 Current state only; rewrite it, do not append (`CODEX.md`, "Required
 Workflow"). History: git log, `docs/decisions.md`, `docs/archive/`.
 
-Updated 2026-10-31.
+Updated 2026-11-01.
 
 ## Direction
 
@@ -11,8 +11,9 @@ The trader is a nonstop algorithm: Binance prices plus /biz/ tags from
 biz-app, no LLM, no chat, no timer, no Telegram. Since 2026-10-31 20:01 UTC it
 trades LIVE with the operator's snap-back rule (`docs/decisions.md`,
 "2026-10-31 snap-back rule live"; plan-only step waived by the operator). The
-tag rule `algo-2026-10-29` keeps practising plan-only; tuning how it operates
-is next (`IMPLEMENTATION_PLAN.md` Phase 54).
+tag rule `algo-2026-10-29` keeps practising plan-only. Tuning round 1 for the
+tag rule (2026-11-01) found no rule file that passes the bar; the operator
+decides what the paper trader practises next (`IMPLEMENTATION_PLAN.md` Phase 54).
 
 ## On the Pi (`ssh pi-wired`, `~/binance-bot`)
 
@@ -60,17 +61,27 @@ buys. Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
 
 ## Evidence so far
 
-- Scoreboard on the Pi (2026-10-31, 736 hourly feeds, 1,093 rows): no tag
-  signal with |t| ≥ 2 and a positive net; `momentum.24h` at +24h −1.36%
-  excess, t −2.48, same sign in both halves.
-- Snap-back rule on the tags history 2026-10-01T14:00Z..10-25T14:00Z: +0.21%
-  older half, +7.81% newer half, +8.18% whole window, 6 round trips
-  (in-sample). Tag rule on the same window: −21.05%, 15 round trips
-  (`reports/phase53/algo_backtest_2026-10-25.md`).
+- Live snap-back, first trade: bought 49.3 TRX at 0.303 (14.94 USDT, all the
+  USDT) on 2026-10-31 23:20 UTC (24h move −8.1%, score +0.810); filled, booked
+  to sleeve `fast`, no halt. Open at 0.3106 on 2026-11-01 06:43 UTC (about
+  +0.38 USDT, +2.5%, before the sell fee); it sells when TRX's 24h change goes
+  above +3% (−4.1%, score +0.41, at 06:21 UTC).
+- Tag-rule tuning round 1 (`reports/phase54/tag_rule_tuning_2026-11-01.md`):
+  36 frozen rule files in four families on 2026-10-01..10-25, none positive in
+  both halves with 10 or more round trips; fade-the-board loses in every
+  variant; tags + snap-back variants are positive in both halves with 4 round
+  trips. The tag pick helps the snap-back rule (+8.18% against −42.92% with
+  the liquid 20). The judging window 10-26..11-01 (information only): BTC
+  −2.66%, liquid 20 −2.60%, snap-back −2.96%, the tag rule +15.73% from one
+  HYPE hold.
+- Scoreboard on the Pi (2026-11-01, 745 hourly feeds, 1,093 rows): 1 row with
+  |t| ≥ 2 and a positive net (`mood.agreement.24h`, n 145); `momentum.24h` at
+  +24h t −2.14.
 
 ## Next steps
 
-1. Watch the first live snap-back orders: fills, sleeve booking in the state
-   file, audit rows, no halt (Phase 54 box 2).
-2. Tag-rule tuning, planned with the operator (Phase 54 box 3); 30-day
-   scoreboard counts are comparable from about 2026-11-07.
+1. Review the first live snap-back sell: fill, sleeve closed, audit rows, no
+   halt (Phase 54 box 2).
+2. The operator decides what `bot-spot-paper` practises next and when tuning
+   round 2 runs on fresh data (Phase 54 box 3); 30-day scoreboard counts are
+   comparable from about 2026-11-07.

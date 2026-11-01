@@ -86,7 +86,8 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
   one warning listing them.
 - **Backtest.** `bb algo-backtest --rule <rule file> --tags-history <history
   dir>` runs the rule file's sleeves over the window as the trader would, with
-  candidates from the tags history (OPERATIONS.md, "Algorithm backtest"). The compose profile
+  candidates from the tags history (or `--candidates liquid`: the liquid 20,
+  to measure what the tag pick adds; OPERATIONS.md, "Algorithm backtest"). The compose profile
   `paper` runs the nonstop trader plan-only.
 - **Rule in force live:** `config/rules/snapback-2026-10-31.json` (fast
   sleeve, share 1: `momentum.24h` −1, buy at +0.8, sell below -0.3; core

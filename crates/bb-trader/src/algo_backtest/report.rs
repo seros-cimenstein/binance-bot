@@ -18,7 +18,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 
 use super::data::{MINUTE_MS, Market, TagsHistory};
 use super::engine::{COVERAGE, Config, LIQUID, RunResult, run};
-use super::rule::{RuleFile, TRACE_HEADER};
+use super::rule::{CandidateSet, RuleFile, TRACE_HEADER};
 use crate::error::{Result, TraderError};
 use crate::reach::Proxies;
 use crate::rules::Rule;
@@ -50,6 +50,10 @@ pub struct AlgoBacktestArgs {
     /// --as-of`); each step uses the newest whose outcomes all closed by then.
     #[arg(long)]
     pub scoreboards: Option<PathBuf>,
+    /// Which coins a step may buy: `tags` as live, or `liquid` (the liquid 20) to measure
+    /// what the tag pick adds.
+    #[arg(long, value_enum, default_value_t = CandidateSet::Tags)]
+    pub candidates: CandidateSet,
     /// Directory of `1m_<BASE>_USDT_<start>_<end>.json` files (the `bb entry-study` cache).
     #[arg(long, default_value = "data/entry-study-cache")]
     pub cache_dir: PathBuf,
@@ -161,6 +165,7 @@ pub struct ReportContext {
     pub tags: String,
     /// Edge rules: one line describing the scoreboards.
     pub scoreboards: Option<String>,
+    pub candidates: CandidateSet,
 }
 
 fn tags_summary(history: &TagsHistory, dir: &Path, proxies: &Path) -> String {
@@ -412,7 +417,11 @@ pub fn markdown(r: &RunResult, ctx: &ReportContext) -> String {
     let _ = writeln!(out, "\n## Assumptions\n");
     for line in [
         "Decisions see only bars closed by the step time and the newest tags feed with `as_of` at or before it (none when older than the age limit); intents fill at the open of the 1m bar that opens at the step, sells before buys.".to_string(),
-        "Candidates, as live: the cached coins the visible feed's live asset tags reach, directly or through the proxy file; held coins are always scored. A coin without a cached market is scored-only and never bought.".to_string(),
+        match ctx.candidates {
+            CandidateSet::Tags => "Candidates, as live: the cached coins the visible feed's live asset tags reach, directly or through the proxy file; held coins are always scored. A coin without a cached market is scored-only and never bought.",
+            CandidateSet::Liquid => "Candidates (`--candidates liquid`, not as live): the liquid 20 priced at the step, whatever the tags reach; none without a visible feed, as live; held coins are always scored.",
+        }
+        .to_string(),
         "Sleeves: each sleeve with a share or a holding decides on its own holdings; a sell sells exactly its quantity, a buy spends its share of the portfolio value at the step (cash plus every sleeve's holdings), capped by the cash left.".to_string(),
         format!("The {MIN_NOTIONAL_USDT} USDT minimum applies to buys only; a held position can always be sold."),
         "A buy with no cash left is counted as `no_cash`.".to_string(),
@@ -515,8 +524,9 @@ pub fn run_backtest(args: &AlgoBacktestArgs) -> Result<(RunResult, Vec<PathBuf>)
             .scoreboards
             .as_deref()
             .map(|dir| scoreboards_summary(&boards, dir)),
+        candidates: args.candidates,
     };
-    let step = RuleFile::new(rule, Arc::new(tags), Arc::new(boards));
+    let step = RuleFile::new(rule, Arc::new(tags), Arc::new(boards), args.candidates);
     let result = run(&market, &cfg, Box::new(step))?;
     std::fs::create_dir_all(&args.output_dir)?;
     let stem = &ctx.stem;
@@ -653,6 +663,7 @@ mod tests {
             step_minutes: 20,
             tags_max_age_minutes: 90,
             output_dir: out.to_path_buf(),
+            candidates: CandidateSet::Tags,
         }
     }
 
@@ -797,6 +808,57 @@ mod tests {
         }
         let trades = std::fs::read_to_string(&paths[2]).unwrap();
         assert!(trades.lines().skip(1).any(|l| l.starts_with("core,")));
+    }
+
+    #[test]
+    fn the_liquid_candidate_set_replaces_the_tag_pick() {
+        let f = fixture();
+        let rule = rule_file(
+            f.files.path(),
+            "momentum",
+            serde_json::json!([sleeve(
+                "fast",
+                1.0,
+                0.2,
+                0.0,
+                serde_json::json!({"momentum.1h": 1})
+            )]),
+        );
+        let run_with = |candidates: CandidateSet| {
+            let out = tempfile::tempdir().unwrap();
+            let mut a = args(&f, &rule, out.path());
+            a.candidates = candidates;
+            let (result, paths) = run_backtest(&a).unwrap();
+            let rows = trace_rows(&out.path().join("algo_backtest_2026-07-23_fast_trace.csv"));
+            let md = std::fs::read_to_string(&paths[0]).unwrap();
+            (result, rows, md)
+        };
+        // As live: the fed coins with a market (SOL, ETH) and gold's proxies.
+        let (tags, rows, md) = run_with(CandidateSet::Tags);
+        assert!(rows.iter().all(|r| r[2] == "4"), "{rows:?}");
+        assert!(md.contains("Candidates, as live"), "{md}");
+        assert!(
+            tags.trades
+                .iter()
+                .all(|t| ["SOL", "ETH", "PAXG", "XAUT"].contains(&t.asset.as_str()))
+        );
+        // Liquid: the 20 liquid coins whatever the feed names; never the gold proxies.
+        let (liquid, rows, md) = run_with(CandidateSet::Liquid);
+        assert!(rows.iter().all(|r| r[2] == "20"), "{rows:?}");
+        assert!(md.contains("`--candidates liquid`, not as live"), "{md}");
+        assert!(!liquid.trades.is_empty());
+        assert!(
+            liquid
+                .trades
+                .iter()
+                .all(|t| LIQUID.contains(&t.asset.as_str()))
+        );
+        assert!(
+            liquid
+                .trades
+                .iter()
+                .any(|t| !["SOL", "ETH"].contains(&t.asset.as_str()))
+        );
     }
 
     #[test]
