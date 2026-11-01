@@ -91,10 +91,10 @@ the decided action changes and once an hour; an unchanged tick writes nothing:
   `paper` runs the nonstop trader plan-only.
 - **Rule in force live:** `config/rules/snapback-2026-10-31.json` (fast
   sleeve, share 1: `momentum.24h` −1, buy at +0.8, sell below -0.3; core
-  sleeve share 0; `docs/decisions.md`). The tag rule
-  `config/rules/algo-2026-10-29.json` (`talk.6h` 0, `stance.6h` 1,
-  `momentum.1h` 1, buy at +0.5, sell below -0.5, 2 posters) runs plan-only in
-  `bot-spot-paper` for its tuning.
+  sleeve share 0; `docs/decisions.md`). The paper rule
+  `config/rules/tagsnap-2026-11-01.json` (`momentum.24h` −1,
+  `asset.direction.24h` +0.5, buy at +1.0, sell below -0.3, 2 posters) runs
+  plan-only in `bot-spot-paper`.
 - **Hard safety (always on, fail closed):**
   - live arming: `BOT_SPOT_ENABLED=true`, `BOT_SPOT_DYNAMIC_SCOPE=all_eligible_spot`, `USE_TESTNET=false`, `DRY_RUN=false`, `CONFIRM_LIVE_TRADING=yes`;
   - the emergency stop file (`BOT_SPOT_STOP_PATH`), checked on every tick, before every route, before every leg and before every order;

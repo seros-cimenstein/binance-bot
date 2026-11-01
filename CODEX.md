@@ -65,10 +65,12 @@ when the task needs them.
   nothing. Candidates: the coins the tags feed's live asset tags reach with an
   eligible USDT market, directly or through the operator's proxy file
   (`BOT_SPOT_PROXIES`, gold through PAXG and XAUT). Without a fresh tags feed
-  nothing is bought. Rule set name `snapback-2026-10-31`. The tag rule
-  `algo-2026-10-29` (`config/rules/algo-2026-10-29.json`: 0 `talk.6h` + 1
-  `stance.6h` + 1 `momentum.1h`, buy +0.5, sell below -0.5, stances need 2
-  posters) runs plan-only in `bot-spot-paper` for its tuning. The edge style
+  nothing is bought. Rule set name `snapback-2026-10-31`. `bot-spot-paper`
+  practises plan-only the operator's paper rule `tagsnap-2026-11-01`
+  (`config/rules/tagsnap-2026-11-01.json`: −1 `momentum.24h` + 0.5
+  `asset.direction.24h`, buy +1.0, sell below -0.3, 2 posters; operator
+  2026-11-01). The tag rule `algo-2026-10-29`
+  (`config/rules/algo-2026-10-29.json`) is no longer run. The edge style
   (weights from the tag scoreboard), horizon filters, risk-off and other
   sleeve splits exist but are not in force; choosing them is the operator's
   (the tuning phase).

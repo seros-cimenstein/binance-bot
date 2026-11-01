@@ -435,10 +435,18 @@ to the operator, not in `reports/`): +0.21% older half, +7.81% newer half,
 +8.18% whole window, 6 round trips; in-sample (the scoreboard that suggested
 `momentum.24h` covers the window).
 
-The tag rule `algo-2026-10-29` (`config/rules/algo-2026-10-29.json`, operator
-2026-10-29): fast sleeve share 1, score = `stance.6h` + `momentum.1h`
-(`talk.6h` weight 0, 2 posters); buy at +0.5, sell below -0.5; core sleeve
-share 0. It runs plan-only in `bot-spot-paper` for its tuning. Its backtest:
+The paper rule (operator 2026-11-01, `docs/decisions.md`, "2026-11-01 tuning
+round 1 result"): `config/rules/tagsnap-2026-11-01.json`, rule set
+`tagsnap-2026-11-01`: fast sleeve share 1, score = −1 `momentum.24h` + 0.5
+`asset.direction.24h` (2 posters); buy at +1.0, sell below -0.3; core sleeve
+share 0. It runs plan-only in `bot-spot-paper`; its backtest is in
+`reports/phase54/tag_rule_tuning_2026-11-01.md` (+8.50%, 4 round trips, does
+not pass the round-1 bar).
+
+The earlier tag rule `algo-2026-10-29` (`config/rules/algo-2026-10-29.json`,
+operator 2026-10-29), no longer run: fast sleeve share 1, score =
+`stance.6h` + `momentum.1h` (`talk.6h` weight 0, 2 posters); buy at +0.5,
+sell below -0.5; core sleeve share 0. Its backtest:
 `reports/algo_backtest_2026-10-25.md` (`bb algo-backtest` on the old /biz/
 coin feed history, `--end 2026-10-25T14:00:00Z --days 24`): +18.42% on the
 tuning half, -11.18% on the judging half (BTC -3.47%, liquid basket -9.78%). On the tags
@@ -472,8 +480,8 @@ backtest").
   runs the nonstop trader plan-only with its own files
   (`bot-spot-paper-{decisions.jsonl,state.json}`, lock `bot-spot-paper.lock`)
   and the shared stop file, on its own rule: `docker-compose.yml` sets its
-  `BOT_SPOT_ALGO_RULE` to the tag rule `algo-2026-10-29` (operator
-  2026-10-31), whatever the env file's live rule is. Plan-only rows do not
+  `BOT_SPOT_ALGO_RULE` to the paper rule `tagsnap-2026-11-01` (operator
+  2026-11-01), whatever the env file's live rule is. Plan-only rows do not
   move the wallet, so it keeps deciding on the real balances.
 - **Going live with a new rule** (after its practice run, unless the operator
   waives it for that rule set, and the operator's go): `docker tag

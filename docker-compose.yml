@@ -61,8 +61,8 @@ services:
 
   # Practice run of the nonstop trader: plan-only, so it records `planned` routes and places
   # no order. Its own audit, state and lock; the emergency stop file is shared, so
-  # data/bot-spot.stop stops it too. It practises the tag rule algo-2026-10-29 for its
-  # tuning (operator 2026-10-31) while the live bot-spot trades the env file's rule.
+  # data/bot-spot.stop stops it too. It practises the operator's paper rule
+  # tagsnap-2026-11-01 (operator 2026-11-01) while the live bot-spot trades the env file's rule.
   # Plan-only decisions do not move the wallet: it keeps deciding on the real balances.
   bot-spot-paper:
     <<: *base
@@ -75,7 +75,7 @@ services:
       BOT_SPOT_AUDIT_PATH: /app/data/bot-spot-paper-decisions.jsonl
       BOT_SPOT_STATE_PATH: /app/data/bot-spot-paper-state.json
       BOT_SPOT_LOCK_PATH: /app/data/bot-spot-paper.lock
-      BOT_SPOT_ALGO_RULE: config/rules/algo-2026-10-29.json
+      BOT_SPOT_ALGO_RULE: config/rules/tagsnap-2026-11-01.json
     command: ["bb", "bot-spot", "--plan-only", "--nonstop"]
 
   # ---------- DASHBOARD ----------

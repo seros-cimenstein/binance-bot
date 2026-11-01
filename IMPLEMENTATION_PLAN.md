@@ -23,12 +23,15 @@ live"). Phase 52 (the nonstop algorithm trader) is archived in
   rows, no halt. (Buy reviewed 2026-11-01: 49.3 TRX at 0.303 on 10-31 23:20
   UTC, filled, booked to sleeve `fast`, no halt; the first sell is still to
   come.)
-- [ ] Tag-rule tuning: plan with the operator how the tag rule
-  (`algo-2026-10-29`, plan-only in `bot-spot-paper`) should operate; agents
-  propose and back proposals with backtests, the operator picks.
+- [ ] Tag-rule tuning: plan with the operator how the tag rule should
+  operate; agents propose and back proposals with backtests, the operator
+  picks.
   - [x] Round 1 (operator 2026-11-01: all five families, judge on 10-26..11-01):
     `bb algo-backtest --candidates liquid`, 36 frozen rule files on the Pi's
     tags history, report `reports/phase54/tag_rule_tuning_2026-11-01.md`: no
     rule file passes the bar.
-  - [ ] The operator decides what `bot-spot-paper` practises next and when
-    round 2 runs.
+  - [x] Paper rule (operator 2026-11-01, "Tags + snap-back"):
+    `config/rules/tagsnap-2026-11-01.json` with its test, practised plan-only
+    by `bot-spot-paper` on the Pi.
+  - [ ] Round 2 around 2026-11-08: the same frozen grid, judged only on data
+    after 2026-11-01T02:00Z; the operator picks.

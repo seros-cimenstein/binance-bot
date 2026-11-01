@@ -468,6 +468,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_paper_rule_is_tagsnap_2026_11_01() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/rules/tagsnap-2026-11-01.json"
+        );
+        let rule = Rule::load(Path::new(path)).unwrap();
+        assert_eq!(
+            (rule.rules_version.as_str(), rule.style),
+            ("tagsnap-2026-11-01", Style::Fixed)
+        );
+        let fast = rule.trading_sleeve();
+        assert_eq!(
+            (fast.name.as_str(), fast.share, fast.min_posters),
+            ("fast", 1.0, 2)
+        );
+        assert_eq!(
+            fast.to_string(),
+            "fast: momentum.24h -1, asset.direction.24h +0.5; buy at score ≥ +1, sell below -0.3"
+        );
+        assert_eq!((rule.sleeves[1].share, rule.sleeves[1].weights.len()), (0.0, 0));
+    }
+
+    #[test]
     fn a_bad_rule_file_is_refused_with_the_reason() {
         let base: serde_json::Value =
             serde_json::from_str(&one_sleeve(&[("momentum.1h", 1.0)], 0.5, 0.0)).unwrap();

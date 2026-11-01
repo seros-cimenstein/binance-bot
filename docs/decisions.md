@@ -406,3 +406,17 @@ once, on the judging window 2026-10-26T02:00Z..11-01T02:00Z, net above cash,
 holding BTC, holding the liquid 20 equally and the live snap-back rule on the
 same window. Signals for fade-the-board and edge weights come only from
 scoreboards usable by the decision time (`--as-of`), never from later data.
+
+## 2026-11-01 tuning round 1 result: paper rule and round 2
+
+Shown to the operator: `reports/phase54/tag_rule_tuning_2026-11-01.md` (36
+rule files, none passes the bar; closest the tags + snap-back variant
+`momentum.24h` −1 + `asset.direction.24h` +0.5, buy 1.0, sell −0.3: +6.89% /
++1.56% / +8.50%, 4 round trips; the tag pick far better than the liquid 20 for
+the snap-back rule). Answers through the ask tool:
+
+- Paper rule: "Tags + snap-back": `bot-spot-paper` practises
+  `config/rules/tagsnap-2026-11-01.json` (that variant, sleeve `fast` share 1,
+  2 posters; `core` share 0) plan-only, instead of `algo-2026-10-29`.
+- Round 2: "Around 11-08": the same frozen grid, judged only on data after
+  2026-11-01T02:00Z.
