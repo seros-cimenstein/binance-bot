@@ -1,0 +1,88 @@
+{
+ "frozen_at": "2026-11-01",
+ "base": "live snap-back rule snapback-2026-10-31 (momentum.24h -1, buy 0.8, sell -0.3)",
+ "bar": "same as round 1: net>0 in both tuning halves and >=10 round trips on the whole tuning window; judge window information only unless a variant passes",
+ "note": "a market-wide weight also shifts every coin score by weight x tone (the engine adds market terms to scores); risk-off uses the same market score",
+ "grids": {
+  "fg-fade-24h-0.5": {
+   "family": "fade the fear",
+   "weights": {
+    "momentum.24h": -1,
+    "market.mood.tone.24h": -0.5
+   },
+   "buy": 0.8,
+   "sell": -0.3,
+   "risk_off_below": null
+  },
+  "fg-fade-24h-1": {
+   "family": "fade the fear",
+   "weights": {
+    "momentum.24h": -1,
+    "market.mood.tone.24h": -1
+   },
+   "buy": 0.8,
+   "sell": -0.3,
+   "risk_off_below": null
+  },
+  "fg-fade-7d-0.5": {
+   "family": "fade the fear",
+   "weights": {
+    "momentum.24h": -1,
+    "market.mood.tone.7d": -0.5
+   },
+   "buy": 0.8,
+   "sell": -0.3,
+   "risk_off_below": null
+  },
+  "fg-fade-7d-1": {
+   "family": "fade the fear",
+   "weights": {
+    "momentum.24h": -1,
+    "market.mood.tone.7d": -1
+   },
+   "buy": 0.8,
+   "sell": -0.3,
+   "risk_off_below": null
+  },
+  "fg-offgreed-24h-l-0.2": {
+   "family": "risk-off on greed",
+   "weights": {
+    "momentum.24h": -1,
+    "market.mood.tone.24h": -1
+   },
+   "buy": 0.8,
+   "sell": -0.3,
+   "risk_off_below": -0.2
+  },
+  "fg-offgreed-24h-l0": {
+   "family": "risk-off on greed",
+   "weights": {
+    "momentum.24h": -1,
+    "market.mood.tone.24h": -1
+   },
+   "buy": 0.8,
+   "sell": -0.3,
+   "risk_off_below": 0.0
+  },
+  "fg-offfear-24h-l-0.4": {
+   "family": "risk-off on fear",
+   "weights": {
+    "momentum.24h": -1,
+    "market.mood.tone.24h": 1
+   },
+   "buy": 0.8,
+   "sell": -0.3,
+   "risk_off_below": -0.4
+  },
+  "fg-offfear-24h-l-0.6": {
+   "family": "risk-off on fear",
+   "weights": {
+    "momentum.24h": -1,
+    "market.mood.tone.24h": 1
+   },
+   "buy": 0.8,
+   "sell": -0.3,
+   "risk_off_below": -0.6
+  }
+ }
+}
