@@ -57,15 +57,10 @@ snap-back rule `tagsnap-2026-11-01`. Round 2 runs around 2026-11-08
 
 ## Feed pipeline (on the Pi)
 
-systemd user units, enabled at boot (linger on): `biz-watch` (scraper,
-`biz watch --no-media` in `~/biz-app/biz_scraper`) and `biz-feed`
-(`biz-insights feed --watch --history-dir docker-data/tags-history`, a round
-every 15 min, prompt `tags-1`, Gemini through omp, agent dir
-`~/.local/share/biz-feed/omp-agent`) writing `docker-data/tags-feed.json`,
-`tags-registry.json` and the hourly history `docker-data/tags-history/`.
-Both traders take candidates from it: a feed older than 45 minutes means no
-buys. Stop: `ssh pi-wired 'systemctl --user stop biz-feed biz-watch'`
-(OPERATIONS.md, "/biz/ feed").
+`biz-watch` and `biz-feed` (systemd user units, enabled at boot) write
+`docker-data/tags-feed.json`, the registry and the hourly history every 15
+min; both traders take candidates from it and buy nothing from a feed older
+than 45 minutes. Details and stop: OPERATIONS.md, "Tags feed (biz-app)".
 
 ## Evidence so far
 
