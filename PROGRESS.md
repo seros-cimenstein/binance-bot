@@ -73,14 +73,10 @@ OPERATIONS.md, "Tags feed (biz-app)".
   the tag rule +15.73% from one HYPE hold.
 - Fear/greed signal `market.mood.tone` (2026-11-01,
   `reports/phase54/fear_greed_2026-11-01.md`): no snap-back variant passes.
-- Tagging fixes (2026-11-02, operator "lets address these issues"): blind
-  200-post audit (`reports/phase54/tagger_audit_2026-11-02.md`, agent labels):
-  coin direction agreement 77% with tags-1, 82% with tags-2; moods were 16
-  bearish to 2 bullish against the labels' 9 to 12, now 14 to 6. Over the
-  month moods went 3.4:1 bearish to 2:1; 3,623 of 6,406 macro tags carry a
-  risk side. Step-aside grid (`reports/phase54/step_aside_2026-11-02.md`):
-  none of 8 variants passes; macro risk-down at p20 cuts the liquid loss most
-  (−28.6% against −45.4%). Scoreboard 11-02: 60 tone rows, |t| ≤ 1.03.
+- Tagging fixes (2026-11-02, `reports/phase54/tagger_audit_2026-11-02.md`,
+  agent labels): coin direction agreement 77% → 82%; moods 16:2 bearish →
+  14:6 (labels 9:12). Step-aside grid (`step_aside_2026-11-02.md`): none of 8
+  passes. Scoreboard 11-02: 60 tone rows, |t| ≤ 1.03.
 - tags-1 against tags-2 (`reports/phase54/tags2_ab_2026-11-02.md`, 55 rules,
   880 runs): no rule passes with either. The live rule +8.50% → +1.81% on the
   tuning window (one first pick: QNT vs SOL); plain snap-back +8.18% under
