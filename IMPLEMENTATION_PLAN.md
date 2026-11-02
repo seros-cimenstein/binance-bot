@@ -19,10 +19,15 @@ live"). Phase 52 (the nonstop algorithm trader) is archived in
   the tag rule through its own `BOT_SPOT_ALGO_RULE`, the dashboard on the live
   files, `bot-spot` started live, its first decisions checked against the
   rule file, `PROGRESS.md` entry (plan-only step waived by the operator).
-- [ ] The first live snap-back orders reviewed: fills, sleeve booking, audit
-  rows, no halt. (Buy reviewed 2026-11-01: 49.3 TRX at 0.303 on 10-31 23:20
-  UTC, filled, booked to sleeve `fast`, no halt; the first sell is still to
-  come.)
+- [x] The first live snap-back orders reviewed: fills, sleeve booking, audit
+  rows, no halt. (Reviewed 2026-11-02: buy 49.3 TRX at 0.303 on 10-31 23:20,
+  sell 49.3 TRX at 0.313 and buy 27.1 RUNE at 0.568 on 11-01 21:22 UTC; all
+  filled, the fast sleeve booked TRX, closed it and booked RUNE; no halt.)
+- [x] Tags + snap-back live (operator 2026-11-02, "Switch to tagsnap now",
+  plan-only step waived): `.env.docker` on `tagsnap-2026-11-01`, rollback tag
+  `binance-bot:pre-algo-20261102`, `bot-spot` recreated on image 1f6647c1b187
+  at 07:06 UTC; first row keeps RUNE (score +1.0), 21 of 21 listed scores
+  recomputed from the file, no halt.
 - [ ] Tag-rule tuning: plan with the operator how the tag rule should
   operate; agents propose and back proposals with backtests, the operator
   picks.

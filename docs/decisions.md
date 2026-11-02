@@ -354,6 +354,8 @@ unchanged"). `bot-spot-paper` keeps running; nothing was changed on the Pi.
 
 ## 2026-10-31 snap-back rule live
 
+Superseded on 2026-11-02 ("2026-11-02 tags + snap-back rule live").
+
 Shown to the operator: the Pi's tag scoreboard of 2026-10-31 (736 hourly
 feeds; no tag signal with |t| ≥ 2 and a positive net; `stance.6h` slightly
 contrarian at +1h, t −2.02; `momentum.1h` about zero; `momentum.24h` at +24h
@@ -448,3 +450,25 @@ these aight nice catches".
   other moods left out. The nightly scoreboard measures it; no rule weights it.
 - Retest: `reports/phase54/fear_greed_2026-11-01.md`: no variant passes the
   round-1 bar; scoreboard |t| at most 1.35.
+
+## 2026-11-02 tags + snap-back rule live
+
+Shown to the operator (Pi, 2026-11-02 06:57 UTC): the snap-back rule's live
+trades: TRX bought 10-31 23:20 at 0.303 and sold 11-01 21:22 at 0.313 (+0.49
+USDT), RUNE bought 11-01 21:22 at 0.568 (27.1 RUNE, 15.39 USDT) after a 10%+
+24h drop and held at 0.515 (−1.44 USDT, −9.3%; net −0.94 USDT, −6.3% of the
+15.05 USDT traded); the paper trader on `tagsnap-2026-11-01` planned no trade
+since 11-01 12:38 (19 rows "below min notional": it sizes from the real
+wallet, which the live trader holds); it signalled RUNE at about 0.618, about
+−16.7% had it bought. Agent pushback: tagsnap is the same strategy with a
+higher buy bar and would have bought the same drop earlier; the gap is the
+exit (no stop-loss or maximum hold). Answers through the ask tool:
+
+- Live rule, "Switch to tagsnap now": `BOT_SPOT_ALGO_RULE=config/rules/tagsnap-2026-11-01.json`
+  live from 2026-11-02 07:06 UTC; the plan-only step is waived for this rule
+  set; rollback image tag `binance-bot:pre-algo-20261102`.
+- RUNE, "Hold it": the fast sleeve keeps its 27.1 RUNE under the new rule
+  (score +1.0 at the switch: 24h move −19%, capped).
+- Paper fix (a virtual balance for the plan-only trader): "Paper is live so
+  that is not a question anymore"; not built. `bot-spot-paper` keeps running
+  the same rule unchanged.

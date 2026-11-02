@@ -54,26 +54,24 @@ when the task needs them.
   change them, and a loop manager may not answer for the operator on them.
   Do not add trading limits (caps, cooldowns, stop-loss or take-profit
   levels) unless the operator chooses them as part of the rules.
-- The rules in force live (operator, 2026-10-31, `docs/decisions.md`
-  "2026-10-31 snap-back rule live"), in the rule file
-  `config/rules/snapback-2026-10-31.json` (`BOT_SPOT_ALGO_RULE`, style
+- The rules in force live (operator, 2026-11-02, `docs/decisions.md`
+  "2026-11-02 tags + snap-back rule live"), in the rule file
+  `config/rules/tagsnap-2026-11-01.json` (`BOT_SPOT_ALGO_RULE`, style
   `fixed`): sleeve `fast`, share 1: score = −1 `momentum.24h` (24h move capped
-  at ±10%, divided by 10%); buy the best-scoring candidate for the sleeve's
-  share of the portfolio (so all USDT) when its score is +0.8 or more, one
+  at ±10%, divided by 10%) + 0.5 `asset.direction.24h` (the coin's own 24h
+  board lean, 2 posters); buy the best-scoring candidate for the sleeve's
+  share of the portfolio (so all USDT) when its score is +1.0 or more, one
   coin at a time; sell exactly the sleeve's quantity into USDT when it scores
   below -0.3. Sleeve `core`: share 0, no weights, never active while it holds
   nothing. Candidates: the coins the tags feed's live asset tags reach with an
   eligible USDT market, directly or through the operator's proxy file
   (`BOT_SPOT_PROXIES`, gold through PAXG and XAUT). Without a fresh tags feed
-  nothing is bought. Rule set name `snapback-2026-10-31`. `bot-spot-paper`
-  practises plan-only the operator's paper rule `tagsnap-2026-11-01`
-  (`config/rules/tagsnap-2026-11-01.json`: −1 `momentum.24h` + 0.5
-  `asset.direction.24h`, buy +1.0, sell below -0.3, 2 posters; operator
-  2026-11-01). The tag rule `algo-2026-10-29`
-  (`config/rules/algo-2026-10-29.json`) is no longer run. The edge style
-  (weights from the tag scoreboard), horizon filters, risk-off and other
-  sleeve splits exist but are not in force; choosing them is the operator's
-  (the tuning phase).
+  nothing is bought. Rule set name `tagsnap-2026-11-01`. `bot-spot-paper`
+  runs the same rule plan-only. The snap-back rule `snapback-2026-10-31`
+  (live 2026-10-31..11-02) and the tag rule `algo-2026-10-29` are no longer
+  run. The edge style (weights from the tag scoreboard), horizon filters,
+  risk-off and other sleeve splits exist but are not in force; choosing them
+  is the operator's (the tuning phase).
 - AI only reads supplied content. biz-app
   (`~/projects/automation/imageboards/biz-app`, outside this repo; its live
   copy runs on the Pi in `~/biz-app`) reads /biz/ threads and writes the
@@ -113,7 +111,7 @@ when the task needs them.
   route failure. Signed Binance request details stay out of logs.
 - Rollout: a new rule set runs plan-only (decides and records orders, places
   none) before it trades live; only the operator may waive that step, per rule
-  set (waived once: `snapback-2026-10-31`, 2026-10-31). Going live needs the
+  set (waived: `snapback-2026-10-31`, 2026-10-31; `tagsnap-2026-11-01`, 2026-11-02). Going live needs the
   operator's go, a rollback image tag (`binance-bot:pre-algo-<date>`) and an
   entry in `PROGRESS.md`.
 - Binance does not safely expose the API-key symbol whitelist. Live-capable

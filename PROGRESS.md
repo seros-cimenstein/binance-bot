@@ -3,58 +3,56 @@
 Current state only; rewrite it, do not append (`CODEX.md`, "Required
 Workflow"). History: git log, `docs/decisions.md`, `docs/archive/`.
 
-Updated 2026-11-01.
+Updated 2026-11-02.
 
 ## Direction
 
 The trader is a nonstop algorithm: Binance prices plus /biz/ tags from
-biz-app, no LLM, no chat, no timer, no Telegram. Since 2026-10-31 20:01 UTC it
-trades LIVE with the operator's snap-back rule (`docs/decisions.md`,
-"2026-10-31 snap-back rule live"; plan-only step waived by the operator).
-Tuning round 1 for the tag rule (2026-11-01) found no rule file that passes
-the bar; the paper trader now practises the operator's pick, the tags +
-snap-back rule `tagsnap-2026-11-01`. Round 2 runs around 2026-11-08
+biz-app, no LLM, no chat, no timer, no Telegram. Since 2026-11-02 07:06 UTC it
+trades LIVE with the operator's tags + snap-back rule `tagsnap-2026-11-01`
+(`docs/decisions.md`, "2026-11-02 tags + snap-back rule live"; plan-only step
+waived). The snap-back rule traded live from 2026-10-31 20:01 to then (net
+−0.94 USDT so far, see Evidence). Tuning round 2 runs around 2026-11-08
 (`IMPLEMENTATION_PLAN.md` Phase 54).
 
 ## On the Pi (`ssh pi-wired`, `~/binance-bot`)
 
 - Image `binance-bot:latest` = 1f6647c1b187 (2026-11-01, adds
-  `market.mood.tone`), run by `scheduler` (nightly scoreboard now measures the
-  tone; run by hand at 13:00 UTC: 1,123 rows). `bot-spot-paper` runs
-  eb660f6cc305 (`pre-tone-20261101`), `bot-spot` and `cryptobot-gui` run
-  093b478c3eff (`pre-tagsnap-20261101`); the trader code they run is the same
-  apart from the new signal name. Rollback tags: `pre-algo-20261031` =
-  1ce66703a04b (Phase 53, live stopped), `pre-tags-20261031` = e9efbd3c98dc
-  (Phase 52), `pre-algo-20261030` = 428220df4d0f (the old LLM trader).
-- LIVE: `bot-spot` (`bb bot-spot --submit-live --nonstop`, since 2026-10-31
-  20:01:45 UTC), `.env.docker` `BOT_SPOT_ALGO_RULE=config/rules/snapback-2026-10-31.json`:
-  sleeve `fast` share 1, score −1 `momentum.24h`, buy at +0.8 (fell 8%+ in
-  24h), sell below -0.3; `core` share 0. Audit `docker-data/bot-spot-decisions.jsonl`,
-  state `docker-data/bot-spot-agent-state.json`. Holds 49.3 TRX in sleeve
-  `fast` since 2026-10-31 23:20 UTC (see Evidence); about 0.11 USDT free plus
-  dust. No stop file.
-- Plan-only: `bot-spot-paper` on the paper rule `tagsnap-2026-11-01`
-  (`config/rules/tagsnap-2026-11-01.json`: −1 `momentum.24h` + 0.5
-  `asset.direction.24h`, buy +1.0, sell below -0.3; set by its own
-  `BOT_SPOT_ALGO_RULE` in `docker-compose.yml`; audit
-  `docker-data/bot-spot-paper-decisions.jsonl`, state
-  `docker-data/bot-spot-paper-state.json`). Its rows say `"mode":"LIVE"` (the
-  env arming) but every route is `planned` with no submission. On
-  `tagsnap-2026-11-01` since 2026-11-01 07:58 UTC; first row 07:58:50: hold,
-  best ZEC +0.697 under +1.0; 20 of 20 listed scores recomputed from the file.
+  `market.mood.tone`), run by `bot-spot` and `scheduler`. `bot-spot-paper`
+  runs eb660f6cc305 (`pre-tone-20261101`), `cryptobot-gui` 093b478c3eff.
+  Rollback tags: `pre-algo-20261102` = 093b478c3eff (the image snap-back ran
+  live on), `pre-algo-20261031` = 1ce66703a04b (Phase 53, live stopped),
+  `pre-tags-20261031` = e9efbd3c98dc (Phase 52), `pre-algo-20261030` =
+  428220df4d0f (the old LLM trader).
+- LIVE: `bot-spot` (`bb bot-spot --submit-live --nonstop`, on
+  `tagsnap-2026-11-01` since 2026-11-02 07:06:02 UTC), `.env.docker`
+  `BOT_SPOT_ALGO_RULE=config/rules/tagsnap-2026-11-01.json`: sleeve `fast`
+  share 1, score −1 `momentum.24h` + 0.5 `asset.direction.24h`, buy at +1.0,
+  sell below -0.3; `core` share 0. Audit `docker-data/bot-spot-decisions.jsonl`,
+  state `docker-data/bot-spot-agent-state.json`. Holds 27.1 RUNE in sleeve
+  `fast` since 2026-11-01 21:22 UTC (operator: "Hold it"); first row 07:06:31:
+  keep RUNE, score +1.000; 21 of 21 listed scores recomputed from the file.
+  0.15 USDT free plus dust; wallet about 16.3 USDT. No stop file.
+- Plan-only: `bot-spot-paper` on the same rule (its own `BOT_SPOT_ALGO_RULE`
+  in `docker-compose.yml`; audit `docker-data/bot-spot-paper-decisions.jsonl`,
+  state `docker-data/bot-spot-paper-state.json`). It sizes from the real
+  wallet, so while live holds the cash every buy is "below min notional" (19
+  such rows since 2026-11-01 12:38).
 - `cryptobot-gui` (dashboard, `ssh -L 8787:localhost:8787 pi-wired`) reads
   the live audit and state. `scheduler`: 23:45 UTC backup, 00:30 UTC
   `bb tag-scoreboard` into `docker-data/scoreboard/`.
 - Never `docker compose up -d` without service names. The boot unit
   `binance-bot-compose.service` is disabled. `silly_swirles` (exited, not a
   compose service) is unrelated and left alone.
-- Backups: `.env.docker.bak-20261031T195533Z-snapback`,
-  `docker-data/backup-20261031T195533Z-snapback/` (both audits, both states,
-  the old `docker-compose.yml`); `docker-data/backup-20261101T075304Z-tagsnap/`
-  (paper audit and state, compose file before the paper-rule switch). Back:
-  `touch docker-data/bot-spot.stop`, or restore the `.env.docker` backup and
-  `docker compose up -d --no-deps bot-spot`; for the old image retag
-  `pre-algo-20261031` as `latest` first.
+- Backups: `.env.docker.bak-20261102T070513Z-tagsnap-live` and
+  `docker-data/backup-20261102T070513Z-tagsnap-live/` (both audits, both
+  states, compose file) before the tagsnap switch; older:
+  `.env.docker.bak-20261031T195533Z-snapback`,
+  `docker-data/backup-20261031T195533Z-snapback/`,
+  `docker-data/backup-20261101T075304Z-tagsnap/`. Back: `touch
+  docker-data/bot-spot.stop`, or restore the `.env.docker` backup and `docker
+  compose up -d --no-deps bot-spot`; for the old image retag
+  `pre-algo-20261102` as `latest` first.
 
 ## Feed pipeline (on the Pi)
 
@@ -65,11 +63,13 @@ than 45 minutes. Details and stop: OPERATIONS.md, "Tags feed (biz-app)".
 
 ## Evidence so far
 
-- Live snap-back, first trade: bought 49.3 TRX at 0.303 (14.94 USDT, all the
-  USDT) on 2026-10-31 23:20 UTC (24h move −8.1%, score +0.810); filled, booked
-  to sleeve `fast`, no halt. Open at 0.3106 on 2026-11-01 06:43 UTC (about
-  +0.38 USDT, +2.5%, before the sell fee); it sells when TRX's 24h change goes
-  above +3% (−4.1%, score +0.41, at 06:21 UTC).
+- Snap-back live (2026-10-31 20:01 to 2026-11-02 07:06 UTC): TRX bought 10-31
+  23:20 at 0.303 (14.94 USDT), sold 11-01 21:22 at 0.313 (+0.49 USDT);
+  the same minute 27.1 RUNE bought at 0.568 (15.39 USDT) after a 10%+ 24h
+  drop; RUNE 0.515 at 2026-11-02 06:57 (−1.44 USDT, −9.3%, not sold). Net
+  −0.94 USDT, −6.3% of the 15.05 USDT traded. All orders filled, sleeve
+  booking right, no halt. The paper rule had signalled RUNE at about 0.618
+  (11-01 12:38): about −16.7% had it held the money.
 - Tag-rule tuning round 1 (`reports/phase54/tag_rule_tuning_2026-11-01.md`):
   36 frozen rule files in four families on 2026-10-01..10-25, none positive in
   both halves with 10 or more round trips; fade-the-board loses in every
@@ -87,8 +87,8 @@ than 45 minutes. Details and stop: OPERATIONS.md, "Tags feed (biz-app)".
 
 ## Next steps
 
-1. Review the first live snap-back sell: fill, sleeve closed, audit rows, no
-   halt (Phase 54 box 2).
+1. Watch the live tagsnap rule: RUNE sells when it scores below -0.3 (24h
+   move above +3%, less half the board lean); no stop-loss or maximum hold.
 2. Tuning round 2 around 2026-11-08: rerun the frozen grids
    (`reports/phase54/tag_rule_tuning_2026-11-01_grid.json`,
    `fear_greed_2026-11-01_grid.json`) plus the attention test, judged only on

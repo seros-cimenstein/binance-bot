@@ -430,25 +430,22 @@ the first failed order ends that decision's orders. Without a fresh feed
 nothing is a buy candidate, so it can only hold or sell; a coin without a
 price is left out of that tick.
 
-The rule in force live (operator, 2026-10-31, `docs/decisions.md`, "2026-10-31
-snap-back rule live"): `BOT_SPOT_ALGO_RULE=config/rules/snapback-2026-10-31.json`,
-rule set `snapback-2026-10-31`: fast sleeve share 1, score = −1 `momentum.24h`
-(the coin's 24h move capped at ±10%, divided by 10%); buy at +0.8 (it fell 8%
-or more in 24h), sell below -0.3 (it rose more than 3%); core sleeve share 0,
-no weights. Live, the 24h move is the USDT market's 24h ticker change (see
-"Deployment"); a coin whose ticker is stale scores 0 and is not bought. Its
-backtest on the tags history 2026-10-01T14:00Z..10-25T14:00Z (agent runs shown
-to the operator, not in `reports/`): +0.21% older half, +7.81% newer half,
-+8.18% whole window, 6 round trips; in-sample (the scoreboard that suggested
-`momentum.24h` covers the window).
-
-The paper rule (operator 2026-11-01, `docs/decisions.md`, "2026-11-01 tuning
-round 1 result"): `config/rules/tagsnap-2026-11-01.json`, rule set
-`tagsnap-2026-11-01`: fast sleeve share 1, score = −1 `momentum.24h` + 0.5
+The rule in force live (operator, 2026-11-02, `docs/decisions.md`, "2026-11-02
+tags + snap-back rule live"): `BOT_SPOT_ALGO_RULE=config/rules/tagsnap-2026-11-01.json`,
+rule set `tagsnap-2026-11-01`: fast sleeve share 1, score = −1 `momentum.24h`
+(the coin's 24h move capped at ±10%, divided by 10%) + 0.5
 `asset.direction.24h` (2 posters); buy at +1.0, sell below -0.3; core sleeve
-share 0. It runs plan-only in `bot-spot-paper`; its backtest is in
-`reports/phase54/tag_rule_tuning_2026-11-01.md` (+8.50%, 4 round trips, does
-not pass the round-1 bar).
+share 0. Live, the 24h move is the USDT market's 24h ticker change (see
+"Deployment"); a coin whose ticker is stale scores 0 and is not bought. Its
+backtest: `reports/phase54/tag_rule_tuning_2026-11-01.md` (+8.50%, 4 round
+trips; does not pass the round-1 bar). `bot-spot-paper` runs the same rule
+plan-only; it sizes from the real wallet, so it plans no buy while the live
+trader holds the cash.
+
+The snap-back rule `snapback-2026-10-31` (live 2026-10-31 20:01 to 2026-11-02
+07:06, `config/rules/snapback-2026-10-31.json`): fast sleeve share 1, score =
+−1 `momentum.24h`; buy at +0.8, sell below -0.3; backtest on the tags history
+2026-10-01T14:00Z..10-25T14:00Z: +8.18%, 6 round trips (in-sample).
 
 The earlier tag rule `algo-2026-10-29` (`config/rules/algo-2026-10-29.json`,
 operator 2026-10-29), no longer run: fast sleeve share 1, score =

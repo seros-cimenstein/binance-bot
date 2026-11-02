@@ -371,8 +371,8 @@ pub(crate) mod tests {
         "/../../config/rules/algo-2026-10-29.json"
     );
 
-    /// The live `snapback-2026-10-31` rule file (operator, 2026-10-31).
-    const LIVE: &str = concat!(
+    /// The `snapback-2026-10-31` rule file (live 2026-10-31..11-02).
+    const SNAPBACK: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../config/rules/snapback-2026-10-31.json"
     );
@@ -444,8 +444,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_live_rule_is_snapback_2026_10_31() {
-        let rule = Rule::load(Path::new(LIVE)).unwrap();
+    fn the_snapback_rule_is_snapback_2026_10_31() {
+        let rule = Rule::load(Path::new(SNAPBACK)).unwrap();
         assert_eq!(
             (rule.rules_version.as_str(), rule.style),
             ("snapback-2026-10-31", Style::Fixed)
@@ -468,7 +468,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_paper_rule_is_tagsnap_2026_11_01() {
+    fn the_live_rule_is_tagsnap_2026_11_01() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../config/rules/tagsnap-2026-11-01.json"
