@@ -10,6 +10,11 @@
 //! | `<kind>.<signal>[.<window>]` | see below | per tradable asset: the tag signal over every [`crate::reach`] path from a tag of `<kind>`, averaged by path weight |
 //! | `market.<macro\|mood>.<signal>[.<window>]` | see below | market-wide: the tag signal over every live macro or mood tag, averaged by the tags' posters |
 //! | `market.mood.tone.<window>` | −1..1 | the board's fear/greed: (posters of bullish moods − posters of bearish moods) / their sum over the live mood tags ([`MOOD_BULLISH`], [`MOOD_BEARISH`]; other moods left out); 0 without either |
+//! | `market.macro.tone.<window>` | −1..1 | what the board says macro forces do to crypto: (Σ`risk_up` − Σ`risk_down`) / their sum over the live macro tags (score-weighted posts, tags-2); 0 without either |
+//!
+//! Both tones read the crypto scope of a window ([`Window::crypto_or_all`]: posts outside
+//! the stock, metal and betting generals) and fall back to the whole board for older feeds
+//! (operator 2026-11-02).
 //!
 //! `<kind>` is a tag kind (`asset`, `narrative`, `macro`, `event`, `entity`, `claim`,
 //! `mood`); `asset` covers the coin's own tag, its proxies' source tags (GOLD for PAXG) and
@@ -28,10 +33,11 @@
 //! | `price_confirmed` | 1h, 24h, 7d | −1..1 | per asset only: `<kind>.direction.<w>` × `momentum.<w>` (talk and price agree: positive) |
 //!
 //! A mood or macro tag's `direction` says whether the poster sees it growing or fading,
-//! not which way markets go: "fear up" and "euphoria up" both read +1, so
-//! `market.mood.direction` and `market.macro.direction` measure that the board's moods
-//! and macro themes are growing, not fear against greed. `market.mood.tone` is the
-//! fear/greed reading (operator 2026-11-01).
+//! not which way markets go: "fear up" and "euphoria up" both read +1, and so do
+//! "inflation up", "war up" and "rate cuts up", so `market.mood.direction` and
+//! `market.macro.direction` measure that the board's moods and macro themes are growing.
+//! `market.mood.tone` (operator 2026-11-01) and `market.macro.tone` (2026-11-02) carry the
+//! sign.
 //!
 //! A link path carries the link's own posters and up/down (posts tying the tag to that
 //! asset: "war rising" can be "gold up" and "stocks down") for `direction` and
@@ -57,8 +63,11 @@ pub const MOMENTUM_CAP_7D_PCT: f64 = 20.0;
 /// Days after which a tag's `novelty` is 0.
 pub const NOVELTY_DAYS: f64 = 30.0;
 /// Mood names (lower-case) `market.mood.tone` reads as bullish (+1) and bearish (−1);
-/// every other mood is left out of it. The sets of the 2026-11-01 check against BTC.
-pub const MOOD_BULLISH: [&str; 6] = ["bullish", "euphoria", "fomo", "greed", "hopium", "optimism"];
+/// every other mood is left out of it. The sets of the 2026-11-01 check against BTC, plus
+/// "hope" from the fixed tags-2 mood list.
+pub const MOOD_BULLISH: [&str; 7] = [
+    "bullish", "euphoria", "fomo", "greed", "hope", "hopium", "optimism",
+];
 pub const MOOD_BEARISH: [&str; 6] = [
     "bearish",
     "capitulation",
@@ -254,8 +263,11 @@ pub enum Name {
         signal: Signal,
         span: Option<Span>,
     },
-    /// `market.mood.tone.<window>` (see the module docs).
-    MoodTone(Span),
+    /// `market.<mood|macro>.tone.<window>` (see the module docs).
+    Tone {
+        kind: &'static str,
+        span: Span,
+    },
 }
 
 impl Name {
@@ -287,19 +299,21 @@ impl Name {
                 }
             }
         }
-        out.extend(Span::ALL.map(Name::MoodTone));
+        for kind in MARKET_KINDS {
+            out.extend(Span::ALL.map(|span| Name::Tone { kind, span }));
+        }
         out
     }
 
     /// Whether the name is market-wide (the same for every asset).
     pub fn is_market(&self) -> bool {
-        matches!(self, Name::Market { .. } | Name::MoodTone(_))
+        matches!(self, Name::Market { .. } | Name::Tone { .. })
     }
 
     pub fn range(&self) -> (f64, f64) {
         match self {
             Name::Talk => (-1.0, 3.0),
-            Name::Stance | Name::Momentum(_) | Name::MoodTone(_) => (-1.0, 1.0),
+            Name::Stance | Name::Momentum(_) | Name::Tone { .. } => (-1.0, 1.0),
             Name::Asset { signal, .. } | Name::Market { signal, .. } => signal.range(),
         }
     }
@@ -369,10 +383,22 @@ impl FromStr for Name {
                     "unknown signal {name:?}: momentum takes 1h, 24h or 7d"
                 )),
             },
-            ["market", "mood", "tone", span] => {
-                Span::parse(span).map(Name::MoodTone).ok_or_else(|| {
-                    format!("unknown signal {name:?}: tone takes a window of 1h, 6h, 24h, 7d, 30d")
-                })
+            ["market", kind, "tone", span] => {
+                let kind = MARKET_KINDS
+                    .into_iter()
+                    .find(|k| k == kind)
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown signal {name:?}: tone is market.mood.tone or market.macro.tone"
+                        )
+                    })?;
+                Span::parse(span)
+                    .map(|span| Name::Tone { kind, span })
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown signal {name:?}: tone takes a window of 1h, 6h, 24h, 7d, 30d"
+                        )
+                    })
             }
             ["market", kind, rest @ ..] => {
                 let kind = MARKET_KINDS
@@ -415,7 +441,7 @@ impl fmt::Display for Name {
             Name::Market { kind, signal, span } => {
                 write!(f, "market.{kind}.{}", tail(signal, span))
             }
-            Name::MoodTone(span) => write!(f, "market.mood.tone.{}", span.as_str()),
+            Name::Tone { kind, span } => write!(f, "market.{kind}.tone.{}", span.as_str()),
         }
     }
 }
@@ -471,7 +497,7 @@ pub fn own_value(
         Name::Talk => Some(own.map_or(0.0, talk)),
         Name::Stance => Some(own.map_or(0.0, |w| stance(w, min_posters))),
         Name::Momentum(span) => Some(momentum(coin, *span)),
-        Name::Asset { .. } | Name::Market { .. } | Name::MoodTone(_) => None,
+        Name::Asset { .. } | Name::Market { .. } | Name::Tone { .. } => None,
     }
 }
 
@@ -657,7 +683,8 @@ impl<'a> Signals<'a> {
             }
             Name::Asset { kind, signal, span } => self.through_reach(asset, kind, *signal, *span),
             Name::Market { kind, signal, span } => self.market(kind, *signal, *span),
-            Name::MoodTone(span) => self.mood_tone(*span),
+            Name::Tone { kind: "mood", span } => self.mood_tone(*span),
+            Name::Tone { span, .. } => self.macro_tone(*span),
         }
     }
 
@@ -676,12 +703,12 @@ impl<'a> Signals<'a> {
         if weight > 0.0 { sum / weight } else { 0.0 }
     }
 
-    /// `market.mood.tone.<span>`: the posters-weighted tone over the live mood tags with a
-    /// tone ([`mood_tone`]); 0 without one.
+    /// `market.mood.tone.<span>`: the tone over the live mood tags with a tone
+    /// ([`mood_tone`]), weighted by each tag's crypto-scope posters; 0 without one.
     fn mood_tone(&self, span: Span) -> f64 {
         let (mut sum, mut weight) = (0.0, 0.0);
         for tag in self.feed.tags.values().filter(|t| t.kind == "mood") {
-            let posters = span.of(&tag.windows).posters as f64;
+            let posters = span.of(&tag.windows).crypto_or_all().posters as f64;
             if let Some(tone) = mood_tone(&tag.name).filter(|_| posters > 0.0) {
                 sum += tone * posters;
                 weight += posters;
@@ -689,13 +716,29 @@ impl<'a> Signals<'a> {
         }
         if weight > 0.0 { sum / weight } else { 0.0 }
     }
+
+    /// `market.macro.tone.<span>`: (Σ`risk_up` − Σ`risk_down`) / their sum over the live
+    /// macro tags' crypto scope; 0 without either.
+    fn macro_tone(&self, span: Span) -> f64 {
+        let (up, down) = self
+            .feed
+            .tags
+            .values()
+            .filter(|t| t.kind == "macro")
+            .map(|t| span.of(&t.windows).crypto_or_all())
+            .fold((0.0, 0.0), |(u, d), c| (u + c.risk_up, d + c.risk_down));
+        if up + down > 0.0 {
+            (up - down) / (up + down)
+        } else {
+            0.0
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::reach::Proxies;
-    use crate::tags::Horizon;
 
     fn win(mentions: u64, posters: u64, up: f64, down: f64) -> Window {
         Window {
@@ -704,7 +747,7 @@ mod tests {
             threads: posters,
             up,
             down,
-            horizon: Horizon::default(),
+            ..Default::default()
         }
     }
 
@@ -754,8 +797,8 @@ mod tests {
             assert_eq!(&name.to_string().parse::<Name>().unwrap(), name, "{name}");
         }
         // 2 legacy + 3 momentum + 7 kinds × 34 + 2 market kinds × 31 (no price_confirmed)
-        // + 5 market.mood.tone windows.
-        assert_eq!(all.len(), 2 + 3 + 7 * 34 + 2 * 31 + 5);
+        // + 2 market kinds × 5 tone windows.
+        assert_eq!(all.len(), 2 + 3 + 7 * 34 + 2 * 31 + 2 * 5);
         for good in [
             "talk.6h",
             "stance.6h",
@@ -768,6 +811,7 @@ mod tests {
             "market.macro.persistence",
             "market.mood.tone.24h",
             "market.mood.tone.30d",
+            "market.macro.tone.24h",
         ] {
             assert!(good.parse::<Name>().is_ok(), "{good}");
         }
@@ -792,8 +836,9 @@ mod tests {
             "market.mood",
             "market.mood.tone",
             "market.mood.tone.2h",
-            "market.macro.tone.24h",
+            "market.narrative.tone.24h",
             "mood.tone.24h",
+            "macro.tone.24h",
         ] {
             assert!(bad.parse::<Name>().is_err(), "{bad:?} should be refused");
         }
@@ -826,6 +871,41 @@ mod tests {
         assert_eq!(market("market.mood.tone.1h"), 1.0);
         assert_eq!(market("market.mood.tone.7d"), 0.0);
         assert!("market.mood.tone.24h".parse::<Name>().unwrap().is_market());
+    }
+
+    #[test]
+    fn tones_read_the_crypto_scope_and_macro_tone_reads_risk_not_direction() {
+        let text = serde_json::json!({
+            "schema": "tags-feed-v1", "as_of": "2026-11-02T00:00:00Z",
+            "tags": {
+                // /smg/ is afraid; the crypto threads are not.
+                "mood:fear": {"kind": "mood", "name": "fear", "windows": {"24h": {"mentions": 40, "posters": 30, "up": 30.0,
+                    "crypto": {"posters": 5, "up": 5.0}}}},
+                "mood:euphoria": {"kind": "mood", "name": "euphoria", "windows": {"24h": {"mentions": 12, "posters": 10, "up": 10.0,
+                    "crypto": {"posters": 10, "up": 10.0}}}},
+                // Both forces growing (direction +1); the stock board reads rates as good for
+                // risk, the crypto threads read both as bad.
+                "macro:rates": {"kind": "macro", "name": "rates", "windows": {"24h": {"mentions": 9, "posters": 9, "up": 9.0,
+                    "risk_up": 6.0, "risk_down": 2.0, "crypto": {"posters": 3, "up": 3.0, "risk_up": 1.0, "risk_down": 2.0}},
+                    "1h": {"mentions": 2, "posters": 2, "up": 2.0, "risk_up": 2.0}}},
+                "macro:war": {"kind": "macro", "name": "war", "windows": {"24h": {"mentions": 4, "posters": 4, "up": 4.0,
+                    "risk_down": 4.0, "crypto": {"posters": 3, "up": 3.0, "risk_down": 3.0}}}}
+            }
+        })
+        .to_string();
+        let feed = crate::tags::parse_raw(&text).unwrap();
+        let reach = crate::reach::build(&feed, &Proxies::default(), |_| false);
+        let s = Signals::new(&feed, &reach, 2);
+        let market = |name: &str| s.value(&name.parse().unwrap(), "", None, None);
+        // Crypto scope: (10 euphoria − 5 fear) / 15, not the whole board's (10 − 30) / 40.
+        assert!((market("market.mood.tone.24h") - 5.0 / 15.0).abs() < 1e-12);
+        // Macro: (1 − (2 + 3)) / 6 over the crypto risk, though both forces are "up".
+        assert!((market("market.macro.tone.24h") - (1.0 - 5.0) / 6.0).abs() < 1e-12);
+        assert_eq!(market("market.macro.direction.24h"), 1.0);
+        // A window without crypto numbers reads the whole board; no risk at all reads 0.
+        assert_eq!(market("market.macro.tone.1h"), 1.0);
+        assert_eq!(market("market.macro.tone.7d"), 0.0);
+        assert!("market.macro.tone.24h".parse::<Name>().unwrap().is_market());
     }
 
     #[test]

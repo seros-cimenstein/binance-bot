@@ -8,8 +8,11 @@
 //!
 //! `score = Σ weight(name) · value(name)`
 //!
-//! over the sleeve's weighted signal names ([`crate::signals`]). The rule in force,
-//! `algo-2026-10-29`, weights `talk.6h` 0, `stance.6h` 1 and `momentum.1h` 1:
+//! over the sleeve's weighted per-coin signal names ([`crate::signals`]). Market-wide
+//! names (`market.*`, the same for every coin) never enter a coin's score: they only make
+//! the sleeve's market score, which `risk_off_below` compares (a step-aside switch that
+//! does not change which coin is picked; operator 2026-11-02). The first algorithm rule,
+//! `algo-2026-10-29` (no longer run), weighted `talk.6h` 0, `stance.6h` 1 and `momentum.1h` 1:
 //!
 //! - `talk.6h`: the coin's /biz/ mention rate over the last 6h against its 24h rate,
 //!   minus 1 (0 = steady, +1 = twice the usual rate), capped to −1..3; 0 under
@@ -106,7 +109,8 @@ impl<'a> Scorer<'a> {
         }
     }
 
-    /// The weighted signals of `asset` (the same whether it is bought or held).
+    /// The weighted per-coin signals of `asset` (the same whether it is bought or held);
+    /// market-wide names are left out (see the module docs).
     pub fn score(&self, asset: &str) -> Scored {
         let own = self.inputs.tags.and_then(|assets| assets.get(asset));
         let coin = self.inputs.snap.coin(asset);
@@ -116,6 +120,7 @@ impl<'a> Scorer<'a> {
             .sleeve
             .weights
             .iter()
+            .filter(|(name, _)| !name.is_market())
             .map(|(name, weight)| {
                 let value = match &self.signals {
                     Some(signals) => signals.value(name, asset, own, coin),
@@ -131,20 +136,6 @@ impl<'a> Scorer<'a> {
             values,
             terms,
         }
-    }
-
-    /// `asset`'s score without the market-wide names (the same for every asset): what
-    /// risk-off compares its defensive assets (and USDT's 0) on.
-    pub fn asset_score(&self, asset: &str) -> f64 {
-        let scored = self.score(asset);
-        let market: f64 = scored
-            .values
-            .iter()
-            .zip(&scored.terms)
-            .filter(|((name, _), _)| name.is_market())
-            .map(|(_, term)| term)
-            .sum();
-        scored.score - market
     }
 
     /// The sleeve's market-wide score: `Σ weight × value` over its weighted `market.*`
@@ -305,9 +296,9 @@ pub fn decide(inputs: &Inputs<'_>, sleeve: &Sleeve) -> Verdict {
 }
 
 /// Risk-off (operator "Yes" 2026-10-30; rule 2026-10-31): the target is the sleeve's
-/// defensive asset with the highest score among those priced ([`Scorer::asset_score`]: the
-/// market-wide names, equal for all, left out; USDT scores 0; ties go to the earlier one
-/// listed); a holding that is not the target is sold and the target bought (no buy level).
+/// defensive asset with the highest score among those priced ([`Scorer::score`], which
+/// leaves the market-wide names out; USDT scores 0; ties go to the earlier one listed); a
+/// holding that is not the target is sold and the target bought (no buy level).
 /// Nothing else is bought.
 fn risk_off(
     inputs: &Inputs<'_>,
@@ -321,7 +312,7 @@ fn risk_off(
         let score = if asset == "USDT" {
             0.0
         } else if inputs.snap.coin(asset).is_some() {
-            scorer.asset_score(asset)
+            scorer.score(asset).score
         } else {
             continue;
         };
@@ -744,8 +735,31 @@ mod tests {
         // Already in the target: nothing to do.
         let in_paxg = holding(&["PAXG"]);
         assert!(decide_on(3.0, 2.0, &gloomy, &in_paxg).actions.is_empty());
-        // Bright board: the normal rule keeps BTC (score 0.6 + 0.8 ≥ −0.5).
+        // Bright board: the normal rule keeps BTC (score 0.8: the mood is market-wide and
+        // stays out of coin scores, ≥ −0.5).
         let normal = decide_on(3.0, 2.0, &bright, &book);
         assert!(!normal.risk_off && normal.actions.is_empty());
+        // The market-wide name never moves a coin's score: gloomy or bright, BTC scores its
+        // momentum alone, so the board's mood cannot change which coin is picked.
+        let snap = snap(&[("BTC", 0.0, 4.0, 1.0, 9e9)]);
+        let btc = |feed: &crate::tags::TagsFeed| {
+            let inputs = Inputs {
+                snap: &snap,
+                book: &book,
+                tags: Some(&feed.assets),
+                feed: Some((&feed.feed, &feed.reach)),
+            };
+            let scored = Scorer::new(inputs, &sleeve).score("BTC");
+            (
+                scored.score,
+                scored
+                    .values
+                    .iter()
+                    .map(|(n, _)| n.to_string())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(btc(&gloomy), btc(&bright));
+        assert_eq!(btc(&gloomy).1, ["momentum.1h"]);
     }
 }

@@ -61,6 +61,39 @@ pub struct Window {
     /// AI "down" tags (bearish, easing) weighted by post score (1-3).
     pub down: f64,
     pub horizon: Horizon,
+    /// Macro tags (tags-2): posts saying the force lifts risky assets such as crypto,
+    /// weighted by post score; 0 in older feeds.
+    pub risk_up: f64,
+    /// Macro tags (tags-2): posts saying the force hurts risky assets, weighted by post score.
+    pub risk_down: f64,
+    /// Macro and mood tags: the same numbers without the stock, metal and betting generals
+    /// (/smg/, /gme/, /pmg/, /bbbyq/, /pred/, /bet/); absent in older feeds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crypto: Option<Crypto>,
+}
+
+/// A macro or mood tag's numbers over the crypto posts of a window (see [`Window::crypto`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Crypto {
+    pub posters: u64,
+    pub up: f64,
+    pub down: f64,
+    pub risk_up: f64,
+    pub risk_down: f64,
+}
+
+impl Window {
+    /// The crypto-scoped numbers, or the whole board's when the feed has none (older feeds).
+    pub fn crypto_or_all(&self) -> Crypto {
+        self.crypto.unwrap_or(Crypto {
+            posters: self.posters,
+            up: self.up,
+            down: self.down,
+            risk_up: self.risk_up,
+            risk_down: self.risk_down,
+        })
+    }
 }
 
 /// One tag's windows.

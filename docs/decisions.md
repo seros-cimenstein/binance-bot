@@ -472,3 +472,34 @@ exit (no stop-loss or maximum hold). Answers through the ask tool:
 - Paper fix (a virtual balance for the plan-only trader): "Paper is live so
   that is not a question anymore"; not built. `bot-spot-paper` keeps running
   the same rule unchanged.
+
+## 2026-11-02 tagging fixes
+
+Shown to the operator: four open problems of the tag pipeline (who is speaking,
+macro polarity, AI accuracy, market terms shifting every coin's score, stock
+and metal talk in the market signals). The operator, on a sketch marking
+them: "lets address these issues". Who is speaking is a /biz/ limit (poster IDs
+on 23% of posts) and is not addressed. Agent findings and changes:
+
+- AI accuracy: a blind audit of 200 posts of the last 7 days (100 naming a
+  tradable coin, 100 random), labelled by an agent that never saw the AI tags
+  (agent labels, not human). tags-1: coin precision 84%, recall 95%, coin
+  direction agreement 77%, 4 opposite calls (2 sarcasm); moods 16 bearish to 2
+  bullish where the labels had 9 to 12. `~/bb-tuning/tagger-audit/`.
+- Re-tag, "New prompt + re-tag all" (ask tool; the other options were a
+  macro-only pass of about 50 calls, or both staged): prompt `tags-2` (fixed
+  mood list with as many bullish as bearish moods, the poster's own emotion
+  only, sarcasm read as meant, a macro tag's `risk`: which way the poster says
+  it pushes risky assets). On the same 200 posts: coin precision 91%, recall
+  93%, direction agreement 82%, 3 opposite calls, moods 14 bearish to 6
+  bullish. Every post since 2026-10-01 is re-tagged once (about 700 calls).
+- Macro polarity: `market.macro.tone.<window>` = (Σrisk_up − Σrisk_down) /
+  their sum over the macro tags; `direction` keeps meaning "growing".
+- Market terms: market-wide names never enter a coin's score; they only make
+  the sleeve's market score that `risk_off_below` compares (a step-aside
+  switch). No rule in force weights a market name, so live behaviour is
+  unchanged.
+- Crypto scope: macro and mood windows carry a `crypto` object without
+  /smg/, /gme/, /pmg/, /bbbyq/, /pred/ and /bet/ (64% of October's mood tags,
+  56% of macro tags, 6% of tradable-coin tags came from these); both tones read
+  it and fall back to the whole board for older feeds.

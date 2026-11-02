@@ -342,15 +342,22 @@ legacy `talk.6h`, `stance.6h` and `momentum.1h` are the `algo-2026-10-29` terms
 10% and 20%); per tradable asset `<kind>.<signal>[.<window>]` (the tag signal
 over every reach path from a tag of that kind, averaged by path weight; link
 paths use the link's own up/down for `direction` and `agreement`); market-wide
-`market.<macro|mood>.<signal>[.<window>]` (averaged by the tags' posters) and
+`market.<macro|mood>.<signal>[.<window>]` (averaged by the tags' posters);
 `market.mood.tone.<window>`, the board's fear/greed: (posters of bullish moods −
 posters of bearish moods) / their sum, from the mood names in
-`signals::MOOD_BULLISH` (bullish, euphoria, fomo, greed, hopium, optimism) and
-`MOOD_BEARISH` (bearish, capitulation, despair, doom, fear, panic); other moods
-are left out (operator 2026-11-01). A mood or macro tag's `direction` means the
-poster sees it growing, so `market.mood.direction` and
+`signals::MOOD_BULLISH` (bullish, euphoria, fomo, greed, hope, hopium, optimism)
+and `MOOD_BEARISH` (bearish, capitulation, despair, doom, fear, panic); other
+moods are left out (operator 2026-11-01); and `market.macro.tone.<window>`,
+what the board says macro forces do to crypto: (Σ`risk_up` − Σ`risk_down`) /
+their sum over the macro tags (tags-2 `risk`, operator 2026-11-02). Both tones
+read a window's `crypto` numbers (posts outside /smg/, /gme/, /pmg/, /bbbyq/,
+/pred/, /bet/) and fall back to the whole board for feeds without them. A mood
+or macro tag's `direction` means the poster sees it growing ("inflation up",
+"war up" and "rate cuts up" all read +1), so `market.mood.direction` and
 `market.macro.direction` say the board's moods and macro themes are growing,
-not fear against greed. Signals: `direction`, `level`, `surge`, `novelty`,
+not which way they push prices. Market-wide names never enter a coin's score:
+they only make the sleeve's market score that `risk_off_below` compares
+(operator 2026-11-02). Signals: `direction`, `level`, `surge`, `novelty`,
 `breadth`, `persistence`, `agreement`, `horizon`, `price_confirmed`; each −1..1
 or 0..1 except the legacy `talk.6h` (−1..3). The module docs list each
 formula, its windows and range; an unknown name is an error, and a rule file
