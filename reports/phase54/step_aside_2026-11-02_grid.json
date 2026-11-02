@@ -1,0 +1,90 @@
+{
+ "frozen_at": "2026-11-02",
+ "base": "live tagsnap-2026-11-01 (momentum.24h -1, asset.direction.24h 0.5, buy 1.0, sell -0.3)",
+ "history": "tags-2 history rebuilt on the Pi 2026-11-02 (778 hourly files 2026-10-01..11-02), crypto-scope tones",
+ "lines": "percentiles of each tone's hourly values over the tuning window 2026-10-01T14Z..10-25T14Z (signal only, no returns)",
+ "bar": "same as round 1: net>0 in both tuning halves and >=10 round trips on the whole tuning window; judge window information only unless a variant passes",
+ "candidates": "liquid (the round-1 bar); tags shown as information",
+ "grid": {
+  "sa-control": {
+   "family": "control: live tagsnap, no step-aside",
+   "weights": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5
+   },
+   "risk_off_below": null
+  },
+  "sa-mood24-fear-p20": {
+   "family": "step aside on fear",
+   "weights": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5,
+    "market.mood.tone.24h": 1
+   },
+   "risk_off_below": -0.526
+  },
+  "sa-mood24-fear-p35": {
+   "family": "step aside on fear",
+   "weights": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5,
+    "market.mood.tone.24h": 1
+   },
+   "risk_off_below": -0.455
+  },
+  "sa-mood7d-fear-p20": {
+   "family": "step aside on fear",
+   "weights": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5,
+    "market.mood.tone.7d": 1
+   },
+   "risk_off_below": -0.394
+  },
+  "sa-mood24-greed-p80": {
+   "family": "step aside on greed",
+   "weights": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5,
+    "market.mood.tone.24h": -1
+   },
+   "risk_off_below": 0.2
+  },
+  "sa-macro24-down-p20": {
+   "family": "step aside on macro risk down",
+   "weights": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5,
+    "market.macro.tone.24h": 1
+   },
+   "risk_off_below": -0.733
+  },
+  "sa-macro24-down-p35": {
+   "family": "step aside on macro risk down",
+   "weights": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5,
+    "market.macro.tone.24h": 1
+   },
+   "risk_off_below": -0.647
+  },
+  "sa-macro7d-down-p20": {
+   "family": "step aside on macro risk down",
+   "weights": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5,
+    "market.macro.tone.7d": 1
+   },
+   "risk_off_below": -0.641
+  },
+  "sa-macro24-up-p80": {
+   "family": "step aside on macro risk up",
+   "weights": {
+    "momentum.24h": -1,
+    "asset.direction.24h": 0.5,
+    "market.macro.tone.24h": -1
+   },
+   "risk_off_below": 0.4
+  }
+ }
+}

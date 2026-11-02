@@ -42,11 +42,13 @@ live"). Phase 52 (the nonstop algorithm trader) is archived in
     `market.mood.tone.<window>` in `crate::signals` with its test, measured by
     the nightly scoreboard; retest `reports/phase54/fear_greed_2026-11-01.md`:
     no variant passes the bar.
-  - [ ] Tagging fixes (operator 2026-11-02, "lets address these issues"; see
-    `docs/decisions.md`): blind 200-post audit; prompt `tags-2` and a re-tag
-    since 2026-10-01; market names out of coin scores; `crypto` scope and
-    `market.macro.tone`; the Pi's feed and tags history rebuilt; a step-aside
-    backtest (`risk_off_below` on the tones) for round 2.
+  - [x] Tagging fixes (operator 2026-11-02, "lets address these issues"; see
+    `docs/decisions.md`): blind 200-post audit
+    (`reports/phase54/tagger_audit_2026-11-02.md`); prompt `tags-2` and a
+    re-tag since 2026-10-01 (81,596 posts, 0 failed); market names out of coin
+    scores; `crypto` scope and `market.macro.tone`; the Pi's feed and tags
+    history rebuilt, `scheduler` on fc7137f6f500; step-aside grid
+    (`reports/phase54/step_aside_2026-11-02.md`): no variant passes.
   - [ ] Round 2 around 2026-11-08: the round-1 grid, the fear/greed grid and an
     attention test (talk surge as a filter for snap-back candidates; operator
     2026-11-01 "keep testing"), judged only on data after 2026-11-01T02:00Z;
