@@ -81,6 +81,11 @@ OPERATIONS.md, "Tags feed (biz-app)".
   risk side. Step-aside grid (`reports/phase54/step_aside_2026-11-02.md`):
   none of 8 variants passes; macro risk-down at p20 cuts the liquid loss most
   (−28.6% against −45.4%). Scoreboard 11-02: 60 tone rows, |t| ≤ 1.03.
+- tags-1 against tags-2 (`reports/phase54/tags2_ab_2026-11-02.md`, 55 rules,
+  880 runs): no rule passes with either. The live rule +8.50% → +1.81% on the
+  tuning window (one first pick: QNT vs SOL); plain snap-back +8.18% under
+  both and 3 points ahead in the judge window: the AI direction term adds
+  nothing yet.
 
 ## Next steps
 
