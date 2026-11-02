@@ -503,3 +503,9 @@ on 23% of posts) and is not addressed. Agent findings and changes:
   /smg/, /gme/, /pmg/, /bbbyq/, /pred/ and /bet/ (64% of October's mood tags,
   56% of macro tags, 6% of tradable-coin tags came from these); both tones read
   it and fall back to the whole board for older feeds.
+- Live image (shown: the new image changes no live decision, since tagsnap
+  weights no market name; it adds `market.macro.tone` and the crypto scope).
+  The operator: "get the new one rolled in live buddy". `bot-spot` recreated
+  on fc7137f6f500 at 2026-11-02 17:00:20 UTC; rollback tag
+  `binance-bot:pre-tags2-20261102` = 1f6647c1b187. `bot-spot-paper` and
+  `cryptobot-gui` stay on their images.

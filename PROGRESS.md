@@ -19,20 +19,21 @@ waived). The snap-back rule traded live from 2026-10-31 20:01 to then (net
 
 - Image `binance-bot:latest` = fc7137f6f500 (2026-11-02, tagging fixes:
   market names out of coin scores, `market.macro.tone`, crypto scope), run by
-  `scheduler` only. `bot-spot` runs 1f6647c1b187 (`pre-tags2-20261102`),
-  `bot-spot-paper` eb660f6cc305 (`pre-tone-20261101`), `cryptobot-gui`
-  093b478c3eff. Rollback tags: `pre-algo-20261102` = 093b478c3eff (snap-back
-  live image), `pre-algo-20261031` = 1ce66703a04b, `pre-tags-20261031` =
-  e9efbd3c98dc, `pre-algo-20261030` = 428220df4d0f (the old LLM trader).
+  `bot-spot` (since 17:00:20 UTC, operator "get the new one rolled in live
+  buddy") and `scheduler`. `bot-spot-paper` eb660f6cc305, `cryptobot-gui`
+  093b478c3eff. Rollback tags: `pre-tags2-20261102` = 1f6647c1b187 (live
+  07:06..17:00), `pre-algo-20261102` = 093b478c3eff, `pre-algo-20261031` =
+  1ce66703a04b, `pre-algo-20261030` = 428220df4d0f (the old LLM trader).
 - LIVE: `bot-spot` (`bb bot-spot --submit-live --nonstop`, on
   `tagsnap-2026-11-01` since 2026-11-02 07:06:02 UTC), `.env.docker`
   `BOT_SPOT_ALGO_RULE=config/rules/tagsnap-2026-11-01.json`: sleeve `fast`
   share 1, score −1 `momentum.24h` + 0.5 `asset.direction.24h`, buy at +1.0,
   sell below -0.3; `core` share 0. Audit `docker-data/bot-spot-decisions.jsonl`,
   state `docker-data/bot-spot-agent-state.json`. Holds 27.1 RUNE in sleeve
-  `fast` since 2026-11-01 21:22 UTC (operator: "Hold it"); first row 07:06:31:
-  keep RUNE, score +1.000; 21 of 21 listed scores recomputed from the file.
-  0.15 USDT free plus dust; wallet about 16.3 USDT. No stop file.
+  `fast` since 2026-11-01 21:22 UTC (operator: "Hold it"). First row on the
+  new image 17:00:48: keep RUNE, score +0.753, 72 market signals, tags-2 feed
+  fresh; 21 of 21 scores recomputed from the file, no market name in any coin
+  score. Wallet about 16 USDT. No stop file.
 - Plan-only: `bot-spot-paper` on the same rule (audit
   `docker-data/bot-spot-paper-decisions.jsonl`); it sizes from the real
   wallet, so while live holds the cash every buy is "below min notional".
@@ -42,12 +43,12 @@ waived). The snap-back rule traded live from 2026-10-31 20:01 to then (net
 - Never `docker compose up -d` without service names. The boot unit
   `binance-bot-compose.service` is disabled. `silly_swirles` (exited, not a
   compose service) is unrelated and left alone.
-- Backups before the tagsnap switch: `.env.docker.bak-20261102T070513Z-tagsnap-live`,
-  `docker-data/backup-20261102T070513Z-tagsnap-live/` (older ones: 10-31
-  snapback, 11-01 tagsnap). Back: `touch
-  docker-data/bot-spot.stop`, or restore the `.env.docker` backup and `docker
-  compose up -d --no-deps bot-spot`; `latest` is now fc7137f6f500, so retag
-  `pre-tags2-20261102` (or `pre-algo-20261102`) as `latest` first.
+- Backups before the image switch: `.env.docker.bak-20261102T170001Z-tags2-live`,
+  `docker-data/backup-20261102T170001Z-tags2-live/` (both audits, both states,
+  compose file; older: 11-02 tagsnap-live, 10-31 snapback, 11-01 tagsnap).
+  Back: `touch docker-data/bot-spot.stop`, or `docker tag
+  binance-bot:pre-tags2-20261102 binance-bot:latest` and `docker compose up -d
+  --no-deps bot-spot`.
 
 ## Feed pipeline (on the Pi)
 
