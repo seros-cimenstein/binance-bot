@@ -1,0 +1,4 @@
+# Binance API docs' published HMAC-SHA256 example secret (signature test vector), not a real credential.
+crates/bb-binance/src/auth.rs:generic-api-key:177
+# Python-era unit test passing the literal api_secret="secret" to a validation check.
+tests/test_config.py:generic-api-key:239
